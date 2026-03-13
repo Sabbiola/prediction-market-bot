@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prediction-market-bot"
+version = "0.1.0"
+description = "Dry-run multi-agent foundation for prediction markets."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["PyYAML>=6.0.1,<7", "pydantic>=2.8,<3"]
+
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.10,<2",
+  "pytest>=8,<9",
+  "ruff>=0.5,<1",
+  "types-PyYAML>=6.0.12.20241230",
+]
+
+[project.scripts]
+prediction-market-bot = "prediction_market_bot.main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["prediction_market_bot*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.11"
+mypy_path = "src"
+files = ["src"]
+warn_unused_configs = true
+warn_unused_ignores = true
+check_untyped_defs = true
+no_implicit_optional = true

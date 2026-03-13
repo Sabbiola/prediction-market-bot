@@ -1,0 +1,83 @@
+app:
+  name: prediction-market-bot
+  env: development
+  timezone: UTC
+  mode: dry-run
+  run_loop:
+    scan_interval_sec: 300
+    settlement_interval_sec: 600
+    max_parallel_research_jobs: 8
+    max_parallel_prediction_jobs: 8
+
+storage:
+  operational_db:
+    driver: sqlite
+    path: data/runtime.db
+  audit_log:
+    driver: file_jsonl
+    path: data/audit/events.jsonl
+  research_store:
+    driver: file_jsonl
+    path: data/research/findings.jsonl
+  artifacts_dir: data/artifacts
+
+scheduler:
+  enabled: true
+  strategy: internal-loop
+  heartbeat_sec: 15
+  fail_fast_on_boot_errors: true
+
+observability:
+  log_level: INFO
+  json_logs: true
+  metrics:
+    enabled: true
+    exporter: prometheus_textfile
+    path: data/metrics/metrics.prom
+  healthcheck:
+    enabled: true
+    path: /health
+
+notifications:
+  telegram:
+    enabled: false
+    chat_id: ""
+  email:
+    enabled: false
+    recipients: []
+
+research_sources:
+  twitter:
+    enabled: true
+    timeout_sec: 10
+    credibility_default: 0.60
+  reddit:
+    enabled: true
+    timeout_sec: 10
+    credibility_default: 0.50
+  rss:
+    enabled: true
+    timeout_sec: 8
+    credibility_default: 0.70
+  official:
+    enabled: true
+    timeout_sec: 8
+    credibility_default: 0.90
+
+venue:
+  provider: polymarket
+  dry_run: true
+  submit_timeout_sec: 10
+  max_retries: 2
+  slippage_bps_limit: 100
+
+feature_flags:
+  enable_postmortem: true
+  enable_settlement: true
+  enable_manual_review_queue: true
+  allow_live_execution: false
+
+security:
+  secrets_from_env: true
+  redact_secrets_in_logs: true
+  require_explicit_live_flag: true

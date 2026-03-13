@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Quality Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          make install
+
+      - name: Lint
+        run: make lint
+
+      - name: Typecheck
+        run: make typecheck
+
+      - name: Tests
+        run: make test
+
+  smoke-dry-run:
+    name: Smoke Dry Run
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: quality
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          make install
+
+      - name: Run Smoke Dry-Run
+        run: make ci-smoke RUN_ID=ci-smoke-${{ github.run_id }}
+
+      - name: Verify Reports Exist
+        run: |
+          test -d data/artifacts/reports
+          ls -lah data/artifacts/reports
+
+      - name: Upload Run Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dry-run-reports-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            data/artifacts/reports/**
+            data/artifacts/pipeline_summaries.jsonl
+            data/audit/events.jsonl
