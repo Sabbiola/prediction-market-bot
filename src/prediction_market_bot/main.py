@@ -735,13 +735,14 @@ def paper_portfolio_state_command(
 
 
 def _print_review_item(item: TradeReviewItem) -> None:
+    expires_at = item.expires_at
     print(
         f"- queue_id={item.queue_id} run_id={item.run_id} market_id={item.market_id} "
         f"status={item.status.value} side={item.side.value} stake_usd={item.stake_usd:.2f} "
         f"confidence={item.confidence:.4f} edge={item.edge:.4f}"
     )
-    if getattr(item, "expires_at", None) is not None:
-        print(f"  expires_at={item.expires_at.isoformat()}")
+    if expires_at is not None:
+        print(f"  expires_at={expires_at.isoformat()}")
     if item.model_rationale:
         print(f"  model_rationale={'; '.join(item.model_rationale)}")
     if item.operator_rationale:

@@ -216,7 +216,9 @@ class TradeReviewQueueService:
         )
         if expired:
             status = TradeReviewStatus.EXPIRED
-            updated_at = max(updated_at, candidate.expires_at)
+            expires_at = candidate.expires_at
+            if expires_at is not None:
+                updated_at = max(updated_at, expires_at)
 
         return TradeReviewItem(
             queue_id=candidate.queue_id,

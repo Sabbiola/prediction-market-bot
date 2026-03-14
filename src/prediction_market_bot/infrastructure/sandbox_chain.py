@@ -63,7 +63,7 @@ class SandboxChainExecutor:
         self.last_attempt: TxAttempt | None = None
         if self.private_key and not self.from_address:
             try:
-                from eth_account import Account  # type: ignore
+                from eth_account import Account
 
                 self.from_address = str(Account.from_key(self.private_key).address)
             except Exception:
@@ -594,7 +594,7 @@ class SandboxChainExecutor:
 
     def _sign_transaction(self, tx_payload: Mapping[str, Any]) -> tuple[str, str]:
         try:
-            from eth_account import Account  # type: ignore
+            from eth_account import Account
         except Exception as exc:  # pragma: no cover - guarded in tests via config path
             raise RuntimeError("eth_account_dependency_missing_for_signing") from exc
         account = Account.from_key(self.private_key)

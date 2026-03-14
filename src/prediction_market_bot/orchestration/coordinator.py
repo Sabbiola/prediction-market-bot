@@ -349,9 +349,9 @@ class PipelineCoordinator:
                             self._persist_artifact(
                                 effective_run_id,
                                 "transaction_attempts",
-                                attempt.model_dump(mode="json"),  # type: ignore[union-attr]
+                                attempt.model_dump(mode="json"),
                             )
-                            self._persist_transaction_attempt(effective_run_id, attempt)  # type: ignore[arg-type]
+                            self._persist_transaction_attempt(effective_run_id, attempt)
                 self._persist_transaction_receipt(effective_run_id, execution_result)
                 if (
                     self.portfolio

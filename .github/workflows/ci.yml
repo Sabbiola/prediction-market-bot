@@ -49,6 +49,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: quality
+    if: ${{ always() && needs.quality.result != 'cancelled' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -89,6 +90,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: quality
+    if: ${{ always() && needs.quality.result != 'cancelled' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -117,6 +119,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: quality
+    if: ${{ always() && needs.quality.result != 'cancelled' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
