@@ -1,187 +1,127 @@
 # Prediction Market Bot
 
-Sistema modulare multi-agent per analisi, valutazione ed esecuzione **dry-run** su prediction markets.
+Piattaforma modulare multi-agent per operativita su prediction market in modalita sicura:
 
-Il progetto nasce come rifondazione pulita di un vecchio bot di trading automatico, con una nuova architettura centrata su:
+- paper execution
+- sandbox-chain transaction rehearsal
+- human-in-the-loop review gate
+- audit JSONL + stato operativo SQLite
 
-- scansione opportunità di mercato
-- ricerca multi-sorgente
-- stima di probabilità fair
-- calcolo edge
-- position sizing basato sul rischio
-- esecuzione simulata
-- settlement simulato
-- postmortem automatico
+Il progetto e orientato a staging beta-live, con **zero venue trading reale**.
 
-## Obiettivo
+## Scope attuale
 
-Costruire una codebase **production-grade**, fortemente tipizzata, testabile e pronta ad accogliere in seguito adapter reali per:
+La pipeline operativa implementata e:
 
-- venue di prediction markets
-- news providers
-- social/research sources
-- persistence backend
-- execution backend
-- settlement backend
-
-La prima milestone è un **MVP completamente funzionante in dry-run**.
-
----
+1. scansione mercati
+2. ricerca multi-sorgente
+3. prediction probabilistica
+4. risk sizing e guardrail
+5. review queue bloccante (in `PAPER_LIVE` e `SANDBOX_CHAIN`)
+6. execution paper o sandbox transaction lane
+7. settlement asincrono
+8. replay/report/evaluation
 
 ## Principi architetturali
 
-Il progetto segue una **clean architecture** con separazione netta tra dominio, agenti, orchestrazione e infrastruttura.
-
-### Regole fondamentali
-
-- il **domain layer** non dipende da infrastructure
-- nessun import dal codice legacy nel runtime
-- nessun training loop dentro il runtime
-- tutte le integrazioni esterne passano da **ports/adapters**
-- ogni agente deve essere testabile in isolamento
-- ogni decisione deve produrre un payload di spiegazione
-- la modalità **dry-run** deve essere sempre funzionante
-- niente god classes
-- niente segreti hardcoded
-- niente logica critica nascosta in script monolitici
-
----
-
-## Architettura del sistema
-
-La pipeline target è:
-
-1. **ScanAgent**
-   - seleziona e ranka mercati interessanti
-   - valuta liquidità, spread, activity, tempo alla risoluzione
-
-2. **ResearchAgent**
-   - aggrega findings da fonti mock o future fonti reali
-   - stima sentiment, evidence strength, disagreement score
-
-3. **PredictionAgent**
-   - fonde probabilità implicita di mercato e segnale di ricerca
-   - produce fair probability, edge e confidence
-
-4. **RiskAgent**
-   - applica threshold, confidence gating, exposure cap e sizing
-   - produce una decisione di rischio spiegabile
-
-5. **ExecutionAgent**
-   - genera `OrderIntent`
-   - simula l'esecuzione in modalità dry-run
-
-6. **SettlementAgent**
-   - simula la risoluzione del mercato
-   - calcola pnl e outcome finale
-
-7. **PostmortemAgent**
-   - classifica il risultato
-   - individua cause, lezioni e action items
-
----
+- domain isolato da infrastruttura
+- runtime senza training online
+- integrazioni esterne via interfaces/adapters
+- contratti tipizzati per ogni artefatto di pipeline
+- persistenza operativa separata da audit append-only
 
 ## Struttura repository
 
 ```text
 prediction-market-bot/
-├─ AGENTS.md
-├─ README.md
-├─ pyproject.toml
-├─ .env.example
-├─ Makefile
-├─ config/
-│  ├─ app.yaml
-│  └─ agents.yaml
-├─ docs/
-│  ├─ ARCHITECTURE.md
-│  ├─ REFACTOR_PLAN.md
-│  ├─ LEGACY_MAPPING.md
-│  └─ DEVELOPMENT.md
-├─ src/
-│  └─ prediction_market_bot/
-│     ├─ __init__.py
-│     ├─ main.py
-│     ├─ domain/
-│     ├─ agents/
-│     ├─ services/
-│     ├─ orchestrator/
-│     ├─ infrastructure/
-│     └─ ports/
-└─ tests/
+  AGENTS.md
+  README.md
+  pyproject.toml
+  Makefile
+  config/
+    app.yaml
+    agents.yaml
+  docs/
+    ARCHITECTURE.md
+    BETA_SCOPE.md
+    BETA_GATE.md
+    OPERATIONS.md
+    DEVELOPMENT.md
+    LEGACY_MAPPING.md
+    REFACTOR_PLAN.md
+  src/prediction_market_bot/
+    app/
+    domain/
+    interfaces/
+    agents/
+    orchestration/
+    services/
+    infrastructure/
+    main.py
+  tests/
 ```
 
-## Documentazione operativa
-
-- [BETA_SCOPE.md](docs/BETA_SCOPE.md)
-- [OPERATIONS.md](docs/OPERATIONS.md)
-
-## CI (beta)
-
-GitHub Actions workflow: `.github/workflows/ci.yml`
-
-Il workflow esegue in ordine:
-
-- `make lint`
-- `make typecheck`
-- `make test`
-- `make ci-smoke RUN_ID=ci-smoke-<github_run_id>`
-
-La smoke run produce report markdown/json e li carica come artifact CI insieme a:
-
-- `data/artifacts/pipeline_summaries.jsonl`
-- `data/audit/events.jsonl`
+Nota: `src/prediction_market_bot/orchestrator` e `src/prediction_market_bot/ports` sono namespace legacy di compatibilita; il codice corrente usa `orchestration` e `interfaces`.
 
 ## Comandi operatore (CLI)
 
 ```bash
-# stato sistema operatore
-python -m prediction_market_bot.main status --config config/app.yaml --agents-config config/agents.yaml
+# startup/health
+python -m prediction_market_bot.main validate-startup --config config/app.yaml --agents-config config/agents.yaml --json
+python -m prediction_market_bot.main healthcheck --config config/app.yaml --agents-config config/agents.yaml --json
+python -m prediction_market_bot.main status --config config/app.yaml --agents-config config/agents.yaml --json
 
-# esecuzione singola dry-run
+# run control
 python -m prediction_market_bot.main run-once --config config/app.yaml --agents-config config/agents.yaml --run-id <run_id>
-
-# scheduler CLI
 python -m prediction_market_bot.main run-scheduler --config config/app.yaml --agents-config config/agents.yaml --interval-sec 60
-
-# safety controls
-python -m prediction_market_bot.main pause --config config/app.yaml --agents-config config/agents.yaml --reason "manual_pause"
+python -m prediction_market_bot.main pause --config config/app.yaml --agents-config config/agents.yaml --reason "incident_<id>"
 python -m prediction_market_bot.main resume --config config/app.yaml --agents-config config/agents.yaml
 
-# portfolio e replay
-python -m prediction_market_bot.main portfolio --config config/app.yaml --agents-config config/agents.yaml
-python -m prediction_market_bot.main replay --config config/app.yaml --agents-config config/agents.yaml --run-id <run_id>
+# review gate
+python -m prediction_market_bot.main review-list --config config/app.yaml --agents-config config/agents.yaml --status pending_review --json
+python -m prediction_market_bot.main review-show --config config/app.yaml --agents-config config/agents.yaml --queue-id <queue_id> --json
+python -m prediction_market_bot.main review-approve --config config/app.yaml --agents-config config/agents.yaml --queue-id <queue_id> --operator-id <operator> --rationale "<rationale>"
+python -m prediction_market_bot.main review-reject --config config/app.yaml --agents-config config/agents.yaml --queue-id <queue_id> --operator-id <operator> --rationale "<rationale>"
 
-# report run
+# settlement/report/replay
+python -m prediction_market_bot.main run-settlement-lane --config config/app.yaml --agents-config config/agents.yaml --run-id <run_id>
+python -m prediction_market_bot.main replay-run --config config/app.yaml --agents-config config/agents.yaml --run-id <run_id>
 python -m prediction_market_bot.main generate-report --config config/app.yaml --agents-config config/agents.yaml --run-id <run_id>
 python -m prediction_market_bot.main last-report --config config/app.yaml --agents-config config/agents.yaml --format markdown
 
-# evaluation
-python -m prediction_market_bot.main evaluate-window --config config/app.yaml --agents-config config/agents.yaml --limit-runs 50
-python -m prediction_market_bot.main generate-eval-report --config config/app.yaml --agents-config config/agents.yaml --run-id <run_id>
+# sandbox tx lane
+python -m prediction_market_bot.main tx-status --config config/app.yaml --agents-config config/agents.yaml --json
+python -m prediction_market_bot.main tx-reconcile --config config/app.yaml --agents-config config/agents.yaml --json
+python -m prediction_market_bot.main tx-resubmit-safe --config config/app.yaml --agents-config config/agents.yaml --intent-id <intent_id> --json
 ```
 
-## Comandi sviluppatore (Makefile)
+## Comandi sviluppatore
 
 ```bash
 make install
 make lint
 make typecheck
-make test
-make run
-make smoke-dry-run RUN_ID=local-smoke-001
-make ci-quality
+make test              # default: esclude suite acceptance
+make test-all          # include tutto
+make beta-acceptance   # suite beta-live acceptance
 make ci
 ```
 
-## Repository Hygiene
+## CI
 
-Regole operative per beta-live development:
+Workflow GitHub Actions: `.github/workflows/ci.yml`
 
-- tenere in git solo codice runtime (`src/`), config (`config/`), test (`tests/`) e documentazione (`docs/`)
-- non tracciare cache locali (`.mypy_cache/`, `.pytest_cache/`, `.ruff_cache/`, `__pycache__/`, `*.pyc`)
-- non tracciare output runtime locali (`data/artifacts/*`, `data/audit/*`)
-- mantenere solo placeholder espliciti (`data/artifacts/.gitkeep`, `data/audit/.gitkeep`)
-- trattare `solana-memecoin-bot-main/` (o eventuale `legacy_reference/`) come materiale legacy non-runtime
+I job principali sono:
 
-Il packaging e i test escludono esplicitamente cartelle legacy/tmp/cache/artifacts per evitare effetti collaterali in CI.
+- `Quality Checks`
+- `Smoke Dry Run`
+- `Smoke Beta-Live (Mocked Providers + Sandbox Tx)`
+- `Beta-Live Acceptance Gate`
+
+La release readiness beta-live e documentata in [docs/BETA_GATE.md](docs/BETA_GATE.md).
+
+## Sicurezza operativa
+
+- live venue order posting disabilitato
+- nessuna credenziale venue reale richiesta per test e CI
+- ogni transazione sandbox deve essere tracciabile a `run_id` e review decision

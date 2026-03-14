@@ -78,9 +78,13 @@ prediction-market-bot/
     agents.yaml
     app.yaml
   docs/
-    ANALISI_DETTAGLIATA.md
+    ARCHITECTURE.md
+    BETA_SCOPE.md
+    BETA_GATE.md
+    OPERATIONS.md
+    DEVELOPMENT.md
+    LEGACY_MAPPING.md
     REFACTOR_PLAN.md
-    LEGACY_TO_TARGET_MAP.md
   src/
     prediction_market_bot/
       app/
