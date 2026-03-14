@@ -251,40 +251,50 @@ def overview_legacy_alias(
 def run_once(
     payload: RunOnceActionRequest,
     actions: UiOperatorActionService = Depends(get_action_service),
+    read_models: UiReadModelService = Depends(get_read_model_service),
     user: AuthenticatedUser = Depends(require_operator_role),
 ) -> OperatorActionResponse:
-    return actions.run_once(
+    result = actions.run_once(
         run_id=payload.run_id,
         force=payload.force,
         acting_user=user.username,
         acting_role=user.role,
     )
+    read_models.invalidate_poll_cache()
+    return result
 
 
 @router.post("/api/actions/pause", response_model=OperatorActionResponse)
 def pause(
     payload: PauseActionRequest,
     actions: UiOperatorActionService = Depends(get_action_service),
+    read_models: UiReadModelService = Depends(get_read_model_service),
     user: AuthenticatedUser = Depends(require_admin_role),
 ) -> OperatorActionResponse:
-    return actions.pause(reason=payload.reason, acting_user=user.username, acting_role=user.role)
+    result = actions.pause(reason=payload.reason, acting_user=user.username, acting_role=user.role)
+    read_models.invalidate_poll_cache()
+    return result
 
 
 @router.post("/api/actions/resume", response_model=OperatorActionResponse)
 def resume(
     actions: UiOperatorActionService = Depends(get_action_service),
+    read_models: UiReadModelService = Depends(get_read_model_service),
     user: AuthenticatedUser = Depends(require_admin_role),
 ) -> OperatorActionResponse:
-    return actions.resume(acting_user=user.username, acting_role=user.role)
+    result = actions.resume(acting_user=user.username, acting_role=user.role)
+    read_models.invalidate_poll_cache()
+    return result
 
 
 @router.post("/api/actions/review-approve", response_model=OperatorActionResponse)
 def review_approve(
     payload: ReviewDecisionActionRequest,
     actions: UiOperatorActionService = Depends(get_action_service),
+    read_models: UiReadModelService = Depends(get_read_model_service),
     user: AuthenticatedUser = Depends(require_operator_role),
 ) -> OperatorActionResponse:
-    return actions.review_approve(
+    result = actions.review_approve(
         queue_id=payload.queue_id,
         operator_id=payload.operator_id,
         rationale=payload.rationale,
@@ -293,15 +303,18 @@ def review_approve(
         acting_user=user.username,
         acting_role=user.role,
     )
+    read_models.invalidate_poll_cache()
+    return result
 
 
 @router.post("/api/actions/review-reject", response_model=OperatorActionResponse)
 def review_reject(
     payload: ReviewDecisionActionRequest,
     actions: UiOperatorActionService = Depends(get_action_service),
+    read_models: UiReadModelService = Depends(get_read_model_service),
     user: AuthenticatedUser = Depends(require_operator_role),
 ) -> OperatorActionResponse:
-    return actions.review_reject(
+    result = actions.review_reject(
         queue_id=payload.queue_id,
         operator_id=payload.operator_id,
         rationale=payload.rationale,
@@ -310,47 +323,58 @@ def review_reject(
         acting_user=user.username,
         acting_role=user.role,
     )
+    read_models.invalidate_poll_cache()
+    return result
 
 
 @router.post("/api/actions/tx-reconcile", response_model=OperatorActionResponse)
 def tx_reconcile(
     payload: TxReconcileActionRequest,
     actions: UiOperatorActionService = Depends(get_action_service),
+    read_models: UiReadModelService = Depends(get_read_model_service),
     user: AuthenticatedUser = Depends(require_operator_role),
 ) -> OperatorActionResponse:
-    return actions.tx_reconcile(
+    result = actions.tx_reconcile(
         run_id=payload.run_id,
         intent_id=payload.intent_id,
         limit=payload.limit,
         acting_user=user.username,
         acting_role=user.role,
     )
+    read_models.invalidate_poll_cache()
+    return result
 
 
 @router.post("/api/actions/tx-resubmit-safe", response_model=OperatorActionResponse)
 def tx_resubmit_safe(
     payload: TxResubmitSafeActionRequest,
     actions: UiOperatorActionService = Depends(get_action_service),
+    read_models: UiReadModelService = Depends(get_read_model_service),
     user: AuthenticatedUser = Depends(require_admin_role),
 ) -> OperatorActionResponse:
-    return actions.tx_resubmit_safe(
+    result = actions.tx_resubmit_safe(
         intent_id=payload.intent_id,
         confirmed=payload.confirm,
         acting_user=user.username,
         acting_role=user.role,
     )
+    read_models.invalidate_poll_cache()
+    return result
 
 
 @router.post("/api/actions/admin-settings", response_model=OperatorActionResponse)
 def admin_settings(
     payload: AdminSettingsActionRequest,
     actions: UiOperatorActionService = Depends(get_action_service),
+    read_models: UiReadModelService = Depends(get_read_model_service),
     user: AuthenticatedUser = Depends(require_admin_role),
 ) -> OperatorActionResponse:
-    return actions.admin_settings(
+    result = actions.admin_settings(
         setting=payload.setting,
         value=payload.value,
         confirmed=payload.confirm,
         acting_user=user.username,
         acting_role=user.role,
     )
+    read_models.invalidate_poll_cache()
+    return result

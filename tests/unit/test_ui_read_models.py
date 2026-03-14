@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from prediction_market_bot.main import run_once_command
+from prediction_market_bot.ui import read_models as ui_read_models_module
 from prediction_market_bot.ui.read_models import UiReadModelService, build_ui_runtime_context
 
 
@@ -80,3 +83,25 @@ def test_ui_read_models_support_run_selection_for_engine_tabs(
     incidents = service.incidents_feed(run_id=run_id, limit=10)
     assert incidents.run_id == run_id
     assert isinstance(incidents.rows, tuple)
+
+
+def test_ui_overview_poll_cache_reuses_recent_payload(
+    temp_config_paths: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_cfg, agents_cfg = temp_config_paths
+    context = build_ui_runtime_context(str(app_cfg), str(agents_cfg))
+    service = UiReadModelService(context)
+
+    call_counter = {"count": 0}
+    real_collect = ui_read_models_module.collect_runtime_metrics
+
+    def _counted_collect(**kwargs: object):
+        call_counter["count"] += 1
+        return real_collect(**kwargs)
+
+    monkeypatch.setattr(ui_read_models_module, "collect_runtime_metrics", _counted_collect)
+
+    _ = service.overview_tab()
+    _ = service.overview_tab()
+    assert call_counter["count"] == 1

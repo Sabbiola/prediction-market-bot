@@ -37,6 +37,8 @@ La beta non include venue live order posting.
 - persistenza operativa SQLite + artefatti JSONL append-only
 - observability operativa (`healthcheck`, `status`, metriche, audit events)
 - release gate beta-live (quality + smoke + acceptance)
+- autenticazione staging forte su control-plane (session + RBAC + password hash PBKDF2)
+- secret resolution centralizzata (`security.secrets`) con backend env/command
 - **operator UI minima (control-plane)**, limitata a:
   - visualizzazione stato runtime, queue, posizioni, tx
   - azioni operatore gia previste dal runtime (review/tx/pause-resume)
@@ -81,4 +83,4 @@ Una release beta e promuovibile solo se tutti i gate sono verdi:
 - stabilita operativa dimostrata su finestra continua di run
 - coda review/settlement/tx gestibile con workflow operatore
 - UI minima control-plane validata senza introdurre logica di business
-- piano approvato per eventuali step successivi (auth/RBAC, hardening, incident tooling)
+- hardening successivo approvato (SSO/OIDC, incident tooling avanzato)

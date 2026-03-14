@@ -7,7 +7,7 @@ from typing import Any, Mapping, Sequence
 
 from prediction_market_bot.app.settings import AppSettings
 from prediction_market_bot.domain.enums import SettlementRequestState, TradeReviewStatus, TxConfirmationStatus
-from prediction_market_bot.infrastructure.operational_sqlite import SqliteOperationalRepositories
+from prediction_market_bot.infrastructure.operational_sqlite import OperationalRepositories
 from prediction_market_bot.infrastructure.persistence import JsonlPersistence
 from prediction_market_bot.services.paper_portfolio import PaperPortfolioEngine
 from prediction_market_bot.services.settlement_requests import SettlementRequestQueueService
@@ -44,7 +44,7 @@ def collect_runtime_metrics(
     *,
     settings: AppSettings,
     persistence: JsonlPersistence,
-    operational: SqliteOperationalRepositories,
+    operational: OperationalRepositories,
 ) -> RuntimeMetricsSnapshot:
     del settings
     live_source_failures_total = len(persistence.read_all_artifact_records("source_failures"))

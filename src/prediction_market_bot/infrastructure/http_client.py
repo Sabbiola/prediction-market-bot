@@ -78,18 +78,24 @@ class StructuredHttpClient:
         retry_jitter_sec: float = 0.25,
         cache_ttl_sec: int = 600,
         openalex_api_key: str = "",
+        enforce_allowed_hosts: bool = False,
+        allowed_hosts: tuple[str, ...] = (),
+        max_response_bytes: int = 1_048_576,
         now_fn: Callable[[], datetime] | None = None,
         sleep_fn: Callable[[float], None] | None = None,
         random_fn: Callable[[], float] | None = None,
     ) -> None:
         self.user_agent = user_agent.strip() or "prediction-market-bot/0.1"
         self.contact = contact.strip()
-        self.timeout_sec = max(timeout_sec, 0.1)
-        self.max_retries = max(max_retries, 0)
-        self.retry_backoff_sec = max(retry_backoff_sec, 0.0)
-        self.retry_jitter_sec = max(retry_jitter_sec, 0.0)
+        self.timeout_sec = min(max(timeout_sec, 0.1), 60.0)
+        self.max_retries = min(max(max_retries, 0), 8)
+        self.retry_backoff_sec = min(max(retry_backoff_sec, 0.0), 10.0)
+        self.retry_jitter_sec = min(max(retry_jitter_sec, 0.0), 5.0)
         self.cache_ttl_sec = max(cache_ttl_sec, 0)
         self.openalex_api_key = openalex_api_key.strip()
+        self.enforce_allowed_hosts = enforce_allowed_hosts
+        self.allowed_hosts = tuple(host.strip().lower() for host in allowed_hosts if host.strip())
+        self.max_response_bytes = max(max_response_bytes, 1)
         self.now_fn = now_fn or (lambda: datetime.now(UTC))
         self.sleep_fn = sleep_fn or time.sleep
         self.random_fn = random_fn or random.random
@@ -152,6 +158,13 @@ class StructuredHttpClient:
             )
             raise HttpClientError(metadata)
 
+        self._enforce_outbound_policy(
+            source=source,
+            method=method_name,
+            url=final_url,
+            max_retries=retries,
+            timeout_sec=effective_timeout,
+        )
         request_headers = self._build_headers(
             headers=headers,
             api_key=resolved_api_key,
@@ -172,7 +185,25 @@ class StructuredHttpClient:
                     method=method_name,
                 )
                 with request.urlopen(req, timeout=effective_timeout) as response:
-                    payload = json.loads(response.read().decode("utf-8"))
+                    raw = response.read(self.max_response_bytes + 1)
+                    if len(raw) > self.max_response_bytes:
+                        metadata = HttpErrorMetadata(
+                            source=source,
+                            method=method_name,
+                            url=final_url,
+                            attempt=attempt,
+                            max_retries=retries,
+                            timeout_sec=effective_timeout,
+                            status_code=None,
+                            retryable=False,
+                            classification="response_too_large",
+                            reason_code="response_body_limit_exceeded",
+                            error_type="ResponseTooLarge",
+                            message=f"response exceeded {self.max_response_bytes} bytes",
+                            timestamp=self.now_fn().isoformat(),
+                        )
+                        raise HttpClientError(metadata)
+                    payload = json.loads(raw.decode("utf-8"))
                 if cache_allowed and ttl > 0:
                     self._cache[cache_key] = _CacheEntry(
                         expires_at=self.now_fn() + timedelta(seconds=ttl),
@@ -349,3 +380,64 @@ class StructuredHttpClient:
             message=str(exc),
             timestamp=self.now_fn().isoformat(),
         )
+
+    def _enforce_outbound_policy(
+        self,
+        *,
+        source: str,
+        method: str,
+        url: str,
+        max_retries: int,
+        timeout_sec: float,
+    ) -> None:
+        parsed = parse.urlparse(url)
+        scheme = parsed.scheme.strip().lower()
+        host = (parsed.hostname or "").strip().lower()
+        if scheme not in {"http", "https"}:
+            raise HttpClientError(
+                HttpErrorMetadata(
+                    source=source,
+                    method=method,
+                    url=url,
+                    attempt=0,
+                    max_retries=max_retries,
+                    timeout_sec=timeout_sec,
+                    status_code=None,
+                    retryable=False,
+                    classification="network_policy_violation",
+                    reason_code="unsupported_url_scheme",
+                    error_type="PolicyError",
+                    message=f"unsupported_scheme={scheme or 'missing'}",
+                    timestamp=self.now_fn().isoformat(),
+                )
+            )
+        if self.enforce_allowed_hosts and not self._host_allowed(host):
+            raise HttpClientError(
+                HttpErrorMetadata(
+                    source=source,
+                    method=method,
+                    url=url,
+                    attempt=0,
+                    max_retries=max_retries,
+                    timeout_sec=timeout_sec,
+                    status_code=None,
+                    retryable=False,
+                    classification="network_policy_violation",
+                    reason_code="host_not_allowed",
+                    error_type="PolicyError",
+                    message=f"host_not_allowed={host or 'missing'}",
+                    timestamp=self.now_fn().isoformat(),
+                )
+            )
+
+    def _host_allowed(self, host: str) -> bool:
+        if not host:
+            return False
+        if not self.allowed_hosts:
+            return False
+        for allowed in self.allowed_hosts:
+            if host == allowed:
+                return True
+            if host.endswith(f".{allowed}"):
+                return True
+        return False

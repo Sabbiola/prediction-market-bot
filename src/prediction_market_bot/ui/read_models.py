@@ -3,14 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from time import monotonic
+from typing import Any, Callable, Mapping, Sequence, TypeVar, cast
 
 from prediction_market_bot.app.bootstrap import build_operational_repositories, build_persistence
 from prediction_market_bot.app.config import load_settings
 from prediction_market_bot.app.settings import AppSettings
 from prediction_market_bot.domain.enums import TradeReviewStatus, TxConfirmationStatus
 from prediction_market_bot.domain.models import TradeReviewItem, TxAttempt, TxIntent
-from prediction_market_bot.infrastructure.operational_sqlite import SqliteOperationalRepositories
+from prediction_market_bot.infrastructure.operational_sqlite import OperationalRepositories
 from prediction_market_bot.infrastructure.persistence import JsonlPersistence
 from prediction_market_bot.services import (
     RuntimeMetricsSnapshot,
@@ -66,12 +67,14 @@ from .models import (
     UiActionLogRowResponse,
 )
 
+_T = TypeVar("_T")
+
 
 @dataclass(slots=True, frozen=True)
 class UiRuntimeContext:
     settings: AppSettings
     persistence: JsonlPersistence
-    operational: SqliteOperationalRepositories
+    operational: OperationalRepositories
     config_path: str
     agents_config_path: str
 
@@ -92,6 +95,11 @@ def build_ui_runtime_context(config_path: str, agents_config_path: str) -> UiRun
 class UiReadModelService:
     def __init__(self, context: UiRuntimeContext) -> None:
         self._context = context
+        self._poll_cache_ttl_sec = max(context.settings.performance.ui_poll_cache_ttl_sec, 0.0)
+        self._poll_cache: dict[str, tuple[float, object]] = {}
+
+    def invalidate_poll_cache(self) -> None:
+        self._poll_cache.clear()
 
     def health(self) -> HealthResponse:
         settings = self._context.settings
@@ -132,12 +140,17 @@ class UiReadModelService:
         )
 
     def incidents_feed(self, *, run_id: str | None = None, limit: int = 30) -> IncidentsFeedResponse:
-        rows = self._incident_events(run_id=run_id, limit=limit)
-        return IncidentsFeedResponse(
-            generated_at=datetime.now(UTC).isoformat(),
-            run_id=run_id or "",
-            rows=rows,
-        )
+        cache_key = self._poll_cache_key("incidents", run_id=run_id or "", limit=str(limit))
+
+        def _load() -> IncidentsFeedResponse:
+            rows = self._incident_events(run_id=run_id, limit=limit)
+            return IncidentsFeedResponse(
+                generated_at=datetime.now(UTC).isoformat(),
+                run_id=run_id or "",
+                rows=rows,
+            )
+
+        return self._cached_poll(cache_key, _load)
 
     def run_selector(self, run_id: str | None = None) -> RunSelectorResponse:
         run_ids = list_run_ids(self._context.persistence, limit_runs=500)
@@ -163,115 +176,142 @@ class UiReadModelService:
             note=note,
         )
 
-    def overview_tab(self, run_id: str | None = None) -> OverviewTabResponse:
-        settings = self._context.settings
-        selector = self.run_selector(run_id)
-        state = load_operator_state(
-            operator_state_path(settings.storage.artifacts_dir),
-            repository=self._context.operational.operator_control_state,
-        )
-        metrics = _to_metrics_response(
-            collect_runtime_metrics(
-                settings=settings,
-                persistence=self._context.persistence,
-                operational=self._context.operational,
-            )
-        )
-        summary = self._last_run_summary(selector.selected_run_id)
-        incident_banners = _incident_banners(
-            metrics=metrics,
-            operator_paused=state.paused,
-            operator_pause_reason=state.pause_reason,
-            last_run_status=summary.status,
-        )
-        incidents_feed = self._incident_events(
-            run_id=selector.selected_run_id or None,
-            limit=20,
-        )
-        return OverviewTabResponse(
-            generated_at=datetime.now(UTC).isoformat(),
-            run_selector=selector,
-            runtime_mode=settings.runtime.mode.value,
-            execution_mode=settings.execution.mode.value,
-            operator_paused=state.paused,
-            operator_pause_reason=state.pause_reason,
-            last_run=summary,
-            review_queue_depth=metrics.review_queue_depth,
-            open_positions_count=metrics.open_positions_count,
-            pending_settlements_count=metrics.pending_settlements_count,
-            live_source_failures_total=metrics.live_source_failures_total,
-            tx_pending_count=metrics.tx_pending_count,
-            tx_mined_count=metrics.tx_mined_count,
-            tx_failed_count=metrics.tx_failed_count,
-            stale_data_events_total=metrics.stale_data_events_total,
-            stale_data_blocked_trades_total=metrics.stale_data_blocked_trades_total,
-            counters_chart=(
-                ChartPointResponse(label="live_source_failures", value=float(metrics.live_source_failures_total)),
-                ChartPointResponse(label="review_queue_depth", value=float(metrics.review_queue_depth)),
-                ChartPointResponse(label="open_positions", value=float(metrics.open_positions_count)),
-                ChartPointResponse(label="pending_settlements", value=float(metrics.pending_settlements_count)),
-                ChartPointResponse(label="tx_pending", value=float(metrics.tx_pending_count)),
-                ChartPointResponse(label="tx_mined", value=float(metrics.tx_mined_count)),
-                ChartPointResponse(label="tx_failed", value=float(metrics.tx_failed_count)),
-                ChartPointResponse(label="stale_data_events", value=float(metrics.stale_data_events_total)),
-                ChartPointResponse(
-                    label="stale_data_blocked_trades",
-                    value=float(metrics.stale_data_blocked_trades_total),
-                ),
-            ),
-            incident_banners=incident_banners,
-            incidents_feed=incidents_feed,
-        )
+    def _poll_cache_key(self, name: str, **parts: str) -> str:
+        tokens = [name.strip().lower()]
+        for key in sorted(parts):
+            tokens.append(f"{key.strip().lower()}={parts[key].strip()}")
+        return "|".join(tokens)
 
-    def system_health_tab(self, run_id: str | None = None) -> SystemHealthTabResponse:
-        settings = self._context.settings
-        selector = self.run_selector(run_id)
-        report = validate_startup(
-            settings=settings,
-            persistence=self._context.persistence,
-            operational=self._context.operational,
-        )
-        metrics = _to_metrics_response(
-            collect_runtime_metrics(
-                settings=settings,
-                persistence=self._context.persistence,
-                operational=self._context.operational,
+    def _cached_poll(self, cache_key: str, loader: Callable[[], _T]) -> _T:
+        if self._poll_cache_ttl_sec <= 0:
+            return loader()
+        now = monotonic()
+        cached = self._poll_cache.get(cache_key)
+        if cached is not None and cached[0] >= now:
+            return cast(_T, cached[1])
+        payload = loader()
+        self._poll_cache[cache_key] = (now + self._poll_cache_ttl_sec, payload)
+        return payload
+
+    def overview_tab(self, run_id: str | None = None) -> OverviewTabResponse:
+        cache_key = self._poll_cache_key("overview", run_id=run_id or "")
+
+        def _load() -> OverviewTabResponse:
+            settings = self._context.settings
+            selector = self.run_selector(run_id)
+            state = load_operator_state(
+                operator_state_path(settings.storage.artifacts_dir),
+                repository=self._context.operational.operator_control_state,
             )
-        )
-        checks = tuple(
-            ReadinessCheckResponse(
-                name=check.name,
-                ok=check.ok,
-                severity=check.severity,
-                detail=check.detail,
+            metrics = _to_metrics_response(
+                collect_runtime_metrics(
+                    settings=settings,
+                    persistence=self._context.persistence,
+                    operational=self._context.operational,
+                )
             )
-            for check in report.checks
-        )
-        db_check = next((check for check in checks if check.name == "operational_repository_connectivity"), None)
-        return SystemHealthTabResponse(
-            generated_at=datetime.now(UTC).isoformat(),
-            run_selector=selector,
-            startup_validation=StartupValidationSummaryResponse(
-                ok=report.ok,
-                error_count=sum(1 for check in checks if check.severity == "error" and not check.ok),
-                warning_count=sum(1 for check in checks if check.severity == "warning"),
-                info_count=sum(1 for check in checks if check.severity == "info"),
-                checks=checks,
-            ),
-            healthcheck=HealthcheckSummaryResponse(
-                status="ok" if report.ok else "failed",
+            summary = self._last_run_summary(selector.selected_run_id)
+            incident_banners = _incident_banners(
+                metrics=metrics,
+                operator_paused=state.paused,
+                operator_pause_reason=state.pause_reason,
+                last_run_status=summary.status,
+            )
+            incidents_feed = self._incident_events(
+                run_id=selector.selected_run_id or None,
+                limit=20,
+            )
+            return OverviewTabResponse(
+                generated_at=datetime.now(UTC).isoformat(),
+                run_selector=selector,
                 runtime_mode=settings.runtime.mode.value,
                 execution_mode=settings.execution.mode.value,
-                timestamp_utc=datetime.now(UTC).isoformat(),
-                metrics=metrics,
-            ),
-            db_connectivity=DbConnectivitySummaryResponse(
-                status="ok" if db_check is not None and db_check.ok else "failed",
-                detail=db_check.detail if db_check is not None else "operational_repository_connectivity_check_missing",
-                check_name=db_check.name if db_check is not None else "operational_repository_connectivity",
-            ),
-            provider_status=_provider_status(settings, metrics),
-        )
+                operator_paused=state.paused,
+                operator_pause_reason=state.pause_reason,
+                last_run=summary,
+                review_queue_depth=metrics.review_queue_depth,
+                open_positions_count=metrics.open_positions_count,
+                pending_settlements_count=metrics.pending_settlements_count,
+                live_source_failures_total=metrics.live_source_failures_total,
+                tx_pending_count=metrics.tx_pending_count,
+                tx_mined_count=metrics.tx_mined_count,
+                tx_failed_count=metrics.tx_failed_count,
+                stale_data_events_total=metrics.stale_data_events_total,
+                stale_data_blocked_trades_total=metrics.stale_data_blocked_trades_total,
+                counters_chart=(
+                    ChartPointResponse(label="live_source_failures", value=float(metrics.live_source_failures_total)),
+                    ChartPointResponse(label="review_queue_depth", value=float(metrics.review_queue_depth)),
+                    ChartPointResponse(label="open_positions", value=float(metrics.open_positions_count)),
+                    ChartPointResponse(label="pending_settlements", value=float(metrics.pending_settlements_count)),
+                    ChartPointResponse(label="tx_pending", value=float(metrics.tx_pending_count)),
+                    ChartPointResponse(label="tx_mined", value=float(metrics.tx_mined_count)),
+                    ChartPointResponse(label="tx_failed", value=float(metrics.tx_failed_count)),
+                    ChartPointResponse(label="stale_data_events", value=float(metrics.stale_data_events_total)),
+                    ChartPointResponse(
+                        label="stale_data_blocked_trades",
+                        value=float(metrics.stale_data_blocked_trades_total),
+                    ),
+                ),
+                incident_banners=incident_banners,
+                incidents_feed=incidents_feed,
+            )
+
+        return self._cached_poll(cache_key, _load)
+
+    def system_health_tab(self, run_id: str | None = None) -> SystemHealthTabResponse:
+        cache_key = self._poll_cache_key("system", run_id=run_id or "")
+
+        def _load() -> SystemHealthTabResponse:
+            settings = self._context.settings
+            selector = self.run_selector(run_id)
+            report = validate_startup(
+                settings=settings,
+                persistence=self._context.persistence,
+                operational=self._context.operational,
+            )
+            metrics = _to_metrics_response(
+                collect_runtime_metrics(
+                    settings=settings,
+                    persistence=self._context.persistence,
+                    operational=self._context.operational,
+                )
+            )
+            checks = tuple(
+                ReadinessCheckResponse(
+                    name=check.name,
+                    ok=check.ok,
+                    severity=check.severity,
+                    detail=check.detail,
+                )
+                for check in report.checks
+            )
+            db_check = next((check for check in checks if check.name == "operational_repository_connectivity"), None)
+            return SystemHealthTabResponse(
+                generated_at=datetime.now(UTC).isoformat(),
+                run_selector=selector,
+                startup_validation=StartupValidationSummaryResponse(
+                    ok=report.ok,
+                    error_count=sum(1 for check in checks if check.severity == "error" and not check.ok),
+                    warning_count=sum(1 for check in checks if check.severity == "warning"),
+                    info_count=sum(1 for check in checks if check.severity == "info"),
+                    checks=checks,
+                ),
+                healthcheck=HealthcheckSummaryResponse(
+                    status="ok" if report.ok else "failed",
+                    runtime_mode=settings.runtime.mode.value,
+                    execution_mode=settings.execution.mode.value,
+                    timestamp_utc=datetime.now(UTC).isoformat(),
+                    metrics=metrics,
+                ),
+                db_connectivity=DbConnectivitySummaryResponse(
+                    status="ok" if db_check is not None and db_check.ok else "failed",
+                    detail=db_check.detail if db_check is not None else "operational_repository_connectivity_check_missing",
+                    check_name=db_check.name if db_check is not None else "operational_repository_connectivity",
+                ),
+                provider_status=_provider_status(settings, metrics),
+            )
+
+        return self._cached_poll(cache_key, _load)
 
     def review_queue_tab(
         self,

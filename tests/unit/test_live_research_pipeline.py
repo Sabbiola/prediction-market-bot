@@ -34,8 +34,10 @@ class _MockHttpResponse:
     def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
         return False
 
-    def read(self) -> bytes:
-        return self._payload
+    def read(self, amount: int = -1) -> bytes:
+        if amount < 0:
+            return self._payload
+        return self._payload[:amount]
 
 
 def _market() -> MarketSnapshot:
@@ -126,7 +128,8 @@ def test_research_ingestion_normalizes_deduplicates_and_persists(monkeypatch: py
     assert len(raw_rows) == 3
     assert len(normalized_rows) == 3
     assert len(dedup_rows) == 2
-    assert persistence.events[0][1] == "research_ingestion_end"
+    assert any(event_type == "research_ingestion_end" for _, event_type, _ in persistence.events)
+    assert any(event_type == "research_ingestion_source_end" for _, event_type, _ in persistence.events)
 
 
 def test_research_ingestion_uses_http_cache(monkeypatch: pytest.MonkeyPatch) -> None:

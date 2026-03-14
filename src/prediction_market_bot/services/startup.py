@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import importlib.util
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from prediction_market_bot.app.secrets import build_secret_provider, resolve_operational_db_dsn
 from prediction_market_bot.app.settings import AppSettings
+from prediction_market_bot.infrastructure.operational_migrations import (
+    MigrationDialect,
+    OperationalMigrationError,
+    get_operational_schema_status,
+)
 from prediction_market_bot.infrastructure.persistence import JsonlPersistence
-from prediction_market_bot.infrastructure.operational_sqlite import SqliteOperationalRepositories
+from prediction_market_bot.infrastructure.operational_sqlite import OperationalRepositories
 
 StartupSeverity = Literal["error", "warning", "info"]
 
@@ -48,7 +53,7 @@ def validate_startup(
     *,
     settings: AppSettings,
     persistence: JsonlPersistence,
-    operational: SqliteOperationalRepositories,
+    operational: OperationalRepositories,
 ) -> StartupValidationReport:
     checks: list[StartupCheck] = []
 
@@ -62,13 +67,38 @@ def validate_startup(
         (
             _check_writable_dir(Path(settings.storage.artifacts_dir), name="artifacts_dir"),
             _check_writable_dir(Path(settings.storage.audit_log_path).parent, name="audit_log_dir"),
-            _check_writable_dir(Path(settings.storage.operational_db_path).parent, name="operational_db_dir"),
         )
     )
+    if settings.storage.operational_db_driver.strip().lower() == "sqlite":
+        checks.append(_check_writable_dir(Path(settings.storage.operational_db_path).parent, name="operational_db_dir"))
     if settings.metrics.enabled:
         checks.append(_check_writable_dir(Path(settings.metrics.path).parent, name="metrics_dir"))
 
-    checks.append(_check_operational_repositories(operational))
+    db_config_check = _check_operational_db_config(settings)
+    checks.append(db_config_check)
+    if db_config_check.ok:
+        schema_check = _check_operational_schema(settings)
+        checks.append(schema_check)
+    else:
+        schema_check = StartupCheck(
+            "operational_schema_version",
+            False,
+            "warning",
+            "operational_schema_status_skipped_due_to_db_config_error",
+        )
+        checks.append(schema_check)
+
+    if db_config_check.ok and schema_check.ok:
+        checks.append(_check_operational_repositories(operational))
+    else:
+        checks.append(
+            StartupCheck(
+                "operational_repository_connectivity",
+                False,
+                "warning",
+                "operational_repository_connectivity_skipped_due_to_db_or_schema_mismatch",
+            )
+        )
     checks.append(_check_persistence_read_write(persistence))
     checks.extend(_check_sandbox_chain_config(settings))
     return StartupValidationReport(checks=tuple(checks))
@@ -85,7 +115,7 @@ def _check_writable_dir(path: Path, *, name: str) -> StartupCheck:
         return StartupCheck(name, False, "error", f"{name}_not_writable: {exc}")
 
 
-def _check_operational_repositories(operational: SqliteOperationalRepositories) -> StartupCheck:
+def _check_operational_repositories(operational: OperationalRepositories) -> StartupCheck:
     try:
         operational.review_queue.list_candidates(limit=1)
         operational.review_decisions.list_decisions()
@@ -103,6 +133,104 @@ def _check_operational_repositories(operational: SqliteOperationalRepositories) 
             "error",
             f"operational_repository_connectivity_failed: {exc}",
         )
+
+
+def _check_operational_schema(settings: AppSettings) -> StartupCheck:
+    driver = settings.storage.operational_db_driver.strip().lower() or "sqlite"
+    if driver not in {"sqlite", "postgres"}:
+        return StartupCheck("operational_schema_version", False, "error", f"unsupported_operational_db_driver: {driver}")
+    dialect: MigrationDialect = "sqlite" if driver == "sqlite" else "postgres"
+    try:
+        status = get_operational_schema_status(_operational_db_target(settings), dialect=dialect)
+    except OperationalMigrationError as exc:
+        return StartupCheck(
+            "operational_schema_version",
+            False,
+            "error",
+            f"operational_schema_status_failed: {exc}",
+        )
+
+    if status.up_to_date:
+        return StartupCheck(
+            "operational_schema_version",
+            True,
+            "info",
+            f"operational_schema_up_to_date version={status.current_version or 'none'}",
+        )
+
+    severity: StartupSeverity = "error" if settings.storage.operational_db_require_up_to_date else "warning"
+    pending = ",".join(status.pending_versions) if status.pending_versions else "none"
+    detail = (
+        "operational_schema_mismatch "
+        f"current={status.current_version or 'none'} "
+        f"latest={status.latest_version} "
+        f"pending={pending} "
+        "run=db-upgrade"
+    )
+    return StartupCheck("operational_schema_version", False, severity, detail)
+
+
+def _check_operational_db_config(settings: AppSettings) -> StartupCheck:
+    driver = settings.storage.operational_db_driver.strip().lower() or "sqlite"
+    if driver == "sqlite":
+        path = settings.storage.operational_db_path.strip()
+        if not path:
+            return StartupCheck(
+                "operational_db_config",
+                False,
+                "error",
+                "storage.operational_db.path_missing_for_sqlite",
+            )
+        return StartupCheck("operational_db_config", True, "info", "operational_db_sqlite_config_ok")
+    if driver == "postgres":
+        try:
+            dsn = resolve_operational_db_dsn(settings)
+        except Exception as exc:
+            return StartupCheck(
+                "operational_db_config",
+                False,
+                "error",
+                f"operational_db_dsn_resolution_failed: {exc}",
+            )
+        if not dsn:
+            return StartupCheck(
+                "operational_db_config",
+                False,
+                "error",
+                "storage.operational_db.dsn_missing_for_postgres",
+            )
+        if importlib.util.find_spec("psycopg") is None:
+            return StartupCheck(
+                "operational_db_config",
+                False,
+                "error",
+                "psycopg_not_installed_for_postgres_driver",
+            )
+        return StartupCheck("operational_db_config", True, "info", "operational_db_postgres_config_ok")
+    return StartupCheck(
+        "operational_db_config",
+        False,
+        "error",
+        f"unsupported_operational_db_driver: {driver}",
+    )
+
+
+def _operational_db_target(settings: AppSettings) -> str:
+    driver = settings.storage.operational_db_driver.strip().lower() or "sqlite"
+    if driver == "sqlite":
+        path = settings.storage.operational_db_path.strip()
+        if not path:
+            raise OperationalMigrationError("storage.operational_db.path is required for sqlite driver.")
+        return path
+    if driver == "postgres":
+        try:
+            dsn = resolve_operational_db_dsn(settings)
+        except Exception as exc:
+            raise OperationalMigrationError(f"failed to resolve postgres dsn from secrets provider: {exc}") from exc
+        if not dsn:
+            raise OperationalMigrationError("storage.operational_db.dsn is required for postgres driver.")
+        return dsn
+    raise OperationalMigrationError(f"Unsupported operational_db driver: {driver}")
 
 
 def _check_persistence_read_write(persistence: JsonlPersistence) -> StartupCheck:
@@ -148,8 +276,20 @@ def _check_sandbox_chain_config(settings: AppSettings) -> tuple[StartupCheck, ..
             checks.append(StartupCheck("sandbox_chain_contract_address", True, "info", "sandbox_chain_contract_address_ok"))
 
         private_key = ""
+        try:
+            secrets = build_secret_provider(settings)
+        except Exception as exc:
+            checks.append(
+                StartupCheck(
+                    "sandbox_chain_secrets_provider",
+                    False,
+                    "error",
+                    f"sandbox_chain_secret_provider_failed: {exc}",
+                )
+            )
+            return tuple(checks)
         if sandbox.private_key_env.strip():
-            private_key = os.getenv(sandbox.private_key_env.strip(), "").strip()
+            private_key = secrets.get(sandbox.private_key_env.strip())
         if private_key:
             if importlib.util.find_spec("eth_account") is None:
                 checks.append(

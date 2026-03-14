@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from typing import Mapping, Sequence
 
 from prediction_market_bot.agents.execution import (
@@ -17,6 +16,7 @@ from prediction_market_bot.agents.risk import RiskAgent
 from prediction_market_bot.agents.scanner import ScanAgent
 from prediction_market_bot.agents.settlement import SettlementAgent
 from prediction_market_bot.app.settings import AppSettings
+from prediction_market_bot.app.secrets import SecretProvider, build_secret_provider, resolve_operational_db_dsn
 from prediction_market_bot.domain.enums import (
     ExecutionMode,
     ProviderFailurePolicy,
@@ -36,6 +36,8 @@ from prediction_market_bot.domain.models import (
 from prediction_market_bot.infrastructure import (
     JsonlPersistence,
     LiveResearchIngestionPipeline,
+    OperationalRepositories,
+    PostgresOperationalRepositories,
     PolymarketReadOnlyMarketDataAdapter,
     SandboxChainExecutor,
     SqliteOperationalRepositories,
@@ -47,6 +49,7 @@ from prediction_market_bot.infrastructure import (
 from prediction_market_bot.interfaces import MarketDataPort, ResearchDataPort, TradeExecutor
 from prediction_market_bot.orchestration import PipelineCoordinator
 from prediction_market_bot.services import PaperPortfolioEngine, SettlementRequestQueueService, TradeReviewQueueService
+from prediction_market_bot.services import AlertEvent, build_alerting_service
 
 logger = logging.getLogger(__name__)
 
@@ -110,20 +113,48 @@ def build_persistence(settings: AppSettings) -> JsonlPersistence:
     )
 
 
-def build_operational_repositories(settings: AppSettings) -> SqliteOperationalRepositories:
-    return SqliteOperationalRepositories.bootstrap(settings.storage.operational_db_path)
+def build_operational_repositories(settings: AppSettings) -> OperationalRepositories:
+    driver = settings.storage.operational_db_driver.strip().lower()
+    if driver == "sqlite":
+        return SqliteOperationalRepositories.bootstrap(
+            settings.storage.operational_db_path,
+            apply_migrations=settings.storage.operational_db_auto_migrate_on_boot,
+            dialect="sqlite",
+        )
+    if driver == "postgres":
+        try:
+            dsn = resolve_operational_db_dsn(settings)
+        except Exception as exc:
+            raise ValueError(f"Invalid operational_db secrets config: {exc}") from exc
+        if not dsn:
+            raise ValueError(
+                "Invalid operational_db config for postgres: "
+                "storage.operational_db.dsn is required (or set dsn_env)."
+            )
+        return PostgresOperationalRepositories.bootstrap(
+            dsn,
+            apply_migrations=settings.storage.operational_db_auto_migrate_on_boot,
+            dialect="postgres",
+        )
+    raise ValueError(
+        "Unsupported operational_db driver. "
+        "Configured driver='{driver}'. Supported: sqlite, postgres."
+        .format(driver=driver or "unset")
+    )
 
 
 def build_http_client(
     settings: AppSettings,
     *,
+    secrets: SecretProvider | None = None,
     timeout_sec: float | None = None,
     max_retries: int | None = None,
     retry_backoff_sec: float | None = None,
     retry_jitter_sec: float | None = None,
     cache_ttl_sec: int | None = None,
 ) -> StructuredHttpClient:
-    openalex_api_key = os.getenv(settings.http.openalex_api_key_env, "")
+    secret_provider = secrets if secrets is not None else build_secret_provider(settings)
+    openalex_api_key = secret_provider.get(settings.http.openalex_api_key_env)
     return StructuredHttpClient(
         user_agent=settings.http.user_agent,
         contact=settings.http.contact,
@@ -133,6 +164,9 @@ def build_http_client(
         retry_jitter_sec=retry_jitter_sec if retry_jitter_sec is not None else settings.http.retry_jitter_sec,
         cache_ttl_sec=cache_ttl_sec if cache_ttl_sec is not None else settings.http.cache_ttl_sec,
         openalex_api_key=openalex_api_key,
+        enforce_allowed_hosts=settings.http.enforce_allowed_hosts,
+        allowed_hosts=settings.http.allowed_hosts,
+        max_response_bytes=settings.http.max_response_bytes,
     )
 
 
@@ -149,6 +183,7 @@ def build_live_market_data_provider(
     persistence: JsonlPersistence,
     http_client: StructuredHttpClient,
     *,
+    secrets: SecretProvider | None = None,
     endpoint_url: str | None = None,
     timeout_sec: float | None = None,
     max_retries: int | None = None,
@@ -157,10 +192,11 @@ def build_live_market_data_provider(
     max_staleness_seconds: int | None = None,
     default_limit: int | None = None,
 ) -> PolymarketReadOnlyMarketDataAdapter:
+    secret_provider = secrets if secrets is not None else build_secret_provider(settings)
     api_key = ""
     api_key_env = settings.live_market_data.api_key_env.strip()
     if api_key_env:
-        api_key = os.getenv(api_key_env, "").strip()
+        api_key = secret_provider.get(api_key_env)
     return PolymarketReadOnlyMarketDataAdapter(
         endpoint_url=endpoint_url if endpoint_url is not None else settings.live_market_data.endpoint_url,
         timeout_sec=timeout_sec if timeout_sec is not None else settings.live_market_data.timeout_sec,
@@ -187,6 +223,7 @@ def build_market_data_provider(
     persistence: JsonlPersistence,
     http_client: StructuredHttpClient,
     *,
+    secrets: SecretProvider | None = None,
     provider_selection: ProviderSelection | None = None,
     failure_policy: ProviderFailurePolicy | None = None,
 ) -> MarketDataPort:
@@ -199,7 +236,12 @@ def build_market_data_provider(
     if selection == ProviderSelection.STATIC:
         return StaticMarketDataProvider(venue=settings.venue)
 
-    live_provider = build_live_market_data_provider(settings, persistence, http_client)
+    live_provider = build_live_market_data_provider(
+        settings,
+        persistence,
+        http_client,
+        secrets=secrets,
+    )
     if policy == ProviderFailurePolicy.FALLBACK_TO_STATIC:
         logger.warning(
             "market_data_provider_fallback_enabled",
@@ -217,6 +259,7 @@ def build_live_research_pipeline(
     persistence: JsonlPersistence,
     http_client: StructuredHttpClient,
     *,
+    secrets: SecretProvider | None = None,
     wikipedia_endpoint_url: str | None = None,
     openalex_endpoint_url: str | None = None,
     timeout_sec: float | None = None,
@@ -226,12 +269,13 @@ def build_live_research_pipeline(
     cache_ttl_seconds: int | None = None,
     default_limit_per_source: int | None = None,
 ) -> LiveResearchIngestionPipeline:
+    secret_provider = secrets if secrets is not None else build_secret_provider(settings)
     wikipedia_api_key = ""
     if settings.live_research.wikipedia_api_key_env.strip():
-        wikipedia_api_key = os.getenv(settings.live_research.wikipedia_api_key_env.strip(), "").strip()
+        wikipedia_api_key = secret_provider.get(settings.live_research.wikipedia_api_key_env.strip())
     openalex_api_key = ""
     if settings.live_research.openalex_api_key_env.strip():
-        openalex_api_key = os.getenv(settings.live_research.openalex_api_key_env.strip(), "").strip()
+        openalex_api_key = secret_provider.get(settings.live_research.openalex_api_key_env.strip())
     live_sources = build_live_research_sources(
         wikipedia_endpoint_url=(
             wikipedia_endpoint_url if wikipedia_endpoint_url is not None else settings.live_research.wikipedia_endpoint_url
@@ -300,6 +344,7 @@ def build_research_sources(
     persistence: JsonlPersistence,
     http_client: StructuredHttpClient,
     *,
+    secrets: SecretProvider | None = None,
     provider_selection: ProviderSelection | None = None,
     failure_policy: ProviderFailurePolicy | None = None,
 ) -> list[ResearchDataPort]:
@@ -312,7 +357,12 @@ def build_research_sources(
     if selection == ProviderSelection.STATIC:
         return list(build_default_research_sources())
 
-    live_pipeline = build_live_research_pipeline(settings, persistence, http_client)
+    live_pipeline = build_live_research_pipeline(
+        settings,
+        persistence,
+        http_client,
+        secrets=secrets,
+    )
     if policy == ProviderFailurePolicy.FALLBACK_TO_STATIC:
         logger.warning(
             "research_provider_fallback_enabled",
@@ -332,7 +382,9 @@ def _build_executor_for_mode(
     mode: ExecutionMode,
     settings: AppSettings,
     http_client: StructuredHttpClient,
+    secrets: SecretProvider | None = None,
 ) -> TradeExecutor:
+    secret_provider = secrets if secrets is not None else build_secret_provider(settings)
     if mode == ExecutionMode.PAPER:
         return PaperExecutor()
     if mode == ExecutionMode.SHADOW_SIGN:
@@ -341,7 +393,7 @@ def _build_executor_for_mode(
         private_key = ""
         private_key_env = settings.sandbox_chain.private_key_env.strip()
         if private_key_env:
-            private_key = os.getenv(private_key_env, "").strip()
+            private_key = secret_provider.get(private_key_env)
         return SandboxChainExecutor(
             rpc_url=settings.sandbox_chain.rpc_url,
             contract_address=settings.sandbox_chain.contract_address,
@@ -364,22 +416,38 @@ def _build_executor_for_mode(
     return LiveDisabledExecutor()
 
 
-def _critical_alert_hook(event_type: str, payload: Mapping[str, object]) -> None:
-    logger.critical(
-        "critical_failure_alert",
-        extra={
-            "event": "critical_failure_alert",
-            "alert_event_type": event_type,
-            **dict(payload),
-        },
-    )
+def _build_critical_alert_hook(settings: AppSettings):
+    alerting = build_alerting_service(settings)
+
+    def _critical_alert_hook(event_type: str, payload: Mapping[str, object]) -> None:
+        logger.critical(
+            "critical_failure_alert",
+            extra={
+                "event": "critical_failure_alert",
+                "alert_event_type": event_type,
+                **dict(payload),
+            },
+        )
+        alerting.emit(
+            AlertEvent(
+                event_type=event_type,
+                severity="critical",
+                title="Pipeline critical failure",
+                message=f"critical runtime failure detected: event_type={event_type}",
+                details=dict(payload),
+                dedupe_key=f"critical:{event_type}",
+            )
+        )
+
+    return _critical_alert_hook
 
 
 def build_coordinator(settings: AppSettings, persistence: JsonlPersistence) -> PipelineCoordinator:
+    secrets = build_secret_provider(settings)
     operational = build_operational_repositories(settings)
-    http_client = build_http_client(settings)
-    market_data = build_market_data_provider(settings, persistence, http_client)
-    research_sources = build_research_sources(settings, persistence, http_client)
+    http_client = build_http_client(settings, secrets=secrets)
+    market_data = build_market_data_provider(settings, persistence, http_client, secrets=secrets)
+    research_sources = build_research_sources(settings, persistence, http_client, secrets=secrets)
     research_agent = ResearchAgent(research_sources)
     logger.info(
         "runtime_provider_selection",
@@ -397,6 +465,7 @@ def build_coordinator(settings: AppSettings, persistence: JsonlPersistence) -> P
         mode=settings.execution.mode,
         settings=settings,
         http_client=http_client,
+        secrets=secrets,
     )
     rehearsal_executor = None
     rehearsal_mode: ExecutionMode | None = None
@@ -406,6 +475,7 @@ def build_coordinator(settings: AppSettings, persistence: JsonlPersistence) -> P
             mode=rehearsal_mode,
             settings=settings,
             http_client=http_client,
+            secrets=secrets,
         )
 
     review_queue_enabled = settings.effective_manual_review_queue() or settings.execution.review_auto_approve
@@ -517,7 +587,7 @@ def build_coordinator(settings: AppSettings, persistence: JsonlPersistence) -> P
         postmortem=PostmortemAgent(),
         persistence=persistence,
         portfolio=portfolio,
-        alert_hook=_critical_alert_hook,
+        alert_hook=_build_critical_alert_hook(settings),
         review_queue_hook=review_queue_hook,
         review_gate_hook=review_gate_hook,
         settlement_request_hook=settlement_queue.enqueue_from_execution,
@@ -527,4 +597,5 @@ def build_coordinator(settings: AppSettings, persistence: JsonlPersistence) -> P
         transaction_receipt_repo=operational.transaction_receipts,
         review_blocking_gate=review_blocking_gate,
         settlement_same_run=settings.execution.settlement_same_run,
+        slow_stage_threshold_ms=settings.performance.slow_stage_threshold_ms,
     )

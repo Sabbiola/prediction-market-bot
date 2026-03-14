@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from prediction_market_bot.domain.enums import (
@@ -30,6 +30,17 @@ def _as_str_map(value: Any) -> dict[str, str]:
             continue
         payload[key_text] = value_text
     return payload
+
+
+def _as_str_seq(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    payload: list[str] = []
+    for raw in value:
+        text = _as_str(raw)
+        if text:
+            payload.append(text)
+    return tuple(payload)
 
 
 def _as_bool(value: Any, default: bool = False) -> bool:
@@ -128,8 +139,23 @@ class HealthcheckSettings:
 
 
 @dataclass(slots=True, frozen=True)
+class PerformanceSettings:
+    enable_cli_profile: bool = False
+    slow_stage_threshold_ms: float = 1_500.0
+    ui_poll_cache_ttl_sec: float = 1.5
+    ui_poll_min_interval_sec: float = 2.0
+    include_response_timing_headers: bool = True
+
+
+@dataclass(slots=True, frozen=True)
 class StorageSettings:
+    operational_db_driver: str = "sqlite"
     operational_db_path: str = "data/runtime.db"
+    operational_db_dsn: str = ""
+    operational_db_dsn_env: str = "OPERATIONAL_DB_DSN"
+    operational_db_backup_dir: str = "data/backups/operational-db"
+    operational_db_auto_migrate_on_boot: bool = True
+    operational_db_require_up_to_date: bool = True
     artifacts_dir: str = "data/artifacts"
     audit_log_path: str = "data/audit/events.jsonl"
 
@@ -181,6 +207,9 @@ class HttpSettings:
     retry_jitter_sec: float = 0.25
     cache_ttl_sec: int = 600
     openalex_api_key_env: str = "OPENALEX_API_KEY"
+    enforce_allowed_hosts: bool = False
+    allowed_hosts: tuple[str, ...] = ()
+    max_response_bytes: int = 1_048_576
 
     @property
     def user_agent_with_contact(self) -> str:
@@ -188,6 +217,24 @@ class HttpSettings:
         if not contact:
             return self.user_agent
         return f"{self.user_agent} ({contact})"
+
+
+@dataclass(slots=True, frozen=True)
+class AlertingWebhookSettings:
+    enabled: bool = False
+    webhook_url: str = ""
+    webhook_url_env: str = "PM_BOT_ALERT_WEBHOOK_URL"
+    timeout_sec: float = 5.0
+    max_retries: int = 1
+    retry_backoff_sec: float = 0.5
+
+
+@dataclass(slots=True, frozen=True)
+class AlertingSettings:
+    enabled: bool = False
+    dedupe_window_sec: int = 300
+    repeated_live_source_failures_threshold: int = 3
+    webhook: AlertingWebhookSettings = field(default_factory=AlertingWebhookSettings)
 
 
 @dataclass(slots=True, frozen=True)
@@ -265,11 +312,37 @@ class ExecutionSettings:
 
 
 @dataclass(slots=True, frozen=True)
+class SecretsSettings:
+    backend: str = "env"
+    command_template: str = ""
+    command_timeout_sec: float = 5.0
+    env_fallback: bool = True
+
+
+@dataclass(slots=True, frozen=True)
+class CliAuthSettings:
+    enabled: bool = False
+    actor_user_env: str = "PM_BOT_ACTOR_USER"
+    actor_role_env: str = "PM_BOT_ACTOR_ROLE"
+
+
+@dataclass(slots=True, frozen=True)
+class SecuritySettings:
+    secrets_from_env: bool = True
+    redact_secrets_in_logs: bool = True
+    require_explicit_live_flag: bool = True
+    secrets: SecretsSettings = field(default_factory=SecretsSettings)
+    cli_auth: CliAuthSettings = field(default_factory=CliAuthSettings)
+
+
+@dataclass(slots=True, frozen=True)
 class UiAuthUserSettings:
     username: str
     role: str
     password: str = ""
     password_env: str = ""
+    password_hash: str = ""
+    password_hash_env: str = ""
 
 
 @dataclass(slots=True, frozen=True)
@@ -280,6 +353,9 @@ class UiAuthSettings:
     cookie_name: str = "pm_bot_ui_session"
     cookie_secure: bool = True
     cookie_samesite: str = "lax"
+    require_password_hashes: bool = False
+    max_failed_attempts: int = 5
+    lockout_seconds: int = 300
     users: tuple[UiAuthUserSettings, ...] = ()
 
 
@@ -289,6 +365,7 @@ class AppSettings:
     logging: LoggingSettings
     metrics: MetricsSettings
     healthcheck: HealthcheckSettings
+    performance: PerformanceSettings
     storage: StorageSettings
     venue: str
     dry_run: bool
@@ -299,10 +376,12 @@ class AppSettings:
     risk: RiskSettings
     execution: ExecutionSettings
     http: HttpSettings
+    alerting: AlertingSettings
     live_market_data: LiveMarketDataSettings
     live_research: LiveResearchSettings
     sandbox_chain: SandboxChainSettings
     ui_auth: UiAuthSettings
+    security: SecuritySettings
 
     @classmethod
     def from_dicts(cls, app_config: Mapping[str, Any], agents_config: Mapping[str, Any]) -> "AppSettings":
@@ -314,16 +393,22 @@ class AppSettings:
         observability = _as_dict(app_config.get("observability"))
         metrics_section = _as_dict(observability.get("metrics"))
         healthcheck_section = _as_dict(observability.get("healthcheck"))
+        performance_section = _as_dict(observability.get("performance"))
         logs_section = _as_dict(observability.get("logs"))
         storage_section = _as_dict(app_config.get("storage"))
         audit_log_section = _as_dict(storage_section.get("audit_log"))
         http_section = _as_dict(app_config.get("http"))
+        alerting_section = _as_dict(app_config.get("alerting"))
+        alerting_webhook_section = _as_dict(alerting_section.get("webhook"))
         live_market_section = _as_dict(app_config.get("live_market_data"))
         live_research_section = _as_dict(app_config.get("live_research"))
         wikipedia_research_section = _as_dict(live_research_section.get("wikipedia"))
         openalex_research_section = _as_dict(live_research_section.get("openalex"))
         sandbox_chain_section = _as_dict(app_config.get("sandbox_chain"))
         ui_auth_section = _as_dict(app_config.get("ui_auth"))
+        security_section = _as_dict(app_config.get("security"))
+        secrets_section = _as_dict(security_section.get("secrets"))
+        cli_auth_section = _as_dict(security_section.get("cli_auth"))
 
         thresholds = _as_dict(agents_config.get("thresholds"))
         risk_section = _as_dict(agents_config.get("risk"))
@@ -368,8 +453,33 @@ class AppSettings:
             enabled=_as_bool(healthcheck_section.get("enabled"), True),
             path=str(healthcheck_section.get("path", "/health")),
         )
+        performance_settings = PerformanceSettings(
+            enable_cli_profile=_as_bool(performance_section.get("enable_cli_profile"), False),
+            slow_stage_threshold_ms=max(float(performance_section.get("slow_stage_threshold_ms", 1_500.0)), 0.0),
+            ui_poll_cache_ttl_sec=max(float(performance_section.get("ui_poll_cache_ttl_sec", 1.5)), 0.0),
+            ui_poll_min_interval_sec=max(float(performance_section.get("ui_poll_min_interval_sec", 2.0)), 0.1),
+            include_response_timing_headers=_as_bool(
+                performance_section.get("include_response_timing_headers"),
+                True,
+            ),
+        )
+        operational_db_section = _as_dict(storage_section.get("operational_db"))
         storage_settings = StorageSettings(
-            operational_db_path=str(_as_dict(storage_section.get("operational_db")).get("path", "data/runtime.db")),
+            operational_db_driver=str(operational_db_section.get("driver", "sqlite")),
+            operational_db_path=str(operational_db_section.get("path", "data/runtime.db")),
+            operational_db_dsn=str(operational_db_section.get("dsn", "")),
+            operational_db_dsn_env=str(operational_db_section.get("dsn_env", "OPERATIONAL_DB_DSN")),
+            operational_db_backup_dir=str(
+                operational_db_section.get("backup_dir", "data/backups/operational-db")
+            ),
+            operational_db_auto_migrate_on_boot=_as_bool(
+                operational_db_section.get("auto_migrate_on_boot"),
+                True,
+            ),
+            operational_db_require_up_to_date=_as_bool(
+                operational_db_section.get("require_up_to_date"),
+                True,
+            ),
             artifacts_dir=str(storage_section.get("artifacts_dir", "data/artifacts")),
             audit_log_path=str(audit_log_section.get("path", "data/audit/events.jsonl")),
         )
@@ -469,6 +579,28 @@ class AppSettings:
             retry_jitter_sec=float(http_section.get("retry_jitter_sec", 0.25)),
             cache_ttl_sec=int(http_section.get("cache_ttl_sec", 600)),
             openalex_api_key_env=str(http_section.get("openalex_api_key_env", "OPENALEX_API_KEY")),
+            enforce_allowed_hosts=_as_bool(http_section.get("enforce_allowed_hosts"), False),
+            allowed_hosts=_as_str_seq(http_section.get("allowed_hosts")),
+            max_response_bytes=max(int(http_section.get("max_response_bytes", 1_048_576)), 1),
+        )
+        alerting = AlertingSettings(
+            enabled=_as_bool(alerting_section.get("enabled"), False),
+            dedupe_window_sec=max(int(alerting_section.get("dedupe_window_sec", 300)), 1),
+            repeated_live_source_failures_threshold=max(
+                int(alerting_section.get("repeated_live_source_failures_threshold", 3)),
+                1,
+            ),
+            webhook=AlertingWebhookSettings(
+                enabled=_as_bool(alerting_webhook_section.get("enabled"), False),
+                webhook_url=_as_str(alerting_webhook_section.get("webhook_url")),
+                webhook_url_env=_as_str(
+                    alerting_webhook_section.get("webhook_url_env"),
+                    "PM_BOT_ALERT_WEBHOOK_URL",
+                ),
+                timeout_sec=max(float(alerting_webhook_section.get("timeout_sec", 5.0)), 0.1),
+                max_retries=max(int(alerting_webhook_section.get("max_retries", 1)), 0),
+                retry_backoff_sec=max(float(alerting_webhook_section.get("retry_backoff_sec", 0.5)), 0.0),
+            ),
         )
 
         live_market_data = LiveMarketDataSettings(
@@ -572,6 +704,8 @@ class AppSettings:
                         role=role,
                         password=_as_str(row.get("password")),
                         password_env=_as_str(row.get("password_env")),
+                        password_hash=_as_str(row.get("password_hash")),
+                        password_hash_env=_as_str(row.get("password_hash_env")),
                     )
                 )
         ui_auth = UiAuthSettings(
@@ -584,7 +718,26 @@ class AppSettings:
             cookie_name=_as_str(ui_auth_section.get("cookie_name"), "pm_bot_ui_session"),
             cookie_secure=_as_bool(ui_auth_section.get("cookie_secure"), True),
             cookie_samesite=_as_str(ui_auth_section.get("cookie_samesite"), "lax").lower(),
+            require_password_hashes=_as_bool(ui_auth_section.get("require_password_hashes"), False),
+            max_failed_attempts=max(int(ui_auth_section.get("max_failed_attempts", 5)), 1),
+            lockout_seconds=max(int(ui_auth_section.get("lockout_seconds", 300)), 1),
             users=tuple(ui_users),
+        )
+        security = SecuritySettings(
+            secrets_from_env=_as_bool(security_section.get("secrets_from_env"), True),
+            redact_secrets_in_logs=_as_bool(security_section.get("redact_secrets_in_logs"), True),
+            require_explicit_live_flag=_as_bool(security_section.get("require_explicit_live_flag"), True),
+            secrets=SecretsSettings(
+                backend=_as_str(secrets_section.get("backend"), "env").lower(),
+                command_template=_as_str(secrets_section.get("command_template")),
+                command_timeout_sec=max(float(secrets_section.get("command_timeout_sec", 5.0)), 0.1),
+                env_fallback=_as_bool(secrets_section.get("env_fallback"), True),
+            ),
+            cli_auth=CliAuthSettings(
+                enabled=_as_bool(cli_auth_section.get("enabled"), False),
+                actor_user_env=_as_str(cli_auth_section.get("actor_user_env"), "PM_BOT_ACTOR_USER"),
+                actor_role_env=_as_str(cli_auth_section.get("actor_role_env"), "PM_BOT_ACTOR_ROLE"),
+            ),
         )
 
         allow_live_execution = _as_bool(feature_flags.get("allow_live_execution"), False)
@@ -593,6 +746,7 @@ class AppSettings:
             logging=logging_settings,
             metrics=metrics_settings,
             healthcheck=healthcheck_settings,
+            performance=performance_settings,
             storage=storage_settings,
             venue=str(venue_section.get("provider", "polymarket")),
             dry_run=_as_bool(venue_section.get("dry_run"), True),
@@ -603,10 +757,12 @@ class AppSettings:
             risk=risk,
             execution=execution,
             http=http,
+            alerting=alerting,
             live_market_data=live_market_data,
             live_research=live_research,
             sandbox_chain=sandbox_chain,
             ui_auth=ui_auth,
+            security=security,
         )
 
     def validate_dry_run_only(self, allow_live_execution: bool | None = None) -> None:

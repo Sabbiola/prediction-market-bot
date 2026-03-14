@@ -81,3 +81,26 @@ def test_cli_run_once_replay_and_generate_report(
         assert path.exists()
         rows = _read_jsonl(path)
         assert any(row.get("run_id") == deterministic_run_id for row in rows)
+
+
+def test_cli_profile_mode_emits_timing_summary(
+    temp_config_paths: tuple[Path, Path],
+    deterministic_run_id: str,
+    capsys: object,
+) -> None:
+    app_cfg, agents_cfg = temp_config_paths
+    run_exit = main(
+        [
+            "run-once",
+            "--config",
+            str(app_cfg),
+            "--agents-config",
+            str(agents_cfg),
+            "--run-id",
+            f"{deterministic_run_id}-profile",
+            "--profile",
+        ]
+    )
+    assert run_exit == 0
+    stderr_text = capsys.readouterr().err
+    assert "profile command=run-once" in stderr_text

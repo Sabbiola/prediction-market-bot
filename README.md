@@ -146,10 +146,65 @@ Il progetto e oggi in una beta-live tecnica avanzata:
 - staging docs presenti
 - web control-plane backend foundation presente (FastAPI + template server-side)
 
+## Backend Operational DB
+
+Supporto attuale:
+
+- `sqlite`: default locale/dev, path file (`storage.operational_db.path`)
+- `postgres`: staging/beta-live condiviso, DSN (`storage.operational_db.dsn` o `storage.operational_db.dsn_env`)
+
+Guardrail:
+
+- backend selezionato in `storage.operational_db.driver`
+- fail-fast su config invalida (es. `driver=postgres` senza DSN)
+- migrazioni gestite via `db-init`/`db-upgrade` su entrambi i backend
+
+## Auth e Secret Management (staging condiviso)
+
+- session auth e RBAC attivi sulla UI (`viewer`, `operator`, `admin`)
+- supporto password hash `pbkdf2_sha256` per utenti UI (`ui_auth.require_password_hashes=true`)
+- lockout su tentativi falliti (`ui_auth.max_failed_attempts`, `ui_auth.lockout_seconds`)
+- provider segreti centralizzato (`security.secrets`) con backend:
+  - `env` (default)
+  - `command` (integrazione con secret manager/CLI esterna)
+- azioni CLI privilegiate proteggibili con RBAC (`security.cli_auth.enabled=true`)
+  - `pause`/`resume` richiedono `admin`
+  - `review-approve`/`review-reject` richiedono `operator` o `admin`
+  - `tx-resubmit-safe` e `db-restore` richiedono `admin`
+
+## Alerting, Network Policy e CI Security
+
+- alerting esterno configurabile via `alerting.webhook` (Slack/webhook compatibile)
+- eventi critici alertabili: startup/healthcheck failure, schema mismatch, repeated live source failures, tx reconcile failure, pipeline critical failure
+- dedupe anti-alert-storm via `alerting.dedupe_window_sec`
+- policy outbound HTTP centralizzata:
+  - timeout/retry bounded
+  - host allowlist opzionale (`http.enforce_allowed_hosts`, `http.allowed_hosts`)
+  - limite payload risposta (`http.max_response_bytes`)
+- CI include scans dedicate:
+  - dependency vulnerability scan (`pip-audit`)
+  - static security scan (`bandit`)
+
+## Profiling e performance guardrails
+
+- profiling CLI opzionale (`--profile`) su:
+  - `run-once`
+  - `replay-run`
+  - `evaluate-window`
+  - `generate-report`
+  - `generate-eval-report`
+- guardrail stage lenti:
+  - `observability.performance.slow_stage_threshold_ms`
+  - evento `slow_stage_detected`
+- UI polling hardening:
+  - cache short-TTL lato read-model (`observability.performance.ui_poll_cache_ttl_sec`)
+  - header `X-Request-Duration-Ms`
+  - header `X-Poll-Suggested-Interval-Ms`
+
 ## Cosa manca per production-ready paper/sandbox
 
 - hardening UI (grafici, incident console, UX operativa)
-- auth hardening (SSO/OIDC, provisioning utenti, policy password)
+- auth enterprise (SSO/OIDC e provisioning centralizzato)
 - refactor dei file molto grandi
 - packaging/staging piu robusto
 - migrazioni DB mature
@@ -161,6 +216,12 @@ Il progetto e oggi in una beta-live tecnica avanzata:
 
 ```bash
 # startup / health
+python -m prediction_market_bot.main db-current-version --config config/app.yaml --agents-config config/agents.yaml --json
+python -m prediction_market_bot.main db-init --config config/app.yaml --agents-config config/agents.yaml --json
+python -m prediction_market_bot.main db-upgrade --config config/app.yaml --agents-config config/agents.yaml --json
+python -m prediction_market_bot.main db-backup --config config/app.yaml --agents-config config/agents.yaml --json
+python -m prediction_market_bot.main db-restore --config config/app.yaml --agents-config config/agents.yaml --backup-file <backup.sqlite3> --force --json
+python -m prediction_market_bot.main db-verify --config config/app.yaml --agents-config config/agents.yaml --json
 python -m prediction_market_bot.main validate-startup --config config/app.yaml --agents-config config/agents.yaml
 python -m prediction_market_bot.main healthcheck --config config/app.yaml --agents-config config/agents.yaml --json
 python -m prediction_market_bot.main status --config config/app.yaml --agents-config config/agents.yaml --json
@@ -176,6 +237,12 @@ python -m prediction_market_bot.ui.server --config config/app.yaml --agents-conf
 # operator actions (POST): /api/actions/run-once, /api/actions/pause, /api/actions/resume,
 # /api/actions/review-approve, /api/actions/review-reject, /api/actions/tx-reconcile,
 # /api/actions/tx-resubmit-safe, /api/actions/admin-settings
+
+# staging auth vars (se ui_auth.enabled=true)
+export PM_BOT_UI_SESSION_SECRET='<long-random-secret>'
+export PM_BOT_UI_VIEWER_PASSWORD_HASH='pbkdf2_sha256$150000$<salt_hex>$<digest_hex>'
+export PM_BOT_UI_OPERATOR_PASSWORD_HASH='pbkdf2_sha256$150000$<salt_hex>$<digest_hex>'
+export PM_BOT_UI_ADMIN_PASSWORD_HASH='pbkdf2_sha256$150000$<salt_hex>$<digest_hex>'
 
 # run control
 python -m prediction_market_bot.main run-once --config config/app.yaml --agents-config config/agents.yaml --run-id <run_id>
@@ -199,6 +266,16 @@ python -m prediction_market_bot.main last-report --config config/app.yaml --agen
 python -m prediction_market_bot.main tx-status --config config/app.yaml --agents-config config/agents.yaml --json
 python -m prediction_market_bot.main tx-reconcile --config config/app.yaml --agents-config config/agents.yaml --json
 python -m prediction_market_bot.main tx-resubmit-safe --config config/app.yaml --agents-config config/agents.yaml --intent-id <intent_id> --json
+```
+
+Setup Postgres (staging-like):
+
+```bash
+pip install ".[postgres]"
+docker compose --profile staging-postgres up -d postgres-staging
+export OPERATIONAL_DB_DSN="postgresql://pm_bot:pm_bot@127.0.0.1:5432/prediction_market_bot"
+# su Windows PowerShell:
+# $env:OPERATIONAL_DB_DSN="postgresql://pm_bot:pm_bot@127.0.0.1:5432/prediction_market_bot"
 ```
 
 ## Staging Docker (Worker + UI separati)

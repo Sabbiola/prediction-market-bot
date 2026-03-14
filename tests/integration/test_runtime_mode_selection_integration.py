@@ -21,8 +21,10 @@ class _MockHttpResponse:
     def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
         return False
 
-    def read(self) -> bytes:
-        return self._payload
+    def read(self, amount: int = -1) -> bytes:
+        if amount < 0:
+            return self._payload
+        return self._payload[:amount]
 
 
 def _read_yaml(path: Path) -> dict[str, object]:

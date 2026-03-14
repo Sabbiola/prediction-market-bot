@@ -24,6 +24,9 @@ dev = [
   "types-PyYAML>=6.0.12.20241230",
   "httpx>=0.27,<1",
 ]
+postgres = [
+  "psycopg[binary]>=3.2,<4",
+]
 
 [project.scripts]
 prediction-market-bot = "prediction_market_bot.main:main"

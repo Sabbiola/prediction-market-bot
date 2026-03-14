@@ -6,10 +6,10 @@ from .operator_control import (
     operator_state_path,
     save_operator_state,
 )
-from .metrics import RuntimeMetricsSnapshot, collect_runtime_metrics, write_prometheus_textfile
+from .alerting import AlertEvent, AlertingService, build_alerting_service
 from .paper_portfolio import PaperPortfolioEngine, PaperPortfolioSnapshot, PaperPositionSnapshot
 from .resolution import DeterministicResolutionPoller
-from .run_history import (
+from .history import (
     BrierMetrics,
     CalibrationMetrics,
     ReplayDecisionRecord,
@@ -26,10 +26,13 @@ from .settlement_requests import SettlementRequestQueueService
 from .trade_review import TradeReviewQueueService
 from .transactions import SandboxTransactionService, TxStatusSnapshot
 from .startup import StartupCheck, StartupValidationReport, validate_startup
+from .metrics import RuntimeMetricsSnapshot, collect_runtime_metrics, write_prometheus_textfile
 
 __all__ = [
     "BrierMetrics",
     "CalibrationMetrics",
+    "AlertEvent",
+    "AlertingService",
     "OperatorControlState",
     "PaperPortfolioEngine",
     "PaperPortfolioSnapshot",
@@ -52,6 +55,7 @@ __all__ = [
     "StartupCheck",
     "StartupValidationReport",
     "collect_runtime_metrics",
+    "build_alerting_service",
     "write_prometheus_textfile",
     "validate_startup",
     "RuntimeMetricsSnapshot",

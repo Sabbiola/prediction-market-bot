@@ -46,6 +46,9 @@ def test_web_app_bootstrap_and_base_template_render(temp_config_paths: tuple[Pat
             tab_payload = tab_response.json()
             assert "generated_at" in tab_payload
             assert "run_selector" in tab_payload
+            assert "x-request-duration-ms" in tab_response.headers
+            assert "x-poll-suggested-interval-ms" in tab_response.headers
+            assert "cache-control" in tab_response.headers
 
         overview_payload = client.get("/api/tabs/overview").json()
         assert "runtime_mode" in overview_payload
@@ -62,6 +65,9 @@ def test_web_app_bootstrap_and_base_template_render(temp_config_paths: tuple[Pat
         incidents_payload = client.get("/api/incidents").json()
         assert "generated_at" in incidents_payload
         assert "rows" in incidents_payload
+        incidents_headers = client.get("/api/incidents").headers
+        assert "x-request-duration-ms" in incidents_headers
+        assert "x-poll-suggested-interval-ms" in incidents_headers
 
 
 def test_health_and_ready_endpoints(temp_config_paths: tuple[Path, Path]) -> None:

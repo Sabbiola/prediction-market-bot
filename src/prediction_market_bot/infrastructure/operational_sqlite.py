@@ -27,91 +27,14 @@ from prediction_market_bot.interfaces import (
     TransactionIntentsRepositoryPort,
     TransactionReceiptsRepositoryPort,
 )
+from prediction_market_bot.infrastructure.operational_migrations import (
+    MigrationDialect,
+    upgrade_operational_schema,
+)
 
 
-def bootstrap_operational_schema(db_path: str | Path) -> None:
-    path = Path(db_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(path) as conn:
-        conn.executescript(
-            """
-            PRAGMA journal_mode=WAL;
-            CREATE TABLE IF NOT EXISTS runs (
-                run_id TEXT PRIMARY KEY,
-                status TEXT NOT NULL DEFAULT '',
-                updated_at TEXT NOT NULL,
-                payload_json TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS review_queue (
-                queue_id TEXT PRIMARY KEY,
-                run_id TEXT NOT NULL,
-                market_id TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                payload_json TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_review_queue_run_id ON review_queue (run_id);
-
-            CREATE TABLE IF NOT EXISTS review_decisions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                queue_id TEXT NOT NULL,
-                run_id TEXT NOT NULL,
-                decided_at TEXT NOT NULL,
-                payload_json TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_review_decisions_queue_id ON review_decisions (queue_id);
-            CREATE INDEX IF NOT EXISTS idx_review_decisions_run_id ON review_decisions (run_id);
-
-            CREATE TABLE IF NOT EXISTS open_positions_state (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                updated_at TEXT NOT NULL,
-                payload_json TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS pending_settlements (
-                request_id TEXT PRIMARY KEY,
-                run_id TEXT NOT NULL,
-                state TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                payload_json TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_pending_settlements_run_id ON pending_settlements (run_id);
-            CREATE INDEX IF NOT EXISTS idx_pending_settlements_state ON pending_settlements (state);
-
-            CREATE TABLE IF NOT EXISTS transaction_intents (
-                intent_id TEXT PRIMARY KEY,
-                run_id TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                payload_json TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_transaction_intents_run_id ON transaction_intents (run_id);
-
-            CREATE TABLE IF NOT EXISTS transaction_attempts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                run_id TEXT NOT NULL,
-                intent_id TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                payload_json TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_transaction_attempts_run_id ON transaction_attempts (run_id);
-            CREATE INDEX IF NOT EXISTS idx_transaction_attempts_intent_id ON transaction_attempts (intent_id);
-
-            CREATE TABLE IF NOT EXISTS transaction_receipts (
-                receipt_id TEXT PRIMARY KEY,
-                run_id TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                payload_json TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_transaction_receipts_run_id ON transaction_receipts (run_id);
-
-            CREATE TABLE IF NOT EXISTS operator_control_state (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                updated_at TEXT NOT NULL,
-                payload_json TEXT NOT NULL
-            );
-            """
-        )
-        conn.commit()
+def bootstrap_operational_schema(db_path: str | Path, *, dialect: MigrationDialect = "sqlite") -> None:
+    upgrade_operational_schema(db_path, dialect=dialect)
 
 
 class _SqliteBaseRepository:
@@ -538,7 +461,7 @@ class SqliteOperatorControlStateRepository(_SqliteBaseRepository, OperatorContro
 
 
 @dataclass(slots=True, frozen=True)
-class SqliteOperationalRepositories:
+class OperationalRepositories:
     runs: RunsRepositoryPort
     review_queue: ReviewQueueRepositoryPort
     review_decisions: ReviewDecisionRepositoryPort
@@ -549,9 +472,19 @@ class SqliteOperationalRepositories:
     transaction_receipts: TransactionReceiptsRepositoryPort
     operator_control_state: OperatorControlStateRepositoryPort
 
+
+@dataclass(slots=True, frozen=True)
+class SqliteOperationalRepositories(OperationalRepositories):
     @classmethod
-    def bootstrap(cls, db_path: str | Path) -> "SqliteOperationalRepositories":
-        bootstrap_operational_schema(db_path)
+    def bootstrap(
+        cls,
+        db_path: str | Path,
+        *,
+        apply_migrations: bool = True,
+        dialect: MigrationDialect = "sqlite",
+    ) -> "SqliteOperationalRepositories":
+        if apply_migrations:
+            bootstrap_operational_schema(db_path, dialect=dialect)
         return cls(
             runs=SqliteRunsRepository(db_path),
             review_queue=SqliteReviewQueueRepository(db_path),

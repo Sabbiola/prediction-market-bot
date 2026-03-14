@@ -19,8 +19,10 @@ class _MockHttpResponse:
     def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
         return False
 
-    def read(self) -> bytes:
-        return self._payload
+    def read(self, amount: int = -1) -> bytes:
+        if amount < 0:
+            return self._payload
+        return self._payload[:amount]
 
 
 def _read_jsonl(path: Path) -> list[dict[str, object]]:
@@ -122,6 +124,19 @@ def test_smoke_live_research_command_fetches_and_persists_batch(
         row.get("run_id") == deterministic_run_id and row.get("event_type") == "research_ingestion_end"
         for row in audit_rows
     )
+    assert any(
+        row.get("run_id") == deterministic_run_id and row.get("event_type") == "research_ingestion_source_end"
+        for row in audit_rows
+    )
+    event = next(
+        row
+        for row in audit_rows
+        if row.get("run_id") == deterministic_run_id and row.get("event_type") == "research_ingestion_end"
+    )
+    payload = event.get("payload", {})
+    assert isinstance(payload, dict)
+    assert float(payload.get("source_total_duration_ms", 0.0)) >= 0.0
+    assert float(payload.get("ingestion_duration_ms", 0.0)) >= 0.0
 
 
 def test_smoke_live_research_command_fails_when_all_sources_fail(

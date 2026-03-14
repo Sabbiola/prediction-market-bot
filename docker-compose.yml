@@ -18,6 +18,7 @@ services:
     environment:
       SANDBOX_CHAIN_PRIVATE_KEY: ""
       OPENALEX_API_KEY: ""
+      OPERATIONAL_DB_DSN: ${OPERATIONAL_DB_DSN:-}
     volumes:
       - ./config:/app/config:ro
       - ./data:/app/data
@@ -58,6 +59,7 @@ services:
       - "8080"
     environment:
       PM_BOT_UI_SESSION_SECRET: ${PM_BOT_UI_SESSION_SECRET:-}
+      OPERATIONAL_DB_DSN: ${OPERATIONAL_DB_DSN:-}
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
@@ -74,3 +76,27 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
+
+  postgres-staging:
+    image: postgres:16-alpine
+    container_name: prediction-market-postgres
+    profiles:
+      - staging-postgres
+    environment:
+      POSTGRES_DB: prediction_market_bot
+      POSTGRES_USER: pm_bot
+      POSTGRES_PASSWORD: pm_bot
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_staging_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pm_bot -d prediction_market_bot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+volumes:
+  postgres_staging_data:

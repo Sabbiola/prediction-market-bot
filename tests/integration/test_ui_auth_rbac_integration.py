@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import time
 from pathlib import Path
 
@@ -25,6 +26,12 @@ def _enable_ui_auth(app_cfg: Path, *, timeout_sec: int = 1800) -> None:
         ],
     }
     app_cfg.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+
+
+def _pbkdf2_hash(password: str) -> str:
+    salt = b"0123456789abcdef"
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 150_000)
+    return f"pbkdf2_sha256$150000${salt.hex()}${digest.hex()}"
 
 
 def _login(client: TestClient, username: str, password: str) -> None:
@@ -157,3 +164,65 @@ def test_ui_auth_logout_and_session_timeout(
         time.sleep(1.2)
         expired = client.get("/api/tabs/overview")
         assert expired.status_code == 401
+
+
+def test_ui_auth_hash_mode_fails_closed_on_plaintext_config(
+    temp_config_paths: tuple[Path, Path],
+    monkeypatch: object,
+) -> None:
+    app_cfg, agents_cfg = temp_config_paths
+    _enable_ui_auth(app_cfg)
+    raw = yaml.safe_load(app_cfg.read_text(encoding="utf-8")) or {}
+    raw.setdefault("ui_auth", {})
+    raw["ui_auth"]["require_password_hashes"] = True
+    app_cfg.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    monkeypatch.setenv("PM_BOT_UI_SESSION_SECRET", "test-session-secret-123456")
+
+    try:
+        create_web_app(config_path=app_cfg, agents_config_path=agents_cfg)
+    except ValueError as exc:
+        assert "must provide a password hash" in str(exc)
+    else:
+        raise AssertionError("Expected create_web_app to fail on plaintext credentials in hash-only mode")
+
+
+def test_ui_auth_hash_mode_accepts_pbkdf2_credentials_and_lockout(
+    temp_config_paths: tuple[Path, Path],
+    monkeypatch: object,
+) -> None:
+    app_cfg, agents_cfg = temp_config_paths
+    raw = yaml.safe_load(app_cfg.read_text(encoding="utf-8")) or {}
+    raw["ui_auth"] = {
+        "enabled": True,
+        "session_secret_env": "PM_BOT_UI_SESSION_SECRET",
+        "session_timeout_sec": 1800,
+        "cookie_name": "pm_bot_ui_session",
+        "cookie_secure": False,
+        "cookie_samesite": "lax",
+        "require_password_hashes": True,
+        "max_failed_attempts": 2,
+        "lockout_seconds": 1,
+        "users": [
+            {
+                "username": "operator_hash",
+                "role": "operator",
+                "password_hash": _pbkdf2_hash("operator-pass"),
+            }
+        ],
+    }
+    app_cfg.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    monkeypatch.setenv("PM_BOT_UI_SESSION_SECRET", "test-session-secret-123456")
+
+    app = create_web_app(config_path=app_cfg, agents_config_path=agents_cfg)
+    with TestClient(app) as client:
+        for _ in range(2):
+            bad = client.post("/api/auth/login", json={"username": "operator_hash", "password": "bad-pass"})
+            assert bad.status_code == 200
+            assert bad.json()["authenticated"] is False
+        locked = client.post("/api/auth/login", json={"username": "operator_hash", "password": "operator-pass"})
+        assert locked.status_code == 200
+        assert locked.json()["authenticated"] is False
+        time.sleep(1.2)
+        good = client.post("/api/auth/login", json={"username": "operator_hash", "password": "operator-pass"})
+        assert good.status_code == 200
+        assert good.json()["authenticated"] is True

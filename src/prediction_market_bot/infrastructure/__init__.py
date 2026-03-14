@@ -2,7 +2,7 @@
 
 from .http_client import HttpClientError, HttpErrorMetadata, HttpJsonResponse, StructuredHttpClient
 from .live_market_data import LiveMarketBatch, PolymarketReadOnlyMarketDataAdapter
-from .live_research import (
+from .research import (
     LiveResearchIngestionPipeline,
     OpenAlexWorksResearchSource,
     ResearchSourcePayloadError,
@@ -13,13 +13,57 @@ from .live_research import (
 )
 from .mock_sources import StaticMarketDataProvider, StaticResearchSource, build_default_research_sources
 from .persistence import JsonlPersistence
-from .operational_sqlite import SqliteOperationalRepositories, bootstrap_operational_schema
+from .operational_postgres import PostgresOperationalRepositories, bootstrap_operational_postgres_schema
+from .operational_sqlite import OperationalRepositories, SqliteOperationalRepositories, bootstrap_operational_schema
+from .operational_migrations import (
+    OperationalMigration,
+    OperationalMigrationError,
+    OperationalSchemaStatus,
+    current_operational_schema_version,
+    get_operational_schema_status,
+    init_operational_schema,
+    latest_operational_schema_version,
+    operational_migrations,
+    upgrade_operational_schema,
+)
+from .operational_backup import (
+    OperationalBackupError,
+    OperationalBackupResult,
+    OperationalDbVerifyResult,
+    OperationalRestoreResult,
+    create_sqlite_backup,
+    latest_sqlite_backup,
+    list_sqlite_backups,
+    restore_sqlite_backup,
+    verify_operational_sqlite_db,
+)
 from .sandbox_chain import SandboxChainExecutor
 
 __all__ = [
     "JsonlPersistence",
+    "OperationalRepositories",
+    "PostgresOperationalRepositories",
     "SqliteOperationalRepositories",
     "bootstrap_operational_schema",
+    "bootstrap_operational_postgres_schema",
+    "OperationalMigration",
+    "OperationalMigrationError",
+    "OperationalBackupError",
+    "OperationalBackupResult",
+    "OperationalDbVerifyResult",
+    "OperationalRestoreResult",
+    "OperationalSchemaStatus",
+    "current_operational_schema_version",
+    "get_operational_schema_status",
+    "init_operational_schema",
+    "latest_operational_schema_version",
+    "create_sqlite_backup",
+    "latest_sqlite_backup",
+    "list_sqlite_backups",
+    "operational_migrations",
+    "restore_sqlite_backup",
+    "upgrade_operational_schema",
+    "verify_operational_sqlite_db",
     "StructuredHttpClient",
     "HttpJsonResponse",
     "HttpErrorMetadata",

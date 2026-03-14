@@ -7,7 +7,12 @@ Questa guida descrive l'operativita in ambiente **beta-live staging**:
 - provider live in sola lettura
 - execution venue reale sempre disabilitata
 - sandbox-chain usata come lane transazionale non-trading
-- audit JSONL + stato operativo SQLite
+- audit JSONL + stato operativo SQLite/Postgres
+
+Nota backend Operational DB:
+
+- `sqlite` resta valido per locale/dev e scenari lightweight
+- `postgres` e il backend raccomandato per staging condiviso beta-live
 
 ## Operator Control Plane / Web UI (intended scope)
 
@@ -42,6 +47,8 @@ Autenticazione:
 - cookie di sessione con secure defaults (`cookie_secure`, `cookie_samesite`)
 - timeout inattivita controllato da `ui_auth.session_timeout_sec`
 - logout esplicito via UI/API (`POST /logout` o `POST /api/auth/logout`)
+- per staging condiviso usare password hash PBKDF2 (`ui_auth.require_password_hashes=true`)
+- lockout tentativi falliti (`ui_auth.max_failed_attempts`, `ui_auth.lockout_seconds`)
 
 Ruoli:
 
@@ -55,11 +62,125 @@ Regole:
 - ogni azione UI mutante viene auditata con `acting_user` e `acting_role`
 - non esporre mai segreti o credenziali in template/log
 
+## Secret resolution (staging)
+
+- tutti i secret runtime/UI passano dal provider centralizzato `security.secrets`
+- backend supportati:
+  - `env` (default)
+  - `command` (integrazione con secret manager tramite command template)
+- fallback controllato su env (`security.secrets.env_fallback`)
+- i secret non devono essere stampati in log, payload UI o artifact audit
+
+## Alert routing (staging)
+
+Configurazione minima:
+
+- `alerting.enabled: true`
+- `alerting.webhook.enabled: true`
+- `alerting.webhook.webhook_url` oppure `alerting.webhook.webhook_url_env`
+- `alerting.dedupe_window_sec` per limitare duplicati/alert storm
+
+Eventi actionable alertati:
+
+- `startup_validation_failure`
+- `healthcheck_failure`
+- `db_migration_mismatch`
+- `repeated_live_source_failures`
+- `tx_reconciliation_failure`
+- `pipeline_critical_failure`
+
+Aspettativa operativa:
+
+- un alert indica azione operatore richiesta, non semplice telemetria
+- usare metriche + `status` + UI incidents feed per triage e conferma
+- payload alert redatto (no secret, no private key, no token)
+
+## Outbound network policy
+
+- policy HTTP centralizzata in `http` config:
+  - `timeout_sec`, `max_retries`, `retry_backoff_sec`, `retry_jitter_sec`
+  - `enforce_allowed_hosts`, `allowed_hosts`
+  - `max_response_bytes`
+- con `enforce_allowed_hosts=true`, host fuori allowlist vengono bloccati fail-closed
+- usare allowlist esplicita in staging (provider live + endpoint sandbox necessari)
+
+## Performance profiling e troubleshooting
+
+Obiettivo operativo:
+
+- identificare stage lenti prima che diventino colli di bottiglia in beta-live
+- distinguere latenza provider esterni da costi CPU/query locali
+
+Strumentazione disponibile:
+
+- pipeline stage timings in `pipeline_summaries.stage_timings_ms`
+- evento `slow_stage_detected` quando uno stage supera `observability.performance.slow_stage_threshold_ms`
+- live market fetch con timing:
+  - evento `live_market_fetch_end` (`fetch_duration_ms`, `total_duration_ms`, `cache_hit`)
+- live research ingestion con timing:
+  - evento `research_ingestion_source_end` (`duration_ms` per source)
+  - evento `research_ingestion_end` (`source_total_duration_ms`, `ingestion_duration_ms`)
+- replay/evaluation:
+  - timing query in log `history_evaluate_window_timing`
+  - `replay_run` include `observability.analysis_timings_ms`
+
+Profiling mode CLI (on-demand, low-overhead):
+
+```bash
+python -m prediction_market_bot.main run-once --config config/app.yaml --agents-config config/agents.yaml --profile
+python -m prediction_market_bot.main replay-run --config config/app.yaml --agents-config config/agents.yaml --run-id <run_id> --profile
+python -m prediction_market_bot.main evaluate-window --config config/app.yaml --agents-config config/agents.yaml --date-from 2026-03-01 --date-to 2026-03-14 --profile
+python -m prediction_market_bot.main generate-report --config config/app.yaml --agents-config config/agents.yaml --run-id <run_id> --profile
+python -m prediction_market_bot.main generate-eval-report --config config/app.yaml --agents-config config/agents.yaml --run-id <run_id> --profile
+```
+
+Nota:
+
+- il sommario profiling va su `stderr` (stdout resta pulito per output JSON/automation)
+- configurazione globale opzionale: `observability.performance.enable_cli_profile`
+
+## UI polling: rischi e mitigazioni
+
+Endpoint ad alto polling tipico:
+
+- `GET /api/tabs/overview`
+- `GET /api/tabs/system`
+- `GET /api/incidents`
+
+Mitigazioni lato server:
+
+- cache read-model short TTL (`observability.performance.ui_poll_cache_ttl_sec`)
+- hint di polling (`X-Poll-Suggested-Interval-Ms`)
+- timing header (`X-Request-Duration-Ms`)
+- `Cache-Control: private, max-age=<ttl>`
+
+Raccomandazioni staging:
+
+- non scendere sotto 2s di polling per tab globali (overview/system/incidents)
+- usare refresh event-driven (azione operatore) per tab ad alta volatilita (review/tx)
+- se compaiono `ui_slow_request` nei log, aumentare intervallo polling e verificare query/repository hot path
+
+## RBAC CLI privilegiato (opzionale, consigliato in staging condiviso)
+
+- abilitare `security.cli_auth.enabled=true`
+- identita attore da env:
+  - `security.cli_auth.actor_user_env` (default `PM_BOT_ACTOR_USER`)
+  - `security.cli_auth.actor_role_env` (default `PM_BOT_ACTOR_ROLE`)
+- enforcement ruoli:
+  - `pause`, `resume`, `db-restore`, `tx-resubmit-safe` => `admin`
+  - `review-approve`, `review-reject`, `tx-reconcile` => `operator`/`admin`
+
 ## Comandi operativi principali
 
 ```bash
 python -m prediction_market_bot.main validate-startup --config config/app.yaml --agents-config config/agents.yaml
 python -m prediction_market_bot.main healthcheck --config config/app.yaml --agents-config config/agents.yaml --json
+python -m prediction_market_bot.main db-current-version --config config/app.yaml --agents-config config/agents.yaml --json
+python -m prediction_market_bot.main db-init --config config/app.yaml --agents-config config/agents.yaml --json
+python -m prediction_market_bot.main db-upgrade --config config/app.yaml --agents-config config/agents.yaml --json
+python -m prediction_market_bot.main db-backup --config config/app.yaml --agents-config config/agents.yaml --json
+python -m prediction_market_bot.main db-restore --config config/app.yaml --agents-config config/agents.yaml --backup-file <backup.sqlite3> --force --json
+python -m prediction_market_bot.main db-verify --config config/app.yaml --agents-config config/agents.yaml --json
 python -m prediction_market_bot.main run-once --config config/app.yaml --agents-config config/agents.yaml --run-id <run_id>
 python -m prediction_market_bot.main run-scheduler --config config/app.yaml --agents-config config/agents.yaml --interval-sec 60
 python -m prediction_market_bot.main status --config config/app.yaml --agents-config config/agents.yaml --json
@@ -68,7 +189,52 @@ python -m prediction_market_bot.main tx-reconcile --config config/app.yaml --age
 python -m prediction_market_bot.main tx-resubmit-safe --config config/app.yaml --agents-config config/agents.yaml --intent-id <intent_id> --json
 python -m prediction_market_bot.ui.server --config config/app.yaml --agents-config config/agents.yaml --host 127.0.0.1 --port 8080
 docker compose up -d --build prediction-market-worker prediction-market-ui
+docker compose --profile staging-postgres up -d postgres-staging
 ```
+
+Note implementative (report/replay/eval):
+
+- i comandi `replay-run`, `evaluate-window`, `generate-report`, `generate-eval-report` usano il sottosistema `services/history/`
+- query run/history e rendering report sono separati per supportare integrazione UI/API senza accoppiamento a logica CLI
+- `services/run_history.py` resta solo come shim di backward compatibility
+- lo schema Operational DB e migration-driven (`schema_migrations`) e non dipende da create table impliciti nei repository
+
+## Backup e Disaster Recovery (Operational DB SQLite)
+
+Configurazione:
+
+- `storage.operational_db.path`: path DB operativo
+- `storage.operational_db.backup_dir`: directory snapshot immutable (`.sqlite3`)
+
+Comandi:
+
+```bash
+python -m prediction_market_bot.main db-backup --config config/app.yaml --agents-config config/agents.yaml --label daily --json
+python -m prediction_market_bot.main db-restore --config config/app.yaml --agents-config config/agents.yaml --backup-file <backup.sqlite3> --force --json
+python -m prediction_market_bot.main db-verify --config config/app.yaml --agents-config config/agents.yaml --json
+```
+
+Regole operative:
+
+- ogni backup e uno snapshot timestamped immutabile
+- il restore non sovrascrive DB esistente senza `--force`
+- dopo restore eseguire sempre `db-verify` (integrity + schema migration status)
+
+Cadence consigliata (staging beta-live):
+
+- backup ogni 6 ore durante operativita attiva
+- backup pre-deploy e post-deploy
+- backup immediato prima di `db-upgrade`
+- retention minima 7 giorni (meglio 14 in staging)
+
+Procedura restore rapida:
+
+1. `pause` del runtime worker.
+2. Identificare backup target (`storage.operational_db.backup_dir`).
+3. Eseguire `db-restore ... --force`.
+4. Eseguire `db-verify --json`.
+5. Eseguire `validate-startup` + `healthcheck`.
+6. `resume` solo con esito verde.
 
 Endpoint UI principali:
 
@@ -100,15 +266,34 @@ Endpoint UI principali:
 
 ## 1. Startup
 
-1. Eseguire `validate-startup`.
-2. Eseguire `healthcheck`.
-3. Verificare:
+1. Eseguire `db-current-version`.
+2. Se `up_to_date=false`, eseguire `db-upgrade`.
+3. Eseguire `validate-startup`.
+4. Eseguire `healthcheck`.
+5. Verificare:
    - guardrail dry-run valide
    - path storage scrivibili (`data/`)
    - connessione Operational DB disponibile
    - config sandbox-chain coerente (`submit_tx`, signer/unlocked sender, rpc_url, contract_address)
 
-Se `validate-startup` fallisce, non avviare scheduler.
+Se `db-upgrade` o `validate-startup` falliscono, non avviare scheduler.
+
+## 1.b Config staging Postgres
+
+Prerequisiti:
+
+- dipendenza `psycopg` installata (`pip install ".[postgres]"`)
+- DSN configurato in `storage.operational_db.dsn` o via `storage.operational_db.dsn_env`
+
+Esempio DSN:
+
+- `postgresql://pm_bot:pm_bot@127.0.0.1:5432/prediction_market_bot`
+
+Check attesi da `validate-startup` in modalita postgres:
+
+- `operational_db_config=ok`
+- `operational_schema_version=ok`
+- `operational_repository_connectivity=ok`
 
 ## 2. Avvio scheduler
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from time import perf_counter
 from typing import Any, Callable, Mapping
 
 from prediction_market_bot.domain.enums import MarketStatus
@@ -23,6 +24,9 @@ class LiveMarketBatch:
     stale_count: int
     invalid_count: int
     retries_used: int
+    cache_hit: bool
+    fetch_duration_ms: float
+    total_duration_ms: float
     snapshots: tuple[MarketSnapshot, ...]
 
 
@@ -79,8 +83,9 @@ class PolymarketReadOnlyMarketDataAdapter(MarketDataPort):
 
     def fetch_batch(self, *, run_id: str | None = None, limit: int = 50) -> LiveMarketBatch:
         effective_run_id = run_id or f"live-fetch-{self.now_fn().strftime('%Y%m%d%H%M%S')}"
+        total_started = perf_counter()
         try:
-            payload, retries_used = self._fetch_payload(limit=limit)
+            payload, retries_used, cache_hit, fetch_duration_ms = self._fetch_payload(limit=limit)
         except HttpClientError as exc:
             self._persist_http_error(effective_run_id, exc.metadata)
             raise RuntimeError(
@@ -159,6 +164,9 @@ class PolymarketReadOnlyMarketDataAdapter(MarketDataPort):
                     "stale_count": stale_count,
                     "invalid_count": invalid_count,
                     "retries_used": retries_used,
+                    "cache_hit": cache_hit,
+                    "fetch_duration_ms": round(fetch_duration_ms, 3),
+                    "total_duration_ms": round(max((perf_counter() - total_started) * 1000.0, 0.0), 3),
                     "endpoint_url": self.endpoint_url,
                 },
             )
@@ -170,10 +178,14 @@ class PolymarketReadOnlyMarketDataAdapter(MarketDataPort):
             stale_count=stale_count,
             invalid_count=invalid_count,
             retries_used=retries_used,
+            cache_hit=cache_hit,
+            fetch_duration_ms=round(fetch_duration_ms, 3),
+            total_duration_ms=round(max((perf_counter() - total_started) * 1000.0, 0.0), 3),
             snapshots=tuple(snapshots),
         )
 
-    def _fetch_payload(self, *, limit: int) -> tuple[Any, int]:
+    def _fetch_payload(self, *, limit: int) -> tuple[Any, int, bool, float]:
+        started = perf_counter()
         response = self.http_client.fetch_json(
             source="polymarket_live_market_data",
             url=self.endpoint_url,
@@ -190,7 +202,8 @@ class PolymarketReadOnlyMarketDataAdapter(MarketDataPort):
             api_key_prefix=self.api_key_prefix,
             require_api_key=self.require_api_key,
         )
-        return response.payload, response.retries_used
+        fetch_duration_ms = max((perf_counter() - started) * 1000.0, 0.0)
+        return response.payload, response.retries_used, response.cache_hit, fetch_duration_ms
 
     @staticmethod
     def _build_query_params(*, limit: int) -> dict[str, str]:

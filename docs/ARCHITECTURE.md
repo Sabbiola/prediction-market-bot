@@ -44,12 +44,68 @@ prediction-market-bot/
         read_models.py
         routes/
         templates/
+      cli/
+        app.py
+        parser.py
+        commands/
+          run_commands.py
+          report_commands.py
+          replay_commands.py
+          review_commands.py
+          tx_commands.py
+          ops_commands.py
+          health_commands.py
+      services/
+        history/
+          run_summary_service.py
+          replay_service.py
+          evaluation_service.py
+          report_service.py
+          history_queries.py
       main.py
   tests/
     test_pipeline_smoke.py
 ```
 
+### CLI layer
+
+- `main.py` e un entrypoint sottile di backward compatibility.
+- parser e dispatch vivono in `src/prediction_market_bot/cli/`:
+  - `parser.py`: solo definizione argparse (nomi comandi/flag).
+  - `app.py`: delega dal comando al modulo handler dedicato.
+  - `commands/*.py`: handler per concern (`run`, `review`, `tx`, `ops`, `health`, `report`, `replay`).
+- vincolo: nessuna logica di dominio dentro argparse o routing CLI.
+
+### Performance observability path
+
+- profiling runtime/CLI e opzionale (flag `--profile` su comandi selezionati).
+- i costi stage-level principali vengono esposti come:
+  - `pipeline_summaries.stage_timings_ms`
+  - evento `slow_stage_detected` (guardrail soglia)
+  - eventi adapter live con durata (`live_market_fetch_end`, `research_ingestion_*`)
+  - timing replay/evaluation in osservabilita history (`analysis_timings_ms` + log timing dedicati)
+- la UI espone hint operativi per polling (`X-Request-Duration-Ms`, `X-Poll-Suggested-Interval-Ms`) e usa cache short-TTL lato read-model per endpoint ad alta frequenza.
+
+### Operational DB migrations
+
+- schema versioning gestito da `infrastructure/operational_migrations.py`
+- baseline + migrazioni incrementali applicate in ordine deterministico
+- tabella `schema_migrations` come source of truth versione schema
+- comandi runtime:
+  - `db-init`
+  - `db-upgrade`
+  - `db-current-version`
+
 ## 9. Bounded contexts del nuovo progetto
+
+### History / Reporting subsystem
+
+- `services/history/run_summary_service.py`: dataclass e contratti tipizzati (`ReplaySummary`, `WindowEvaluation`, metriche).
+- `services/history/replay_service.py`: ricostruzione deterministica run da artefatti JSONL.
+- `services/history/evaluation_service.py`: aggregazione cross-run per finestre temporali.
+- `services/history/report_service.py`: rendering markdown e write su filesystem.
+- `services/history/history_queries.py`: query read-only (`list_run_ids`) separate dal rendering.
+- `services/run_history.py`: shim di compatibilita per import legacy.
 
 ### 9.1 Market Discovery
 Responsabile di:
@@ -68,6 +124,14 @@ Responsabile di:
 - sentiment / stance
 - sintesi narrativa
 - contradiction / disagreement detection
+
+Boundary implementativo ingestion live research:
+
+- `infrastructure/research/adapters/*`: trasporto + parsing source-specific (Wikipedia/OpenAlex, estendibile).
+- `infrastructure/research/normalizer.py`: normalizzazione deterministica verso `ResearchFinding`.
+- `infrastructure/research/cache.py`: policy condivisa retry/cache/http fetch.
+- `infrastructure/research/pipeline.py`: orchestrazione ingestione, deduplica, persistenza artefatti/eventi.
+- `infrastructure/live_research.py`: shim di compatibilita per import legacy.
 
 ### 9.3 Probabilistic Modeling
 Responsabile di:

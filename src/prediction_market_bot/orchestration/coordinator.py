@@ -101,6 +101,7 @@ class PipelineCoordinator:
         transaction_receipt_repo: TransactionReceiptsRepositoryPort | None = None,
         review_blocking_gate: bool = False,
         settlement_same_run: bool = True,
+        slow_stage_threshold_ms: float = 0.0,
     ) -> None:
         self.market_data = market_data
         self.scanner = scanner
@@ -123,6 +124,7 @@ class PipelineCoordinator:
         self.transaction_receipt_repo = transaction_receipt_repo
         self.review_blocking_gate = review_blocking_gate
         self.settlement_same_run = settlement_same_run
+        self.slow_stage_threshold_ms = max(float(slow_stage_threshold_ms), 0.0)
 
     def run_dry(self, *, run_id: str | None = None) -> PipelineSummary:
         markets = tuple(self.market_data.list_active_markets())
@@ -162,6 +164,11 @@ class PipelineCoordinator:
             candidates = self.scanner.run(markets)
             scan_duration_ms = self._elapsed_ms(scan_started)
             self._add_stage_timing(stage_timings_ms, "scan", scan_duration_ms)
+            self._maybe_emit_slow_stage(
+                run_id=effective_run_id,
+                stage="scan",
+                duration_ms=scan_duration_ms,
+            )
             counters["candidate_markets"] = len(candidates)
             self._emit_stage(
                 "scan_end",
@@ -183,6 +190,12 @@ class PipelineCoordinator:
                 research_packet = self.research.run(candidate)
                 research_duration_ms = self._elapsed_ms(stage_started)
                 self._add_stage_timing(stage_timings_ms, "research", research_duration_ms)
+                self._maybe_emit_slow_stage(
+                    run_id=effective_run_id,
+                    stage="research",
+                    duration_ms=research_duration_ms,
+                    market_id=market_id,
+                )
                 source_failures = self._as_non_negative_int(getattr(self.research, "last_source_failures", 0))
                 counters["source_failures"] += source_failures
                 self._emit_stage(
@@ -202,6 +215,12 @@ class PipelineCoordinator:
                 prediction_result = self.prediction.run(candidate, research_packet)
                 prediction_duration_ms = self._elapsed_ms(stage_started)
                 self._add_stage_timing(stage_timings_ms, "prediction", prediction_duration_ms)
+                self._maybe_emit_slow_stage(
+                    run_id=effective_run_id,
+                    stage="prediction",
+                    duration_ms=prediction_duration_ms,
+                    market_id=market_id,
+                )
                 self._emit_stage(
                     "prediction_end",
                     run_id=effective_run_id,
@@ -224,6 +243,12 @@ class PipelineCoordinator:
                 )
                 risk_duration_ms = self._elapsed_ms(stage_started)
                 self._add_stage_timing(stage_timings_ms, "risk", risk_duration_ms)
+                self._maybe_emit_slow_stage(
+                    run_id=effective_run_id,
+                    stage="risk",
+                    duration_ms=risk_duration_ms,
+                    market_id=market_id,
+                )
                 if not risk_decision.approved:
                     counters["rejected_trades"] += 1
                 stale_hits = self._count_matching_reasons(risk_decision.reasoning, token="stale_market_data")
@@ -251,6 +276,12 @@ class PipelineCoordinator:
                     )
                     review_duration_ms = self._elapsed_ms(stage_started)
                     self._add_stage_timing(stage_timings_ms, "review_queue", review_duration_ms)
+                    self._maybe_emit_slow_stage(
+                        run_id=effective_run_id,
+                        stage="review_queue",
+                        duration_ms=review_duration_ms,
+                        market_id=market_id,
+                    )
                     counters["review_queue_candidates"] += 1
                     self._emit_stage(
                         "trade_review_queued",
@@ -272,6 +303,12 @@ class PipelineCoordinator:
                         gate_reason = raw_reason.strip() if raw_reason.strip() else gate_reason
                     gate_duration_ms = self._elapsed_ms(stage_started)
                     self._add_stage_timing(stage_timings_ms, "review_gate", gate_duration_ms)
+                    self._maybe_emit_slow_stage(
+                        run_id=effective_run_id,
+                        stage="review_gate",
+                        duration_ms=gate_duration_ms,
+                        market_id=market_id,
+                    )
                     self._persist_artifact(
                         effective_run_id,
                         "trade_review_gate_decisions",
@@ -330,6 +367,12 @@ class PipelineCoordinator:
                 )
                 execution_duration_ms = self._elapsed_ms(stage_started)
                 self._add_stage_timing(stage_timings_ms, "execution", execution_duration_ms)
+                self._maybe_emit_slow_stage(
+                    run_id=effective_run_id,
+                    stage="execution",
+                    duration_ms=execution_duration_ms,
+                    market_id=market_id,
+                )
                 if execution_result.status == ExecutionStatus.FILLED:
                     counters["executed_paper_trades"] += 1
                 self._emit_stage(
@@ -377,6 +420,12 @@ class PipelineCoordinator:
                     settlement_result = self.settlement.settle(execution_result, resolved_yes=resolved_yes)
                     settlement_duration_ms = self._elapsed_ms(stage_started)
                     self._add_stage_timing(stage_timings_ms, "settlement", settlement_duration_ms)
+                    self._maybe_emit_slow_stage(
+                        run_id=effective_run_id,
+                        stage="settlement",
+                        duration_ms=settlement_duration_ms,
+                        market_id=market_id,
+                    )
                     self._emit_stage(
                         "settlement_end",
                         run_id=effective_run_id,
@@ -399,6 +448,12 @@ class PipelineCoordinator:
                     postmortem_result = self.postmortem.run(settlement_result, prediction_result, research_packet)
                     postmortem_duration_ms = self._elapsed_ms(stage_started)
                     self._add_stage_timing(stage_timings_ms, "postmortem", postmortem_duration_ms)
+                    self._maybe_emit_slow_stage(
+                        run_id=effective_run_id,
+                        stage="postmortem",
+                        duration_ms=postmortem_duration_ms,
+                        market_id=market_id,
+                    )
                     self._emit_stage(
                         "postmortem_end",
                         run_id=effective_run_id,
@@ -419,6 +474,12 @@ class PipelineCoordinator:
                         counters["pending_settlement_requests"] += 1
                     deferred_duration_ms = self._elapsed_ms(stage_started)
                     self._add_stage_timing(stage_timings_ms, "settlement_deferred", deferred_duration_ms)
+                    self._maybe_emit_slow_stage(
+                        run_id=effective_run_id,
+                        stage="settlement_deferred",
+                        duration_ms=deferred_duration_ms,
+                        market_id=market_id,
+                    )
                     self._emit_stage(
                         "settlement_deferred",
                         run_id=effective_run_id,
@@ -672,6 +733,21 @@ class PipelineCoordinator:
                 alert_event=event_type,
                 error=str(exc),
             )
+
+    def _maybe_emit_slow_stage(self, *, run_id: str, stage: str, duration_ms: float, market_id: str = "") -> None:
+        if self.slow_stage_threshold_ms <= 0:
+            return
+        if duration_ms < self.slow_stage_threshold_ms:
+            return
+        payload: dict[str, object] = {
+            "run_id": run_id,
+            "stage": stage,
+            "duration_ms": round(duration_ms, 3),
+            "threshold_ms": round(self.slow_stage_threshold_ms, 3),
+        }
+        if market_id:
+            payload["market_id"] = market_id
+        self._emit_stage("slow_stage_detected", **payload)
 
     @staticmethod
     def _elapsed_ms(started_perf: float) -> float:

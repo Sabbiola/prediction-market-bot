@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
 from prediction_market_bot.app.bootstrap import build_http_client
+from prediction_market_bot.app.secrets import build_secret_provider
 from prediction_market_bot.domain.enums import TradeReviewAction
 from prediction_market_bot.infrastructure.sandbox_chain import SandboxChainExecutor
 from prediction_market_bot.main import pause_command, resume_command, run_once_command
@@ -82,6 +82,8 @@ class UiOperatorActionService:
                 config_path=Path(self.context.config_path),
                 agents_config_path=Path(self.context.agents_config_path),
                 reason=safe_reason,
+                acting_user=acting_user,
+                acting_role=acting_role,
             )
         except Exception:
             return self._audit(
@@ -115,6 +117,8 @@ class UiOperatorActionService:
             exit_code = resume_command(
                 config_path=Path(self.context.config_path),
                 agents_config_path=Path(self.context.agents_config_path),
+                acting_user=acting_user,
+                acting_role=acting_role,
             )
         except Exception:
             return self._audit(
@@ -434,11 +438,12 @@ class UiOperatorActionService:
 
     def _build_sandbox_tx_service(self) -> SandboxTransactionService:
         settings = self.context.settings
-        http_client = build_http_client(settings)
+        secrets = build_secret_provider(settings)
+        http_client = build_http_client(settings, secrets=secrets)
         private_key = ""
         private_key_env = settings.sandbox_chain.private_key_env.strip()
         if private_key_env:
-            private_key = os.getenv(private_key_env, "").strip()
+            private_key = secrets.get(private_key_env)
 
         executor = SandboxChainExecutor(
             rpc_url=settings.sandbox_chain.rpc_url,

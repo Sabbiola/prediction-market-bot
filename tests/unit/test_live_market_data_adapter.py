@@ -33,8 +33,10 @@ class _MockHttpResponse:
     def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
         return False
 
-    def read(self) -> bytes:
-        return self._payload
+    def read(self, amount: int = -1) -> bytes:
+        if amount < 0:
+            return self._payload
+        return self._payload[:amount]
 
 
 def _valid_market_payload(*, updated_at: str = "2026-03-13T11:55:00Z") -> list[dict[str, object]]:
