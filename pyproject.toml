@@ -40,6 +40,9 @@ exclude = [
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+markers = [
+  "acceptance: beta-live acceptance suite and release gate tests",
+]
 norecursedirs = [
   "legacy_reference",
   "solana-memecoin-bot-main",

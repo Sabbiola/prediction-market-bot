@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping
 
 from prediction_market_bot.domain.enums import ExecutionMode, TxConfirmationStatus
-from prediction_market_bot.domain.models import TxAttempt, TxIntent, TxReceipt
+from prediction_market_bot.domain.models import TxAttempt, TxIntent
 from prediction_market_bot.infrastructure.sandbox_chain import SandboxChainExecutor
 from prediction_market_bot.interfaces import (
     TransactionAttemptsRepositoryPort,

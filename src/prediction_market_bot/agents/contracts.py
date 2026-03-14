@@ -59,7 +59,13 @@ class ExecutionAgent(Protocol):
     def build_order_intent(self, risk: RiskDecision, prediction: PredictionResult) -> OrderIntent:
         ...
 
-    def run(self, risk: RiskDecision, prediction: PredictionResult) -> ExecutionResult:
+    def run(
+        self,
+        risk: RiskDecision,
+        prediction: PredictionResult,
+        *,
+        order_intent: OrderIntent | None = None,
+    ) -> ExecutionResult:
         ...
 
 

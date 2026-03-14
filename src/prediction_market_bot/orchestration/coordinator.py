@@ -323,7 +323,11 @@ class PipelineCoordinator:
 
                 current_stage = "execution"
                 stage_started = perf_counter()
-                execution_result = self.execution.run(effective_risk_decision, prediction_result)
+                execution_result = self.execution.run(
+                    effective_risk_decision,
+                    prediction_result,
+                    order_intent=order_intent,
+                )
                 execution_duration_ms = self._elapsed_ms(stage_started)
                 self._add_stage_timing(stage_timings_ms, "execution", execution_duration_ms)
                 if execution_result.status == ExecutionStatus.FILLED:

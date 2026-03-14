@@ -24,7 +24,6 @@ from prediction_market_bot.app.config import load_settings
 from prediction_market_bot.app.logging import configure_logging
 from prediction_market_bot.app.settings import AppSettings
 from prediction_market_bot.domain.enums import (
-    ExecutionMode,
     ExecutionStatus,
     ResolutionStatus,
     SettlementRequestState,
@@ -40,7 +39,6 @@ from prediction_market_bot.domain.models import (
     TradeReviewItem,
 )
 from prediction_market_bot.infrastructure import JsonlPersistence, SandboxChainExecutor, SqliteOperationalRepositories
-from prediction_market_bot.orchestration import PipelineCoordinator
 from prediction_market_bot.services import (
     DeterministicResolutionPoller,
     OperatorControlState,

@@ -226,7 +226,13 @@ class ExecutionAgent:
             rationale=" | ".join(prediction.rationale),
         )
 
-    def run(self, risk: RiskDecision, prediction: PredictionResult) -> ExecutionResult:
+    def run(
+        self,
+        risk: RiskDecision,
+        prediction: PredictionResult,
+        *,
+        order_intent: OrderIntent | None = None,
+    ) -> ExecutionResult:
         self.last_attempts = ()
         if not risk.approved:
             return ExecutionResult(
@@ -241,7 +247,7 @@ class ExecutionAgent:
                 message="trade_blocked_by_risk_or_review_gate",
             )
 
-        order = self.build_order_intent(risk, prediction)
+        order = order_intent or self.build_order_intent(risk, prediction)
         primary_result = self.executor.place_order(order)
         attempts: list[TransactionAttempt] = [self._extract_attempt(order, primary_result, self.execution_mode, lane="main", source=self.executor)]
 

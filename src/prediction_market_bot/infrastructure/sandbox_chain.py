@@ -347,7 +347,7 @@ class SandboxChainExecutor:
                     self._rpc(method="eth_sendRawTransaction", params=[raw_tx])
                 )
                 signed_payload_meta = (
-                    f"signer=private_key",
+                    "signer=private_key",
                     f"chain_id={self.chain_id}",
                     f"nonce={nonce}",
                     f"gas={gas_limit}",

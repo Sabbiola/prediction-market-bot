@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Mapping, Sequence
+from typing import Mapping
 
 from prediction_market_bot.domain.enums import ExecutionStatus, ResolutionStatus, SettlementRequestState
 from prediction_market_bot.domain.models import ExecutionResult, PendingSettlementRequest, ResolutionCheckResult
