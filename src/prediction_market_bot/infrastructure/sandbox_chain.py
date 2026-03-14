@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any, Callable, Mapping
@@ -63,9 +64,8 @@ class SandboxChainExecutor:
         self.last_attempt: TxAttempt | None = None
         if self.private_key and not self.from_address:
             try:
-                from eth_account import Account
-
-                self.from_address = str(Account.from_key(self.private_key).address)
+                account_module = self._load_eth_account()
+                self.from_address = str(account_module.from_key(self.private_key).address)
             except Exception:
                 # Defer signing failure to submit path with clear error.
                 pass
@@ -594,10 +594,10 @@ class SandboxChainExecutor:
 
     def _sign_transaction(self, tx_payload: Mapping[str, Any]) -> tuple[str, str]:
         try:
-            from eth_account import Account
+            account_module = self._load_eth_account()
         except Exception as exc:  # pragma: no cover - guarded in tests via config path
             raise RuntimeError("eth_account_dependency_missing_for_signing") from exc
-        account = Account.from_key(self.private_key)
+        account = account_module.from_key(self.private_key)
         if self.from_address and account.address.lower() != self.from_address.lower():
             raise RuntimeError("from_address_does_not_match_private_key")
         signed = account.sign_transaction(dict(tx_payload))
@@ -606,6 +606,11 @@ class SandboxChainExecutor:
         tx_hash_hex = signed.hash.hex()
         tx_hash_hex = tx_hash_hex if tx_hash_hex.startswith("0x") else f"0x{tx_hash_hex}"
         return raw_tx_hex, tx_hash_hex
+
+    @staticmethod
+    def _load_eth_account() -> Any:
+        module = importlib.import_module("eth_account")
+        return getattr(module, "Account")
 
     def _rpc(self, *, method: str, params: list[object]) -> Mapping[str, Any]:
         payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
