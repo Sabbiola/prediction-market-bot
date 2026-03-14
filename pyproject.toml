@@ -27,10 +27,28 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["prediction_market_bot*"]
+exclude = [
+  "legacy_reference*",
+  "solana-memecoin-bot-main*",
+  ".tmp_blueprint*",
+  ".mypy_cache*",
+  ".pytest_cache*",
+  ".ruff_cache*",
+  "data*",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+norecursedirs = [
+  "legacy_reference",
+  "solana-memecoin-bot-main",
+  ".tmp_blueprint",
+  ".mypy_cache",
+  ".pytest_cache",
+  ".ruff_cache",
+  "data",
+]
 
 [tool.mypy]
 python_version = "3.11"

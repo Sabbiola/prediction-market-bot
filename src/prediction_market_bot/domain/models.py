@@ -6,14 +6,18 @@ from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .enums import (
+    ExecutionMode,
     ExecutionStatus,
     MarketStatus,
     OutcomeClassification,
     OutcomeSide,
     PostmortemCause,
+    ResolutionStatus,
+    SettlementRequestState,
     SourceType,
     TradeReviewAction,
     TradeReviewStatus,
+    TxConfirmationStatus,
 )
 
 Probability = Annotated[float, Field(ge=0.0, le=1.0)]
@@ -194,16 +198,67 @@ class OrderIntent(StrictModel):
     stake_usd: PositiveAmount
     limit_price: Probability
     rationale: str
+    run_id: str = ""
+    review_queue_id: str = ""
 
 
 class ExecutionResult(StrictModel):
     market_id: NonEmptyStr
+    execution_mode: ExecutionMode = ExecutionMode.PAPER
     status: ExecutionStatus
     side: OutcomeSide
     stake_usd: PositiveAmount
     fill_price: Probability | None = None
     order_id: str | None = None
+    intent_id: str = ""
+    tx_hash: str | None = None
+    nonce: Annotated[int, Field(ge=0)] | None = None
+    submitted_at: datetime | None = None
+    confirmed_at: datetime | None = None
+    confirmation_status: TxConfirmationStatus = TxConfirmationStatus.UNKNOWN
+    run_id: str = ""
+    review_queue_id: str = ""
     message: str = ""
+
+
+class TransactionAttempt(StrictModel):
+    market_id: NonEmptyStr
+    execution_mode: ExecutionMode
+    lane: NonEmptyStr
+    intent_id: NonEmptyStr
+    venue: NonEmptyStr
+    side: OutcomeSide
+    stake_usd: PositiveAmount
+    limit_price: Probability
+    status: ExecutionStatus
+    tx_hash: str | None = None
+    nonce: Annotated[int, Field(ge=0)] | None = None
+    chain_id: Annotated[int, Field(ge=1)] | None = None
+    from_address: str = ""
+    contract_address: str = ""
+    rpc_method: str = ""
+    signed_payload_hash: str = ""
+    signed_payload_metadata: tuple[str, ...] = ()
+    submitted_at: datetime | None = None
+    confirmed_at: datetime | None = None
+    confirmation_status: TxConfirmationStatus = TxConfirmationStatus.UNKNOWN
+    replacement_for_tx_hash: str = ""
+    replaced_by_tx_hash: str = ""
+    retry_count: Annotated[int, Field(ge=0)] = 0
+    run_id: str = ""
+    review_queue_id: str = ""
+    message: str = ""
+    error_code: str = ""
+    error_message: str = ""
+    metadata: tuple[str, ...] = ()
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class NonceState(StrictModel):
+    chain_id: Annotated[int, Field(ge=1)]
+    account: str = ""
+    next_nonce: Annotated[int, Field(ge=0)]
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class SettlementResult(StrictModel):
@@ -235,6 +290,7 @@ class TradeReviewCandidate(StrictModel):
     prediction_rationale: tuple[str, ...] = ()
     risk_rationale: tuple[str, ...] = ()
     model_rationale: tuple[str, ...] = ()
+    expires_at: datetime | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -258,14 +314,47 @@ class TradeReviewItem(StrictModel):
     stake_usd: PositiveAmount
     confidence: Probability
     edge: float
-    status: TradeReviewStatus = TradeReviewStatus.PENDING
+    status: TradeReviewStatus = TradeReviewStatus.PENDING_REVIEW
     prediction_rationale: tuple[str, ...] = ()
     risk_rationale: tuple[str, ...] = ()
     model_rationale: tuple[str, ...] = ()
     operator_rationale: str = ""
     notes: tuple[str, ...] = ()
+    expires_at: datetime | None = None
     created_at: datetime
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class PendingSettlementRequest(StrictModel):
+    request_id: NonEmptyStr
+    run_id: NonEmptyStr
+    market_id: NonEmptyStr
+    execution_mode: ExecutionMode
+    execution_status: ExecutionStatus
+    side: OutcomeSide
+    stake_usd: PositiveAmount
+    fill_price: Probability | None = None
+    order_id: str | None = None
+    state: SettlementRequestState = SettlementRequestState.PENDING
+    resolution_status: ResolutionStatus = ResolutionStatus.PENDING
+    resolution_reason: str = ""
+    resolved_yes: bool | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class ResolutionCheckResult(StrictModel):
+    market_id: NonEmptyStr
+    status: ResolutionStatus
+    resolved_yes: bool | None = None
+    reason: str = ""
+    checked_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+# Explicit transaction-plane model names (backward-compatible aliases).
+TxIntent = OrderIntent
+TxAttempt = TransactionAttempt
+TxReceipt = ExecutionResult
 
 
 # Backward compatibility for earlier module names.

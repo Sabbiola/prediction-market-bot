@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from prediction_market_bot.app.config import load_settings
+from prediction_market_bot.domain.enums import RuntimeMode
 
 
 def test_load_settings_from_repository_config() -> None:
@@ -10,7 +11,7 @@ def test_load_settings_from_repository_config() -> None:
         app_config_path=Path("config/app.yaml"),
         agents_config_path=Path("config/agents.yaml"),
     )
-    assert settings.runtime.mode == "dry-run"
+    assert settings.runtime.mode == RuntimeMode.DRY_RUN_STATIC
     assert settings.dry_run is True
     assert settings.prediction.min_confidence > 0.0
     assert settings.risk.bankroll_usd > 0.0
@@ -39,5 +40,5 @@ def test_rejects_live_mode(tmp_path: Path) -> None:
     )
     agents_cfg.write_text("thresholds: {}\nrisk: {}\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="dry-run"):
+    with pytest.raises(ValueError, match="Unsupported runtime mode"):
         load_settings(app_cfg, agents_cfg)

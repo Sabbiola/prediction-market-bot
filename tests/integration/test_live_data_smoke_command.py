@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from prediction_market_bot.infrastructure import live_market_data as live_market_data_module
+from prediction_market_bot.infrastructure import http_client as http_client_module
 from prediction_market_bot.main import main
 
 
@@ -32,6 +32,7 @@ def test_smoke_live_data_command_fetches_and_persists_batch(
     temp_config_paths: tuple[Path, Path],
     deterministic_run_id: str,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     app_cfg, agents_cfg = temp_config_paths
 
@@ -58,7 +59,7 @@ def test_smoke_live_data_command_fetches_and_persists_batch(
         del req, timeout
         return _MockHttpResponse(json.dumps(payload))
 
-    monkeypatch.setattr(live_market_data_module.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(http_client_module.request, "urlopen", fake_urlopen)
 
     exit_code = main(
         [
@@ -80,6 +81,8 @@ def test_smoke_live_data_command_fetches_and_persists_batch(
         ]
     )
     assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "Smoke live data completed" in output
 
     artifacts_dir = app_cfg.parent / "artifacts"
     raw_path = artifacts_dir / "raw_market_snapshots.jsonl"
@@ -97,3 +100,41 @@ def test_smoke_live_data_command_fetches_and_persists_batch(
         row.get("run_id") == deterministic_run_id and row.get("event_type") == "live_market_fetch_end"
         for row in audit_rows
     )
+
+
+def test_smoke_live_data_command_reports_blocked_403(
+    temp_config_paths: tuple[Path, Path],
+    deterministic_run_id: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    app_cfg, agents_cfg = temp_config_paths
+
+    def fake_urlopen(req: object, timeout: float) -> _MockHttpResponse:
+        del timeout
+        url = getattr(req, "full_url", "https://example.test/markets")
+        raise http_client_module.error.HTTPError(url, 403, "forbidden", hdrs=None, fp=None)
+
+    monkeypatch.setattr(http_client_module.request, "urlopen", fake_urlopen)
+
+    exit_code = main(
+        [
+            "smoke-live-data",
+            "--config",
+            str(app_cfg),
+            "--agents-config",
+            str(agents_cfg),
+            "--run-id",
+            deterministic_run_id,
+            "--endpoint",
+            "https://example.test/markets",
+            "--retries",
+            "0",
+            "--limit",
+            "10",
+        ]
+    )
+    assert exit_code == 1
+    output = capsys.readouterr().out
+    assert "Smoke live data failed" in output
+    assert "classification=blocked_403" in output

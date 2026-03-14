@@ -13,12 +13,21 @@ REPLAY_ARTIFACT_TYPES: tuple[str, ...] = (
     "research_packets",
     "prediction_results",
     "risk_decisions",
+    "effective_risk_decisions",
     "trade_review_candidates",
     "trade_review_decisions",
+    "trade_review_gate_decisions",
     "order_intents",
     "execution_results",
+    "transaction_attempts",
+    "pending_settlement_requests",
+    "resolution_checks",
     "settlement_results",
     "postmortems",
+    "paper_portfolio_events",
+    "paper_portfolio_snapshots",
+    "paper_open_positions_state",
+    "http_error_metadata",
     "pipeline_summaries",
 )
 
@@ -213,6 +222,9 @@ def replay_run(persistence: JsonlPersistence, run_id: str) -> ReplaySummary:
         reconstructed_records=reconstructed_records,
         executed=executed,
         candidates=candidates,
+        settlement_request_rows=artifact_rows["pending_settlement_requests"],
+        portfolio_snapshot_rows=artifact_rows["paper_open_positions_state"]
+        or artifact_rows["paper_portfolio_snapshots"],
     )
 
     started_at, finished_at = _event_time_bounds(events)
@@ -354,6 +366,8 @@ def generate_report_markdown(summary: ReplaySummary) -> str:
     observability = summary.observability
     counters = observability.get("counters", {})
     stage_timings = observability.get("stage_timings_ms", {})
+    settlement_queue = observability.get("settlement_queue", {})
+    portfolio = observability.get("portfolio", {})
     correlation_id = observability.get("correlation_id", summary.run_id)
     status = observability.get("status", "n/a")
 
@@ -389,6 +403,18 @@ def generate_report_markdown(summary: ReplaySummary) -> str:
     lines.append("- stage_timings_ms:")
     if isinstance(stage_timings, Mapping) and stage_timings:
         for key, value in sorted(stage_timings.items()):
+            lines.append(f"  - {key}: {value}")
+    else:
+        lines.append("  - none")
+    lines.append("- settlement_queue:")
+    if isinstance(settlement_queue, Mapping) and settlement_queue:
+        for key, value in sorted(settlement_queue.items()):
+            lines.append(f"  - {key}: {value}")
+    else:
+        lines.append("  - none")
+    lines.append("- portfolio:")
+    if isinstance(portfolio, Mapping) and portfolio:
+        for key, value in sorted(portfolio.items()):
             lines.append(f"  - {key}: {value}")
     else:
         lines.append("  - none")
@@ -433,6 +459,8 @@ def _build_observability_payload(
     reconstructed_records: Sequence[ReplayDecisionRecord],
     executed: int,
     candidates: int,
+    settlement_request_rows: Sequence[Mapping[str, Any]],
+    portfolio_snapshot_rows: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     counters = _coerce_counter_map(summary_payload.get("counters"))
     if not counters:
@@ -453,11 +481,22 @@ def _build_observability_payload(
             "source_failures": 0,
         }
 
+    settlement_queue = _settlement_request_state_counts(settlement_request_rows)
+    portfolio_snapshot = _latest_payload(portfolio_snapshot_rows)
+
     return {
         "correlation_id": _to_text(summary_payload.get("correlation_id")) or run_id,
         "status": _to_text(summary_payload.get("status")) or "unknown",
         "counters": counters,
         "stage_timings_ms": _coerce_timing_map(summary_payload.get("stage_timings_ms")),
+        "settlement_queue": settlement_queue,
+        "portfolio": {
+            "open_positions": _to_int(portfolio_snapshot.get("open_position_count", portfolio_snapshot.get("position_count", 0))),
+            "settled_positions": _to_int(portfolio_snapshot.get("settled_position_count")),
+            "total_exposure_usd": round(_to_float(portfolio_snapshot.get("total_exposure_usd")), 2),
+            "realized_pnl_usd": round(_to_float(portfolio_snapshot.get("realized_pnl_usd")), 2),
+            "unrealized_pnl_usd": round(_to_float(portfolio_snapshot.get("unrealized_pnl_usd")), 2),
+        },
     }
 
 
@@ -485,6 +524,51 @@ def _coerce_timing_map(value: Any) -> dict[str, float]:
         if normalized >= 0.0:
             result[key] = round(normalized, 3)
     return result
+
+
+def _latest_payload(rows: Sequence[Mapping[str, Any]]) -> Mapping[str, Any]:
+    latest_payload: Mapping[str, Any] = {}
+    latest_ts: datetime | None = None
+    for row in rows:
+        payload_raw = row.get("payload")
+        if not isinstance(payload_raw, Mapping):
+            continue
+        payload = dict(payload_raw)
+        timestamp = _parse_timestamp(row.get("timestamp"))
+        if latest_ts is None or (timestamp is not None and timestamp > latest_ts):
+            latest_ts = timestamp
+            latest_payload = payload
+    return latest_payload
+
+
+def _settlement_request_state_counts(rows: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    latest_by_request: dict[str, tuple[datetime | None, Mapping[str, Any]]] = {}
+    for row in rows:
+        payload = row.get("payload")
+        if not isinstance(payload, Mapping):
+            continue
+        request_id = _to_text(payload.get("request_id"))
+        if not request_id:
+            continue
+        timestamp = _parse_timestamp(row.get("timestamp"))
+        current = latest_by_request.get(request_id)
+        if current is None:
+            latest_by_request[request_id] = (timestamp, payload)
+            continue
+        current_ts = current[0]
+        if timestamp is None or (current_ts is not None and timestamp <= current_ts):
+            continue
+        latest_by_request[request_id] = (timestamp, payload)
+
+    counts = {"pending": 0, "settled": 0, "total": 0}
+    for _, payload in latest_by_request.values():
+        state = _to_text(payload.get("state")).upper()
+        counts["total"] += 1
+        if state == "SETTLED":
+            counts["settled"] += 1
+        else:
+            counts["pending"] += 1
+    return counts
 
 
 def _render_run_eval_report(summary: ReplaySummary) -> str:
@@ -587,7 +671,7 @@ def _reconstruct_records(artifact_rows: Mapping[str, list[dict[str, Any]]]) -> t
         "scan": "market_candidates",
         "research": "research_packets",
         "prediction": "prediction_results",
-        "risk": "risk_decisions",
+        "risk": "effective_risk_decisions",
         "execution": "execution_results",
         "settlement": "settlement_results",
         "postmortem": "postmortems",
@@ -596,7 +680,10 @@ def _reconstruct_records(artifact_rows: Mapping[str, list[dict[str, Any]]]) -> t
     market_ids: set[str] = set()
 
     for stage, artifact_type in stage_to_artifact.items():
-        stage_map = _build_stage_index(artifact_rows.get(artifact_type, []))
+        rows = artifact_rows.get(artifact_type, [])
+        if stage == "risk" and not rows:
+            rows = artifact_rows.get("risk_decisions", [])
+        stage_map = _build_stage_index(rows)
         stage_maps[stage] = stage_map
         market_ids.update(stage_map.keys())
 

@@ -23,6 +23,5 @@ def load_settings(app_config_path: str | Path, agents_config_path: str | Path) -
     app_config = load_yaml_file(app_path)
     agents_config = load_yaml_file(agents_path)
     settings = AppSettings.from_dicts(app_config=app_config, agents_config=agents_config)
-    allow_live_execution = bool((app_config.get("feature_flags") or {}).get("allow_live_execution", False))
-    settings.validate_dry_run_only(allow_live_execution=allow_live_execution)
+    settings.validate_dry_run_only()
     return settings

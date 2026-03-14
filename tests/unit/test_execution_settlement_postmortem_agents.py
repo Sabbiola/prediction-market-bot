@@ -1,7 +1,14 @@
 from prediction_market_bot.agents.execution import DryRunExecutor, ExecutionAgent
 from prediction_market_bot.agents.postmortem import PostmortemAgent
 from prediction_market_bot.agents.settlement import SettlementAgent
-from prediction_market_bot.domain.enums import ExecutionStatus, OutcomeClassification, OutcomeSide, PostmortemCause, SourceType
+from prediction_market_bot.domain.enums import (
+    ExecutionMode,
+    ExecutionStatus,
+    OutcomeClassification,
+    OutcomeSide,
+    PostmortemCause,
+    SourceType,
+)
 from prediction_market_bot.domain.models import (
     ExecutionResult,
     PredictionResult,
@@ -83,8 +90,9 @@ def test_execution_agent_simulates_order_creation_and_fill_deterministically() -
 
     assert first == second
     assert first.status is ExecutionStatus.FILLED
+    assert first.execution_mode is ExecutionMode.PAPER
     assert first.order_id is not None
-    assert first.order_id.startswith("dryrun-m-exec-yes-")
+    assert first.order_id.startswith("paper-m-exec-yes-")
     assert first.fill_price is not None
     assert first.fill_price >= prediction.selected_market_price
     assert "order_created_and_filled" in first.message

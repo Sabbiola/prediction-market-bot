@@ -1,17 +1,19 @@
 from __future__ import annotations
 
-import json
 import re
-import socket
-import time
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any, Callable, Mapping, Sequence
-from urllib import error, parse, request
+from urllib import parse
 
 from prediction_market_bot.domain.enums import SourceType
 from prediction_market_bot.domain.models import MarketSnapshot, ResearchFinding
 from prediction_market_bot.interfaces import PersistencePort, ResearchDataPort
+from prediction_market_bot.infrastructure.http_client import (
+    HttpClientError,
+    HttpErrorMetadata,
+    StructuredHttpClient,
+)
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
@@ -64,6 +66,7 @@ class ResearchIngestionBatch:
     run_id: str
     market_id: str
     source_count: int
+    source_failures: int
     raw_count: int
     normalized_count: int
     deduplicated_count: int
@@ -72,10 +75,12 @@ class ResearchIngestionBatch:
     findings: tuple[ResearchFinding, ...]
 
 
-@dataclass(slots=True, frozen=True)
-class _CacheEntry:
-    expires_at: datetime
-    payload: Any
+class ResearchSourcePayloadError(RuntimeError):
+    def __init__(self, *, source_name: str, reason_code: str, message: str) -> None:
+        super().__init__(f"{source_name}: {reason_code} ({message})")
+        self.source_name = source_name
+        self.reason_code = reason_code
+        self.message = message
 
 
 class StructuredHttpResearchSource(ResearchDataPort):
@@ -92,7 +97,14 @@ class StructuredHttpResearchSource(ResearchDataPort):
         max_retries: int = 2,
         retry_backoff_sec: float = 0.5,
         cache_ttl_seconds: int = 300,
+        retry_jitter_sec: float = 0.25,
+        headers: Mapping[str, str] | None = None,
+        api_key: str = "",
+        api_key_header: str = "Authorization",
+        api_key_prefix: str = "Bearer ",
+        require_api_key: bool = False,
         now_fn: Callable[[], datetime] | None = None,
+        http_client: StructuredHttpClient | None = None,
     ) -> None:
         self.source_name = source_name
         self.source_type = source_type
@@ -102,8 +114,22 @@ class StructuredHttpResearchSource(ResearchDataPort):
         self.max_retries = max_retries
         self.retry_backoff_sec = retry_backoff_sec
         self.cache_ttl_seconds = max(cache_ttl_seconds, 0)
+        self.retry_jitter_sec = max(retry_jitter_sec, 0.0)
+        self.headers = {str(key): str(value) for key, value in (headers or {}).items()}
+        self.api_key = api_key.strip()
+        self.api_key_header = api_key_header.strip()
+        self.api_key_prefix = api_key_prefix
+        self.require_api_key = require_api_key
         self.now_fn = now_fn or (lambda: datetime.now(UTC))
-        self._cache: dict[str, _CacheEntry] = {}
+        self.http_client = http_client or StructuredHttpClient(
+            user_agent="prediction-market-bot/0.1",
+            timeout_sec=self.timeout_sec,
+            max_retries=self.max_retries,
+            retry_backoff_sec=self.retry_backoff_sec,
+            retry_jitter_sec=self.retry_jitter_sec,
+            cache_ttl_sec=self.cache_ttl_seconds,
+            now_fn=self.now_fn,
+        )
 
     def fetch(self, market: MarketSnapshot) -> Sequence[ResearchFinding]:
         return self.fetch_with_meta(market).findings
@@ -152,42 +178,23 @@ class StructuredHttpResearchSource(ResearchDataPort):
         )
 
     def _fetch_payload(self, *, query: str, limit: int) -> tuple[Any, int, bool]:
-        cache_key = f"{query}|{max(limit, 1)}"
-        cached = self._cache.get(cache_key)
-        now = self.now_fn()
-        if cached and cached.expires_at >= now:
-            return cached.payload, 0, True
-
-        retries_used = 0
-        last_error: Exception | None = None
-        url = self._build_url(query=query, limit=limit)
-
-        for attempt in range(self.max_retries + 1):
-            try:
-                req = request.Request(url=url, headers={"Accept": "application/json"}, method="GET")
-                with request.urlopen(req, timeout=self.timeout_sec) as response:
-                    payload = json.loads(response.read().decode("utf-8"))
-                if self.cache_ttl_seconds > 0:
-                    self._cache[cache_key] = _CacheEntry(
-                        expires_at=now + timedelta(seconds=self.cache_ttl_seconds),
-                        payload=payload,
-                    )
-                return payload, retries_used, False
-            except (
-                error.URLError,
-                error.HTTPError,
-                TimeoutError,
-                socket.timeout,
-                json.JSONDecodeError,
-                UnicodeDecodeError,
-            ) as exc:
-                last_error = exc
-                if attempt >= self.max_retries:
-                    break
-                retries_used += 1
-                time.sleep(self.retry_backoff_sec * (attempt + 1))
-
-        raise RuntimeError(f"{self.source_name}_fetch_failed: {last_error}") from last_error
+        response = self.http_client.fetch_json(
+            source=self.source_name,
+            url=self._build_url(query=query, limit=limit),
+            headers=self.headers,
+            use_cache=self.cache_ttl_seconds > 0,
+            cache_ttl_sec=self.cache_ttl_seconds,
+            timeout_sec=self.timeout_sec,
+            max_retries=self.max_retries,
+            retry_backoff_sec=self.retry_backoff_sec,
+            retry_jitter_sec=self.retry_jitter_sec,
+            add_openalex_auth=self._use_openalex_auth(),
+            api_key=self.api_key,
+            api_key_header=self.api_key_header,
+            api_key_prefix=self.api_key_prefix,
+            require_api_key=self.require_api_key,
+        )
+        return response.payload, response.retries_used, response.cache_hit
 
     def _build_url(self, *, query: str, limit: int) -> str:
         raise NotImplementedError
@@ -204,6 +211,9 @@ class StructuredHttpResearchSource(ResearchDataPort):
         fetched_at: datetime,
     ) -> ResearchFinding | None:
         raise NotImplementedError
+
+    def _use_openalex_auth(self) -> bool:
+        return False
 
     @staticmethod
     def _build_query(market: MarketSnapshot) -> str:
@@ -309,7 +319,14 @@ class WikipediaSearchResearchSource(StructuredHttpResearchSource):
         max_retries: int = 2,
         retry_backoff_sec: float = 0.5,
         cache_ttl_seconds: int = 600,
+        retry_jitter_sec: float = 0.25,
+        headers: Mapping[str, str] | None = None,
+        api_key: str = "",
+        api_key_header: str = "Authorization",
+        api_key_prefix: str = "Bearer ",
+        require_api_key: bool = False,
         now_fn: Callable[[], datetime] | None = None,
+        http_client: StructuredHttpClient | None = None,
     ) -> None:
         super().__init__(
             source_name="wikipedia-search",
@@ -320,7 +337,14 @@ class WikipediaSearchResearchSource(StructuredHttpResearchSource):
             max_retries=max_retries,
             retry_backoff_sec=retry_backoff_sec,
             cache_ttl_seconds=cache_ttl_seconds,
+            retry_jitter_sec=retry_jitter_sec,
+            headers=headers,
+            api_key=api_key,
+            api_key_header=api_key_header,
+            api_key_prefix=api_key_prefix,
+            require_api_key=require_api_key,
             now_fn=now_fn,
+            http_client=http_client,
         )
 
     def _build_url(self, *, query: str, limit: int) -> str:
@@ -338,13 +362,25 @@ class WikipediaSearchResearchSource(StructuredHttpResearchSource):
 
     def _extract_records(self, payload: Any) -> list[Mapping[str, Any]]:
         if not isinstance(payload, Mapping):
-            return []
+            raise ResearchSourcePayloadError(
+                source_name=self.source_name,
+                reason_code="payload_not_mapping",
+                message="wikipedia_payload_not_mapping",
+            )
         query_section = payload.get("query")
         if not isinstance(query_section, Mapping):
-            return []
+            raise ResearchSourcePayloadError(
+                source_name=self.source_name,
+                reason_code="query_section_missing_or_invalid",
+                message="wikipedia_query_section_missing_or_invalid",
+            )
         rows = query_section.get("search")
         if not isinstance(rows, list):
-            return []
+            raise ResearchSourcePayloadError(
+                source_name=self.source_name,
+                reason_code="search_rows_missing_or_invalid",
+                message="wikipedia_search_rows_missing_or_invalid",
+            )
         return [row for row in rows if isinstance(row, Mapping)]
 
     def _normalize_record(
@@ -419,7 +455,14 @@ class OpenAlexWorksResearchSource(StructuredHttpResearchSource):
         max_retries: int = 2,
         retry_backoff_sec: float = 0.5,
         cache_ttl_seconds: int = 600,
+        retry_jitter_sec: float = 0.25,
+        headers: Mapping[str, str] | None = None,
+        api_key: str = "",
+        api_key_header: str = "Authorization",
+        api_key_prefix: str = "Bearer ",
+        require_api_key: bool = False,
         now_fn: Callable[[], datetime] | None = None,
+        http_client: StructuredHttpClient | None = None,
     ) -> None:
         super().__init__(
             source_name="openalex-works",
@@ -430,7 +473,14 @@ class OpenAlexWorksResearchSource(StructuredHttpResearchSource):
             max_retries=max_retries,
             retry_backoff_sec=retry_backoff_sec,
             cache_ttl_seconds=cache_ttl_seconds,
+            retry_jitter_sec=retry_jitter_sec,
+            headers=headers,
+            api_key=api_key,
+            api_key_header=api_key_header,
+            api_key_prefix=api_key_prefix,
+            require_api_key=require_api_key,
             now_fn=now_fn,
+            http_client=http_client,
         )
 
     def _build_url(self, *, query: str, limit: int) -> str:
@@ -445,10 +495,18 @@ class OpenAlexWorksResearchSource(StructuredHttpResearchSource):
 
     def _extract_records(self, payload: Any) -> list[Mapping[str, Any]]:
         if not isinstance(payload, Mapping):
-            return []
+            raise ResearchSourcePayloadError(
+                source_name=self.source_name,
+                reason_code="payload_not_mapping",
+                message="openalex_payload_not_mapping",
+            )
         rows = payload.get("results")
         if not isinstance(rows, list):
-            return []
+            raise ResearchSourcePayloadError(
+                source_name=self.source_name,
+                reason_code="results_missing_or_invalid",
+                message="openalex_results_missing_or_invalid",
+            )
         return [row for row in rows if isinstance(row, Mapping)]
 
     def _normalize_record(
@@ -534,6 +592,9 @@ class OpenAlexWorksResearchSource(StructuredHttpResearchSource):
         ]
         return tuple(item for item in values if item)
 
+    def _use_openalex_auth(self) -> bool:
+        return True
+
 
 class LiveResearchIngestionPipeline(ResearchDataPort):
     """Aggregates structured research sources with deduplication and traceability."""
@@ -545,14 +606,20 @@ class LiveResearchIngestionPipeline(ResearchDataPort):
         persistence: PersistencePort | None = None,
         now_fn: Callable[[], datetime] | None = None,
         similarity_threshold: float = 0.7,
+        default_limit_per_source: int = 5,
     ) -> None:
         self.sources = tuple(sources)
         self.persistence = persistence
         self.now_fn = now_fn or (lambda: datetime.now(UTC))
         self.similarity_threshold = self._clamp(similarity_threshold, lower=0.5, upper=1.0)
+        self.default_limit_per_source = max(default_limit_per_source, 1)
 
     def fetch(self, market: MarketSnapshot) -> Sequence[ResearchFinding]:
-        return self.ingest(market, run_id=None).findings
+        return self.ingest(
+            market,
+            run_id=None,
+            limit_per_source=self.default_limit_per_source,
+        ).findings
 
     def ingest(
         self,
@@ -567,13 +634,48 @@ class LiveResearchIngestionPipeline(ResearchDataPort):
         raw_count = 0
         retries_used = 0
         cache_hits = 0
+        source_failures = 0
 
         for source in self.sources:
-            batch = source.fetch_with_meta(
-                market,
-                query_override=query_override,
-                limit=max(limit_per_source, 1),
-            )
+            try:
+                batch = source.fetch_with_meta(
+                    market,
+                    query_override=query_override,
+                    limit=max(limit_per_source, 1),
+                )
+            except HttpClientError as exc:
+                source_failures += 1
+                self._persist_http_error(
+                    effective_run_id,
+                    market.market_id,
+                    source_name=source.source_name,
+                    metadata=exc.metadata,
+                )
+                continue
+            except ResearchSourcePayloadError as exc:
+                source_failures += 1
+                self._persist_source_failure(
+                    effective_run_id,
+                    market.market_id,
+                    source_name=source.source_name,
+                    source_type=source.source_type.value,
+                    classification="malformed_payload",
+                    reason_code=exc.reason_code,
+                    message=exc.message,
+                )
+                continue
+            except Exception as exc:
+                source_failures += 1
+                self._persist_source_failure(
+                    effective_run_id,
+                    market.market_id,
+                    source_name=source.source_name,
+                    source_type=source.source_type.value,
+                    classification="unknown_error",
+                    reason_code=type(exc).__name__,
+                    message=str(exc),
+                )
+                continue
             raw_count += batch.raw_count
             retries_used += batch.retries_used
             cache_hits += int(batch.cache_hit)
@@ -589,6 +691,7 @@ class LiveResearchIngestionPipeline(ResearchDataPort):
             {
                 "market_id": market.market_id,
                 "source_count": len(self.sources),
+                "source_failures": source_failures,
                 "raw_count": raw_count,
                 "normalized_count": len(normalized),
                 "deduplicated_count": len(deduplicated),
@@ -601,6 +704,7 @@ class LiveResearchIngestionPipeline(ResearchDataPort):
             run_id=effective_run_id,
             market_id=market.market_id,
             source_count=len(self.sources),
+            source_failures=source_failures,
             raw_count=raw_count,
             normalized_count=len(normalized),
             deduplicated_count=len(deduplicated),
@@ -711,9 +815,75 @@ class LiveResearchIngestionPipeline(ResearchDataPort):
             },
         )
 
-    def _write_event(self, run_id: str, payload: Mapping[str, Any]) -> None:
+    def _write_event(
+        self,
+        run_id: str,
+        payload: Mapping[str, Any],
+        *,
+        event_type: str = "research_ingestion_end",
+    ) -> None:
         if self.persistence:
-            self.persistence.write_run_event(run_id, "research_ingestion_end", payload)
+            self.persistence.write_run_event(run_id, event_type, payload)
+
+    def _persist_http_error(
+        self,
+        run_id: str,
+        market_id: str,
+        *,
+        source_name: str,
+        metadata: HttpErrorMetadata,
+    ) -> None:
+        if not self.persistence:
+            return
+        payload = {
+            "market_id": market_id,
+            "source_name": source_name,
+            "http_error": metadata.to_dict(),
+        }
+        self.persistence.write_artifact(run_id, "http_error_metadata", payload)
+        self.persistence.write_run_event(run_id, "research_ingestion_source_failed", payload)
+        self._persist_source_failure(
+            run_id,
+            market_id,
+            source_name=source_name,
+            source_type="HTTP",
+            classification=metadata.classification,
+            reason_code=metadata.reason_code,
+            message=metadata.message,
+            details={
+                "status_code": metadata.status_code,
+                "retryable": metadata.retryable,
+                "error_type": metadata.error_type,
+            },
+        )
+
+    def _persist_source_failure(
+        self,
+        run_id: str,
+        market_id: str,
+        *,
+        source_name: str,
+        source_type: str,
+        classification: str,
+        reason_code: str,
+        message: str,
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        if not self.persistence:
+            return
+        payload: dict[str, Any] = {
+            "market_id": market_id,
+            "source_name": source_name,
+            "source_type": source_type,
+            "classification": classification,
+            "reason_code": reason_code,
+            "message": message,
+            "timestamp": self.now_fn().isoformat(),
+        }
+        if details:
+            payload["details"] = dict(details)
+        self.persistence.write_artifact(run_id, "source_failures", payload)
+        self.persistence.write_run_event(run_id, "research_ingestion_source_failed", payload)
 
     @staticmethod
     def _tokenize(text: str) -> set[str]:
@@ -751,24 +921,66 @@ def build_live_research_sources(
     timeout_sec: float = 8.0,
     max_retries: int = 2,
     retry_backoff_sec: float = 0.5,
+    retry_jitter_sec: float = 0.25,
     cache_ttl_seconds: int = 600,
+    wikipedia_timeout_sec: float | None = None,
+    wikipedia_max_retries: int | None = None,
+    wikipedia_retry_backoff_sec: float | None = None,
+    wikipedia_retry_jitter_sec: float | None = None,
+    wikipedia_cache_ttl_seconds: int | None = None,
+    wikipedia_headers: Mapping[str, str] | None = None,
+    wikipedia_api_key: str = "",
+    wikipedia_api_key_header: str = "Authorization",
+    wikipedia_api_key_prefix: str = "Bearer ",
+    wikipedia_require_api_key: bool = False,
+    openalex_timeout_sec: float | None = None,
+    openalex_max_retries: int | None = None,
+    openalex_retry_backoff_sec: float | None = None,
+    openalex_retry_jitter_sec: float | None = None,
+    openalex_cache_ttl_seconds: int | None = None,
+    openalex_headers: Mapping[str, str] | None = None,
+    openalex_api_key: str = "",
+    openalex_api_key_header: str = "Authorization",
+    openalex_api_key_prefix: str = "Bearer ",
+    openalex_require_api_key: bool = False,
     now_fn: Callable[[], datetime] | None = None,
+    http_client: StructuredHttpClient | None = None,
 ) -> tuple[StructuredHttpResearchSource, ...]:
     return (
         WikipediaSearchResearchSource(
             endpoint_url=wikipedia_endpoint_url,
-            timeout_sec=timeout_sec,
-            max_retries=max_retries,
-            retry_backoff_sec=retry_backoff_sec,
-            cache_ttl_seconds=cache_ttl_seconds,
+            timeout_sec=wikipedia_timeout_sec if wikipedia_timeout_sec is not None else timeout_sec,
+            max_retries=wikipedia_max_retries if wikipedia_max_retries is not None else max_retries,
+            retry_backoff_sec=(
+                wikipedia_retry_backoff_sec if wikipedia_retry_backoff_sec is not None else retry_backoff_sec
+            ),
+            retry_jitter_sec=(
+                wikipedia_retry_jitter_sec if wikipedia_retry_jitter_sec is not None else retry_jitter_sec
+            ),
+            cache_ttl_seconds=(
+                wikipedia_cache_ttl_seconds if wikipedia_cache_ttl_seconds is not None else cache_ttl_seconds
+            ),
+            headers=wikipedia_headers,
+            api_key=wikipedia_api_key,
+            api_key_header=wikipedia_api_key_header,
+            api_key_prefix=wikipedia_api_key_prefix,
+            require_api_key=wikipedia_require_api_key,
             now_fn=now_fn,
+            http_client=http_client,
         ),
         OpenAlexWorksResearchSource(
             endpoint_url=openalex_endpoint_url,
-            timeout_sec=timeout_sec,
-            max_retries=max_retries,
-            retry_backoff_sec=retry_backoff_sec,
-            cache_ttl_seconds=cache_ttl_seconds,
+            timeout_sec=openalex_timeout_sec if openalex_timeout_sec is not None else timeout_sec,
+            max_retries=openalex_max_retries if openalex_max_retries is not None else max_retries,
+            retry_backoff_sec=(openalex_retry_backoff_sec if openalex_retry_backoff_sec is not None else retry_backoff_sec),
+            retry_jitter_sec=(openalex_retry_jitter_sec if openalex_retry_jitter_sec is not None else retry_jitter_sec),
+            cache_ttl_seconds=(openalex_cache_ttl_seconds if openalex_cache_ttl_seconds is not None else cache_ttl_seconds),
+            headers=openalex_headers,
+            api_key=openalex_api_key,
+            api_key_header=openalex_api_key_header,
+            api_key_prefix=openalex_api_key_prefix,
+            require_api_key=openalex_require_api_key,
             now_fn=now_fn,
+            http_client=http_client,
         ),
     )

@@ -31,6 +31,36 @@ class ExecutionStatus(str, Enum):
     FAILED = "FAILED"
 
 
+# Shared transaction-plane status enum.
+# Kept as an alias to preserve stable behavior across existing execution flows.
+TxStatus = ExecutionStatus
+
+
+class ExecutionMode(str, Enum):
+    PAPER = "PAPER"
+    SHADOW_SIGN = "SHADOW_SIGN"
+    SANDBOX_CHAIN = "SANDBOX_CHAIN"
+    LIVE_DISABLED = "LIVE_DISABLED"
+
+
+class RuntimeMode(str, Enum):
+    DRY_RUN_STATIC = "DRY_RUN_STATIC"
+    PAPER_LIVE = "PAPER_LIVE"
+    SANDBOX_CHAIN = "SANDBOX_CHAIN"
+    LIVE_DISABLED = "LIVE_DISABLED"
+
+
+class ProviderSelection(str, Enum):
+    AUTO = "AUTO"
+    STATIC = "STATIC"
+    LIVE = "LIVE"
+
+
+class ProviderFailurePolicy(str, Enum):
+    FAIL_FAST = "FAIL_FAST"
+    FALLBACK_TO_STATIC = "FALLBACK_TO_STATIC"
+
+
 class OutcomeClassification(str, Enum):
     WIN = "WIN"
     LOSS = "LOSS"
@@ -49,12 +79,35 @@ class PostmortemCause(str, Enum):
 
 
 class TradeReviewStatus(str, Enum):
+    PENDING_REVIEW = "PENDING_REVIEW"
+    # Backward-compatible legacy alias for stored artifacts.
     PENDING = "PENDING"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
+    EXPIRED = "EXPIRED"
 
 
 class TradeReviewAction(str, Enum):
     APPROVE = "APPROVE"
     REJECT = "REJECT"
     NOTE = "NOTE"
+
+
+class SettlementRequestState(str, Enum):
+    PENDING = "PENDING"
+    SETTLED = "SETTLED"
+
+
+class ResolutionStatus(str, Enum):
+    PENDING = "PENDING"
+    RESOLVED = "RESOLVED"
+    AMBIGUOUS = "AMBIGUOUS"
+
+
+class TxConfirmationStatus(str, Enum):
+    UNKNOWN = "UNKNOWN"
+    PENDING = "PENDING"
+    MINED = "MINED"
+    DROPPED = "DROPPED"
+    REPLACED = "REPLACED"
+    FAILED = "FAILED"

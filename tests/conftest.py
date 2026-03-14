@@ -23,10 +23,21 @@ def temp_config_paths(tmp_path: Path) -> tuple[Path, Path]:
 
     artifacts_dir = tmp_path / "artifacts"
     audit_path = tmp_path / "audit" / "events.jsonl"
+    runtime_db = tmp_path / "db" / "runtime.db"
     app_cfg.setdefault("storage", {})
+    app_cfg["storage"].setdefault("operational_db", {})
+    app_cfg["storage"]["operational_db"]["path"] = str(runtime_db)
     app_cfg["storage"]["artifacts_dir"] = str(artifacts_dir)
     app_cfg["storage"].setdefault("audit_log", {})
     app_cfg["storage"]["audit_log"]["path"] = str(audit_path)
+    app_cfg.setdefault("observability", {})
+    app_cfg["observability"].setdefault("metrics", {})
+    app_cfg["observability"]["metrics"]["path"] = str(tmp_path / "metrics" / "metrics.prom")
+    app_cfg["observability"].setdefault("logs", {})
+    app_cfg["observability"]["logs"]["file_path"] = ""
+    app_cfg.setdefault("execution", {})
+    app_cfg["execution"]["settlement_same_run"] = True
+    app_cfg["execution"]["blocking_trade_review"] = False
 
     app_dst = tmp_path / "app.yaml"
     agents_dst = tmp_path / "agents.yaml"

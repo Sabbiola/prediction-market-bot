@@ -6,7 +6,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from prediction_market_bot.domain.enums import OutcomeSide
 from prediction_market_bot.domain.models import OrderIntent
-from prediction_market_bot.interfaces import PersistencePort
+from prediction_market_bot.interfaces import OpenPositionsRepositoryPort, PersistencePort
 
 
 @dataclass(slots=True, frozen=True)
@@ -37,6 +37,8 @@ class PaperPositionSnapshot:
 class PaperPortfolioSnapshot:
     as_of: datetime
     position_count: int
+    open_position_count: int
+    settled_position_count: int
     realized_pnl_usd: float
     unrealized_pnl_usd: float
     total_pnl_usd: float
@@ -48,6 +50,8 @@ class PaperPortfolioSnapshot:
         return {
             "as_of": self.as_of.isoformat(),
             "position_count": self.position_count,
+            "open_position_count": self.open_position_count,
+            "settled_position_count": self.settled_position_count,
             "realized_pnl_usd": round(self.realized_pnl_usd, 2),
             "unrealized_pnl_usd": round(self.unrealized_pnl_usd, 2),
             "total_pnl_usd": round(self.total_pnl_usd, 2),
@@ -92,12 +96,51 @@ class PaperPortfolioEngine:
         self,
         *,
         persistence: PersistencePort | None = None,
+        open_positions_repo: OpenPositionsRepositoryPort | None = None,
         now_fn: Callable[[], datetime] | None = None,
     ) -> None:
         self.persistence = persistence
+        self.open_positions_repo = open_positions_repo
         self.now_fn = now_fn or (lambda: datetime.now(UTC))
         self._positions: dict[tuple[str, OutcomeSide], _PaperPosition] = {}
         self._realized_pnl_usd = 0.0
+        self._settled_positions_count = 0
+
+    def restore_from_repository(self) -> bool:
+        if self.open_positions_repo is None:
+            return False
+        payload = self.open_positions_repo.load_snapshot()
+        if not isinstance(payload, Mapping):
+            return False
+        self._positions = {}
+        self._realized_pnl_usd = self._as_float(payload.get("realized_pnl_usd"))
+        self._settled_positions_count = max(self._as_int(payload.get("settled_position_count")), 0)
+        rows = payload.get("positions")
+        if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
+            return True
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            market_id = self._as_str(row.get("market_id"))
+            side = self._as_side(row.get("side"))
+            shares = self._as_float(row.get("shares"))
+            cost_basis_usd = self._as_float(row.get("cost_basis_usd"))
+            avg_entry_price = self._as_float(row.get("avg_entry_price"))
+            mark_price = self._as_float(row.get("mark_price"))
+            if market_id is None or side is None:
+                continue
+            if shares <= 0.0:
+                continue
+            key = (market_id, side)
+            self._positions[key] = _PaperPosition(
+                market_id=market_id,
+                side=side,
+                shares=shares,
+                cost_basis_usd=max(cost_basis_usd, 0.0),
+                avg_entry_price=max(avg_entry_price, 0.0),
+                mark_price=max(mark_price, 0.0),
+            )
+        return True
 
     def simulate_order_fill(
         self,
@@ -198,6 +241,8 @@ class PaperPortfolioEngine:
         return PaperPortfolioSnapshot(
             as_of=self.now_fn(),
             position_count=len(positions),
+            open_position_count=len(positions),
+            settled_position_count=self._settled_positions_count,
             realized_pnl_usd=round(realized, 2),
             unrealized_pnl_usd=round(unrealized_total, 2),
             total_pnl_usd=round(realized + unrealized_total, 2),
@@ -260,15 +305,23 @@ class PaperPortfolioEngine:
             payout_usd = position.shares if won else 0.0
             realized = payout_usd - position.cost_basis_usd
             self._realized_pnl_usd += realized
+            self._settled_positions_count += 1
             del self._positions[key]
 
     def _persist_event(self, run_id: str, payload: Mapping[str, object]) -> None:
         if not self.persistence:
-            return
-        self.persistence.write_artifact(run_id, "paper_portfolio_events", payload)
-        self.persistence.write_artifact(run_id, "paper_portfolio_snapshots", self.snapshot().to_dict())
+            if self.open_positions_repo is None:
+                return
+        snapshot = self.snapshot()
+        if self.persistence:
+            self.persistence.write_artifact(run_id, "paper_portfolio_events", payload)
+            self.persistence.write_artifact(run_id, "paper_portfolio_snapshots", snapshot.to_dict())
+            self.persistence.write_artifact(run_id, "paper_open_positions_state", snapshot.to_dict())
         event_type = self._as_str(payload.get("event_type")) or "unknown"
-        self.persistence.write_run_event(run_id, f"paper_portfolio_{event_type}", payload)
+        if self.persistence:
+            self.persistence.write_run_event(run_id, f"paper_portfolio_{event_type}", payload)
+        if self.open_positions_repo is not None:
+            self.open_positions_repo.replace_snapshot(snapshot.to_dict())
 
     @staticmethod
     def _fill_price(limit_price: float, *, slippage_bps: int) -> float:
@@ -305,6 +358,23 @@ class PaperPortfolioEngine:
                 except ValueError:
                     return 0.0
         return 0.0
+
+    @staticmethod
+    def _as_int(value: Any) -> int:
+        if isinstance(value, bool):
+            return 0
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str):
+            text = value.strip()
+            if text:
+                try:
+                    return int(float(text))
+                except ValueError:
+                    return 0
+        return 0
 
     @staticmethod
     def _clamp(value: float, *, lower: float, upper: float) -> float:
