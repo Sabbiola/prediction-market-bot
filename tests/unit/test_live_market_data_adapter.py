@@ -8,7 +8,7 @@ from urllib import error
 import pytest
 
 from prediction_market_bot.infrastructure import PolymarketReadOnlyMarketDataAdapter
-from prediction_market_bot.infrastructure import live_market_data as live_market_data_module
+from prediction_market_bot.infrastructure import http_client as http_client_module
 
 
 class _InMemoryPersistence:
@@ -66,7 +66,7 @@ def test_fetch_batch_normalizes_and_persists_snapshots(monkeypatch: pytest.Monke
         del req, timeout
         return _MockHttpResponse(json.dumps(_valid_market_payload()))
 
-    monkeypatch.setattr(live_market_data_module.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(http_client_module.request, "urlopen", fake_urlopen)
 
     adapter = PolymarketReadOnlyMarketDataAdapter(
         endpoint_url="https://example.test/markets",
@@ -112,8 +112,8 @@ def test_fetch_batch_retries_on_timeout_then_succeeds(monkeypatch: pytest.Monkey
             raise error.URLError("timed out")
         return _MockHttpResponse(json.dumps(_valid_market_payload()))
 
-    monkeypatch.setattr(live_market_data_module.request, "urlopen", fake_urlopen)
-    monkeypatch.setattr(live_market_data_module.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(http_client_module.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(http_client_module.time, "sleep", lambda seconds: None)
 
     adapter = PolymarketReadOnlyMarketDataAdapter(
         endpoint_url="https://example.test/markets",
@@ -144,7 +144,7 @@ def test_fetch_batch_flags_stale_and_invalid_rows(monkeypatch: pytest.MonkeyPatc
         del req, timeout
         return _MockHttpResponse(json.dumps(payload))
 
-    monkeypatch.setattr(live_market_data_module.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(http_client_module.request, "urlopen", fake_urlopen)
 
     adapter = PolymarketReadOnlyMarketDataAdapter(
         endpoint_url="https://example.test/markets",
@@ -170,3 +170,78 @@ def test_fetch_batch_flags_stale_and_invalid_rows(monkeypatch: pytest.MonkeyPatc
     invalid_reasons = [item[2]["invalid_reason"] for item in raw_artifacts]
     assert "stale_data" in stale_reasons
     assert "missing_required_fields" in invalid_reasons
+    source_failures = [item for item in persistence.artifacts if item[1] == "source_failures"]
+    assert any(item[2]["classification"] == "stale_data" for item in source_failures)
+    assert any(item[2]["classification"] == "malformed_payload" for item in source_failures)
+
+
+def test_fetch_batch_fails_on_403_and_persists_failure_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime(2026, 3, 13, 12, 0, 0, tzinfo=UTC)
+    persistence = _InMemoryPersistence()
+
+    def fake_urlopen(req: object, timeout: float) -> _MockHttpResponse:
+        del timeout
+        url = getattr(req, "full_url", "https://example.test/markets")
+        raise error.HTTPError(url, 403, "forbidden", hdrs=None, fp=None)
+
+    monkeypatch.setattr(http_client_module.request, "urlopen", fake_urlopen)
+
+    adapter = PolymarketReadOnlyMarketDataAdapter(
+        endpoint_url="https://example.test/markets",
+        timeout_sec=2.0,
+        max_retries=0,
+        max_staleness_seconds=900,
+        persistence=persistence,
+        now_fn=lambda: now,
+    )
+    with pytest.raises(RuntimeError, match="classification=blocked_403"):
+        adapter.fetch_batch(run_id="live-run-403", limit=5)
+
+    source_failures = [item for item in persistence.artifacts if item[1] == "source_failures"]
+    assert any(item[2]["classification"] == "blocked_403" for item in source_failures)
+
+
+def test_fetch_batch_fails_on_malformed_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime(2026, 3, 13, 12, 0, 0, tzinfo=UTC)
+    persistence = _InMemoryPersistence()
+
+    def fake_urlopen(req: object, timeout: float) -> _MockHttpResponse:
+        del req, timeout
+        return _MockHttpResponse(json.dumps({"unexpected": "shape"}))
+
+    monkeypatch.setattr(http_client_module.request, "urlopen", fake_urlopen)
+
+    adapter = PolymarketReadOnlyMarketDataAdapter(
+        endpoint_url="https://example.test/markets",
+        timeout_sec=2.0,
+        max_retries=0,
+        max_staleness_seconds=900,
+        persistence=persistence,
+        now_fn=lambda: now,
+    )
+    with pytest.raises(RuntimeError, match="classification=malformed_payload"):
+        adapter.fetch_batch(run_id="live-run-malformed", limit=5)
+
+    source_failures = [item for item in persistence.artifacts if item[1] == "source_failures"]
+    assert any(item[2]["classification"] == "malformed_payload" for item in source_failures)
+
+
+def test_fetch_batch_fails_on_missing_required_api_key() -> None:
+    now = datetime(2026, 3, 13, 12, 0, 0, tzinfo=UTC)
+    persistence = _InMemoryPersistence()
+
+    adapter = PolymarketReadOnlyMarketDataAdapter(
+        endpoint_url="https://example.test/markets",
+        timeout_sec=2.0,
+        max_retries=0,
+        max_staleness_seconds=900,
+        require_api_key=True,
+        api_key="",
+        persistence=persistence,
+        now_fn=lambda: now,
+    )
+    with pytest.raises(RuntimeError, match="classification=auth_config_error"):
+        adapter.fetch_batch(run_id="live-run-missing-key", limit=5)
+
+    source_failures = [item for item in persistence.artifacts if item[1] == "source_failures"]
+    assert any(item[2]["classification"] == "auth_config_error" for item in source_failures)

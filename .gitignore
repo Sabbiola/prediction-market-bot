@@ -1,11 +1,23 @@
-__pycache__/
-*.py[cod]
-*.egg-info/
-
+# Python and type/lint/test caches
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+src/prediction_market_bot.egg-info/
 
-data/
+# Local runtime artifacts (keep only explicit placeholders)
+data/artifacts/*
+data/audit/*
+!data/artifacts/.gitkeep
+!data/audit/.gitkeep
+
+# Local scratch and blueprint material
 .tmp_blueprint/
+
+# Legacy reference code (non-runtime)
 solana-memecoin-bot-main/
+legacy_reference/

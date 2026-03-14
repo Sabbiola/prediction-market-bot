@@ -1,0 +1,26 @@
+version: "3.9"
+
+services:
+  prediction-market-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: prediction-market-bot
+    command:
+      - python
+      - -m
+      - prediction_market_bot.main
+      - run-scheduler
+      - --config
+      - config/app.yaml
+      - --agents-config
+      - config/agents.yaml
+      - --interval-sec
+      - "60"
+    environment:
+      SANDBOX_CHAIN_PRIVATE_KEY: ""
+      OPENALEX_API_KEY: ""
+    volumes:
+      - ./config:/app/config:ro
+      - ./data:/app/data
+    restart: unless-stopped

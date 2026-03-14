@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from prediction_market_bot.infrastructure import live_research as live_research_module
+from prediction_market_bot.infrastructure import http_client as http_client_module
 from prediction_market_bot.main import main
 
 
@@ -32,6 +32,7 @@ def test_smoke_live_research_command_fetches_and_persists_batch(
     temp_config_paths: tuple[Path, Path],
     deterministic_run_id: str,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     app_cfg, agents_cfg = temp_config_paths
 
@@ -70,7 +71,7 @@ def test_smoke_live_research_command_fetches_and_persists_batch(
             return _MockHttpResponse(json.dumps(openalex_payload))
         raise AssertionError(f"Unexpected URL: {url}")
 
-    monkeypatch.setattr(live_research_module.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(http_client_module.request, "urlopen", fake_urlopen)
 
     exit_code = main(
         [
@@ -98,6 +99,8 @@ def test_smoke_live_research_command_fetches_and_persists_batch(
         ]
     )
     assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "Smoke live research completed" in output
 
     artifacts_dir = app_cfg.parent / "artifacts"
     raw_path = artifacts_dir / "raw_research_findings.jsonl"
@@ -119,3 +122,53 @@ def test_smoke_live_research_command_fetches_and_persists_batch(
         row.get("run_id") == deterministic_run_id and row.get("event_type") == "research_ingestion_end"
         for row in audit_rows
     )
+
+
+def test_smoke_live_research_command_fails_when_all_sources_fail(
+    temp_config_paths: tuple[Path, Path],
+    deterministic_run_id: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    app_cfg, agents_cfg = temp_config_paths
+
+    def fake_urlopen(req: object, timeout: float) -> _MockHttpResponse:
+        del timeout
+        url = getattr(req, "full_url", "")
+        if "wikipedia.test" in url:
+            return _MockHttpResponse(json.dumps({"query": {"unexpected": []}}))
+        if "openalex.test" in url:
+            return _MockHttpResponse(json.dumps({"unexpected": []}))
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(http_client_module.request, "urlopen", fake_urlopen)
+
+    exit_code = main(
+        [
+            "smoke-live-research",
+            "--config",
+            str(app_cfg),
+            "--agents-config",
+            str(agents_cfg),
+            "--run-id",
+            deterministic_run_id,
+            "--market-id",
+            "market-smoke-2",
+            "--title",
+            "Will inflation decline in the next quarter?",
+            "--query",
+            "inflation decline",
+            "--wikipedia-endpoint",
+            "https://wikipedia.test/api.php",
+            "--openalex-endpoint",
+            "https://openalex.test/works",
+            "--retries",
+            "0",
+            "--limit-per-source",
+            "5",
+        ]
+    )
+    assert exit_code == 1
+    output = capsys.readouterr().out
+    assert "Smoke live research completed" in output
+    assert "Smoke live research failed: all configured sources failed." in output

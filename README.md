@@ -173,3 +173,15 @@ make smoke-dry-run RUN_ID=local-smoke-001
 make ci-quality
 make ci
 ```
+
+## Repository Hygiene
+
+Regole operative per beta-live development:
+
+- tenere in git solo codice runtime (`src/`), config (`config/`), test (`tests/`) e documentazione (`docs/`)
+- non tracciare cache locali (`.mypy_cache/`, `.pytest_cache/`, `.ruff_cache/`, `__pycache__/`, `*.pyc`)
+- non tracciare output runtime locali (`data/artifacts/*`, `data/audit/*`)
+- mantenere solo placeholder espliciti (`data/artifacts/.gitkeep`, `data/audit/.gitkeep`)
+- trattare `solana-memecoin-bot-main/` (o eventuale `legacy_reference/`) come materiale legacy non-runtime
+
+Il packaging e i test escludono esplicitamente cartelle legacy/tmp/cache/artifacts per evitare effetti collaterali in CI.

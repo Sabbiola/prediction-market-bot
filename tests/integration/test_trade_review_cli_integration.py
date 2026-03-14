@@ -14,10 +14,11 @@ def _seed_review_candidate(
     *,
     queue: TradeReviewQueueService,
     run_id: str,
+    market_id: str = "review-cli-market-1",
 ) -> str:
     candidate = MarketCandidate(
         market=MarketSnapshot.from_yes_price(
-            market_id="review-cli-market-1",
+            market_id=market_id,
             venue="polymarket",
             title="Will CLI review workflow persist decisions?",
             yes_price=0.39,
@@ -32,7 +33,7 @@ def _seed_review_candidate(
         reasons=("seed",),
     )
     prediction = PredictionResult(
-        market_id="review-cli-market-1",
+        market_id=market_id,
         selected_side=OutcomeSide.YES,
         market_yes_prob=0.39,
         fair_yes_prob=0.62,
@@ -43,7 +44,7 @@ def _seed_review_candidate(
         rationale=("prediction_strength", "evidence_alignment"),
     )
     risk = RiskDecision(
-        market_id="review-cli-market-1",
+        market_id=market_id,
         approved=True,
         side=OutcomeSide.YES,
         stake_usd=150.0,
@@ -65,11 +66,12 @@ def test_cli_review_queue_and_actions_workflow(
     settings = load_settings(app_cfg, agents_cfg)
     persistence = build_persistence(settings)
     queue = TradeReviewQueueService(persistence)
-    queue_id = _seed_review_candidate(queue=queue, run_id=deterministic_run_id)
+    queue_id = _seed_review_candidate(queue=queue, run_id=deterministic_run_id, market_id="review-cli-market-1")
+    queue_id_2 = _seed_review_candidate(queue=queue, run_id=deterministic_run_id, market_id="review-cli-market-2")
 
     list_exit = main(
         [
-            "review-queue",
+            "review-list",
             "--config",
             str(app_cfg),
             "--agents-config",
@@ -77,27 +79,42 @@ def test_cli_review_queue_and_actions_workflow(
             "--run-id",
             deterministic_run_id,
             "--status",
-            "pending",
+            "pending_review",
             "--json",
         ]
     )
     assert list_exit == 0
     pending_items = json.loads(capsys.readouterr().out)
-    assert len(pending_items) == 1
-    assert pending_items[0]["queue_id"] == queue_id
-    assert pending_items[0]["model_rationale"]
+    assert len(pending_items) == 2
+    assert {item["queue_id"] for item in pending_items} == {queue_id, queue_id_2}
+    assert all(item["model_rationale"] for item in pending_items)
 
-    approve_exit = main(
+    show_exit = main(
         [
-            "review-action",
+            "review-show",
             "--config",
             str(app_cfg),
             "--agents-config",
             str(agents_cfg),
             "--queue-id",
             queue_id,
-            "--action",
-            "approve",
+            "--json",
+        ]
+    )
+    assert show_exit == 0
+    shown_item = json.loads(capsys.readouterr().out)
+    assert shown_item["queue_id"] == queue_id
+    assert shown_item["status"] == "PENDING_REVIEW"
+
+    approve_exit = main(
+        [
+            "review-approve",
+            "--config",
+            str(app_cfg),
+            "--agents-config",
+            str(agents_cfg),
+            "--queue-id",
+            queue_id,
             "--operator-id",
             "operator-a",
             "--rationale",
@@ -108,6 +125,26 @@ def test_cli_review_queue_and_actions_workflow(
     approved_payload = json.loads(capsys.readouterr().out)
     assert approved_payload["status"] == "APPROVED"
     assert approved_payload["operator_rationale"] == "Approved after manual check."
+
+    reject_exit = main(
+        [
+            "review-reject",
+            "--config",
+            str(app_cfg),
+            "--agents-config",
+            str(agents_cfg),
+            "--queue-id",
+            queue_id_2,
+            "--operator-id",
+            "operator-b",
+            "--rationale",
+            "Rejected after manual check.",
+        ]
+    )
+    assert reject_exit == 0
+    rejected_payload = json.loads(capsys.readouterr().out)
+    assert rejected_payload["status"] == "REJECTED"
+    assert rejected_payload["operator_rationale"] == "Rejected after manual check."
 
     note_exit = main(
         [
@@ -135,7 +172,7 @@ def test_cli_review_queue_and_actions_workflow(
 
     approved_list_exit = main(
         [
-            "review-queue",
+            "review-list",
             "--config",
             str(app_cfg),
             "--agents-config",
@@ -153,4 +190,4 @@ def test_cli_review_queue_and_actions_workflow(
     assert approved_items[0]["queue_id"] == queue_id
 
     decision_rows = persistence.read_artifact_records(deterministic_run_id, "trade_review_decisions")
-    assert len(decision_rows) == 2
+    assert len(decision_rows) == 3

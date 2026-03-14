@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import json
-import socket
-import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Callable, Mapping
-from urllib import error, parse, request
 
 from prediction_market_bot.domain.enums import MarketStatus
 from prediction_market_bot.domain.models import MarketSnapshot
 from prediction_market_bot.interfaces import MarketDataPort, PersistencePort
+from prediction_market_bot.infrastructure.http_client import (
+    HttpClientError,
+    HttpErrorMetadata,
+    StructuredHttpClient,
+)
 
 
 @dataclass(slots=True, frozen=True)
@@ -34,25 +36,72 @@ class PolymarketReadOnlyMarketDataAdapter(MarketDataPort):
         timeout_sec: float = 8.0,
         max_retries: int = 2,
         retry_backoff_sec: float = 0.5,
+        retry_jitter_sec: float = 0.25,
         max_staleness_seconds: int = 900,
+        default_limit: int = 50,
+        cache_ttl_sec: int = 0,
+        headers: Mapping[str, str] | None = None,
+        api_key: str = "",
+        api_key_header: str = "Authorization",
+        api_key_prefix: str = "Bearer ",
+        require_api_key: bool = False,
         persistence: PersistencePort | None = None,
         now_fn: Callable[[], datetime] | None = None,
+        http_client: StructuredHttpClient | None = None,
     ) -> None:
         self.endpoint_url = endpoint_url
         self.timeout_sec = timeout_sec
         self.max_retries = max_retries
         self.retry_backoff_sec = retry_backoff_sec
+        self.retry_jitter_sec = retry_jitter_sec
         self.max_staleness_seconds = max_staleness_seconds
+        self.default_limit = max(default_limit, 1)
+        self.cache_ttl_sec = max(cache_ttl_sec, 0)
+        self.headers = {str(key): str(value) for key, value in (headers or {}).items()}
+        self.api_key = api_key.strip()
+        self.api_key_header = api_key_header.strip()
+        self.api_key_prefix = api_key_prefix
+        self.require_api_key = require_api_key
         self.persistence = persistence
         self.now_fn = now_fn or (lambda: datetime.now(UTC))
+        self.http_client = http_client or StructuredHttpClient(
+            user_agent="prediction-market-bot/0.1",
+            timeout_sec=self.timeout_sec,
+            max_retries=self.max_retries,
+            retry_backoff_sec=self.retry_backoff_sec,
+            retry_jitter_sec=self.retry_jitter_sec,
+            cache_ttl_sec=self.cache_ttl_sec,
+            now_fn=self.now_fn,
+        )
 
     def list_active_markets(self) -> list[MarketSnapshot]:
-        return list(self.fetch_batch().snapshots)
+        return list(self.fetch_batch(limit=self.default_limit).snapshots)
 
     def fetch_batch(self, *, run_id: str | None = None, limit: int = 50) -> LiveMarketBatch:
         effective_run_id = run_id or f"live-fetch-{self.now_fn().strftime('%Y%m%d%H%M%S')}"
-        payload, retries_used = self._fetch_payload(limit=limit)
-        raw_markets = self._extract_markets(payload)
+        try:
+            payload, retries_used = self._fetch_payload(limit=limit)
+        except HttpClientError as exc:
+            self._persist_http_error(effective_run_id, exc.metadata)
+            raise RuntimeError(
+                "failed_to_fetch_live_market_data "
+                f"classification={exc.metadata.classification} reason={exc.metadata.reason_code} "
+                f"message={exc.metadata.message}"
+            ) from exc
+        raw_markets, malformed_reason = self._extract_markets(payload)
+        if malformed_reason:
+            self._persist_source_failure(
+                effective_run_id,
+                classification="malformed_payload",
+                reason_code=malformed_reason,
+                message="live_market_payload_malformed",
+                source="polymarket_live_market_data",
+            )
+            raise RuntimeError(
+                "failed_to_fetch_live_market_data "
+                f"classification=malformed_payload reason={malformed_reason} "
+                "message=live_market_payload_malformed"
+            )
 
         snapshots: list[MarketSnapshot] = []
         stale_count = 0
@@ -65,12 +114,35 @@ class PolymarketReadOnlyMarketDataAdapter(MarketDataPort):
 
             if stale_reason is not None:
                 stale_count += 1
+                self._persist_source_failure(
+                    effective_run_id,
+                    classification="stale_data",
+                    reason_code=stale_reason,
+                    message="live_market_snapshot_stale",
+                    source="polymarket_live_market_data",
+                    payload={"market_id": self._first_str(raw, ("id", "market_id", "conditionId", "slug")) or ""},
+                )
                 continue
             if invalid_reason is not None:
                 invalid_count += 1
+                self._persist_source_failure(
+                    effective_run_id,
+                    classification="malformed_payload",
+                    reason_code=invalid_reason,
+                    message="live_market_snapshot_invalid",
+                    source="polymarket_live_market_data",
+                    payload={"market_id": self._first_str(raw, ("id", "market_id", "conditionId", "slug")) or ""},
+                )
                 continue
             if normalized is None:
                 invalid_count += 1
+                self._persist_source_failure(
+                    effective_run_id,
+                    classification="malformed_payload",
+                    reason_code="normalization_returned_none",
+                    message="live_market_snapshot_invalid",
+                    source="polymarket_live_market_data",
+                )
                 continue
 
             snapshots.append(normalized)
@@ -102,47 +174,38 @@ class PolymarketReadOnlyMarketDataAdapter(MarketDataPort):
         )
 
     def _fetch_payload(self, *, limit: int) -> tuple[Any, int]:
-        url = self._build_url(limit=limit)
-        retries_used = 0
-        last_error: Exception | None = None
-
-        for attempt in range(self.max_retries + 1):
-            try:
-                req = request.Request(url=url, headers={"Accept": "application/json"}, method="GET")
-                with request.urlopen(req, timeout=self.timeout_sec) as response:
-                    raw_bytes = response.read()
-                return json.loads(raw_bytes.decode("utf-8")), retries_used
-            except (
-                error.URLError,
-                error.HTTPError,
-                TimeoutError,
-                socket.timeout,
-                json.JSONDecodeError,
-                UnicodeDecodeError,
-            ) as exc:
-                last_error = exc
-                if attempt >= self.max_retries:
-                    break
-                retries_used += 1
-                time.sleep(self.retry_backoff_sec * (attempt + 1))
-
-        raise RuntimeError(f"failed_to_fetch_live_market_data: {last_error}") from last_error
-
-    def _build_url(self, *, limit: int) -> str:
-        params = {"active": "true", "closed": "false", "limit": str(max(limit, 1))}
-        query = parse.urlencode(params)
-        separator = "&" if "?" in self.endpoint_url else "?"
-        return f"{self.endpoint_url}{separator}{query}"
+        response = self.http_client.fetch_json(
+            source="polymarket_live_market_data",
+            url=self.endpoint_url,
+            query_params=self._build_query_params(limit=limit),
+            headers=self.headers,
+            use_cache=self.cache_ttl_sec > 0,
+            cache_ttl_sec=self.cache_ttl_sec,
+            timeout_sec=self.timeout_sec,
+            max_retries=self.max_retries,
+            retry_backoff_sec=self.retry_backoff_sec,
+            retry_jitter_sec=self.retry_jitter_sec,
+            api_key=self.api_key,
+            api_key_header=self.api_key_header,
+            api_key_prefix=self.api_key_prefix,
+            require_api_key=self.require_api_key,
+        )
+        return response.payload, response.retries_used
 
     @staticmethod
-    def _extract_markets(payload: Any) -> list[Mapping[str, Any]]:
+    def _build_query_params(*, limit: int) -> dict[str, str]:
+        return {"active": "true", "closed": "false", "limit": str(max(limit, 1))}
+
+    @staticmethod
+    def _extract_markets(payload: Any) -> tuple[list[Mapping[str, Any]], str | None]:
         if isinstance(payload, list):
-            return [row for row in payload if isinstance(row, Mapping)]
+            return [row for row in payload if isinstance(row, Mapping)], None
         if isinstance(payload, Mapping):
             markets = payload.get("markets")
             if isinstance(markets, list):
-                return [row for row in markets if isinstance(row, Mapping)]
-        return []
+                return [row for row in markets if isinstance(row, Mapping)], None
+            return [], "markets_field_missing_or_not_list"
+        return [], "payload_not_list_or_mapping"
 
     def _normalize_market(
         self,
@@ -321,6 +384,49 @@ class PolymarketReadOnlyMarketDataAdapter(MarketDataPort):
         if not self.persistence:
             return
         self.persistence.write_artifact(run_id, "normalized_market_snapshots", snapshot.model_dump(mode="json"))
+
+    def _persist_http_error(self, run_id: str, metadata: HttpErrorMetadata) -> None:
+        if not self.persistence:
+            return
+        payload = metadata.to_dict()
+        self.persistence.write_artifact(run_id, "http_error_metadata", payload)
+        self.persistence.write_run_event(run_id, "live_market_fetch_failed", payload)
+        self._persist_source_failure(
+            run_id,
+            classification=metadata.classification,
+            reason_code=metadata.reason_code,
+            message=metadata.message,
+            source=metadata.source,
+            payload={
+                "status_code": metadata.status_code,
+                "retryable": metadata.retryable,
+                "error_type": metadata.error_type,
+            },
+        )
+
+    def _persist_source_failure(
+        self,
+        run_id: str,
+        *,
+        classification: str,
+        reason_code: str,
+        message: str,
+        source: str,
+        payload: Mapping[str, Any] | None = None,
+    ) -> None:
+        if not self.persistence:
+            return
+        failure_payload: dict[str, Any] = {
+            "source": source,
+            "classification": classification,
+            "reason_code": reason_code,
+            "message": message,
+            "timestamp": self.now_fn().isoformat(),
+        }
+        if payload:
+            failure_payload["details"] = dict(payload)
+        self.persistence.write_artifact(run_id, "source_failures", failure_payload)
+        self.persistence.write_run_event(run_id, "source_failure", failure_payload)
 
     @staticmethod
     def _first_str(raw: Mapping[str, Any], keys: tuple[str, ...], default: str | None = None) -> str | None:

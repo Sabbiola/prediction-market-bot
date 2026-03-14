@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
 
+from prediction_market_bot.interfaces import OperatorControlStateRepositoryPort
 
 @dataclass(slots=True)
 class OperatorControlState:
@@ -63,7 +64,18 @@ def operator_state_path(artifacts_dir: str | Path) -> Path:
     return Path(artifacts_dir) / "operator" / "control_state.json"
 
 
-def load_operator_state(path: Path) -> OperatorControlState:
+def load_operator_state(
+    path: Path,
+    *,
+    repository: OperatorControlStateRepositoryPort | None = None,
+) -> OperatorControlState:
+    if repository is not None:
+        try:
+            payload = repository.load_state()
+        except Exception:
+            payload = None
+        if isinstance(payload, Mapping):
+            return OperatorControlState.from_dict(payload)
     if not path.exists():
         return OperatorControlState(updated_at=_utc_now())
     try:
@@ -75,9 +87,20 @@ def load_operator_state(path: Path) -> OperatorControlState:
     return OperatorControlState.from_dict(raw)
 
 
-def save_operator_state(path: Path, state: OperatorControlState) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+def save_operator_state(
+    path: Path,
+    state: OperatorControlState,
+    *,
+    repository: OperatorControlStateRepositoryPort | None = None,
+) -> None:
     state.updated_at = _utc_now()
+    if repository is not None:
+        try:
+            repository.save_state(state.to_dict())
+        except Exception:
+            pass
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(state.to_dict(), indent=2), encoding="utf-8")
 
 

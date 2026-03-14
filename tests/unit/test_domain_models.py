@@ -3,11 +3,12 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from prediction_market_bot.domain.enums import ExecutionStatus, MarketStatus, OutcomeSide, PostmortemCause, SourceType
+from prediction_market_bot.domain.enums import ExecutionStatus, MarketStatus, OutcomeSide, PostmortemCause, SourceType, TxStatus
 from prediction_market_bot.domain.models import (
     ExecutionResult,
     Market,
     MarketSnapshot,
+    NonceState,
     OutcomeQuote,
     OrderIntent,
     PostmortemReport,
@@ -16,6 +17,9 @@ from prediction_market_bot.domain.models import (
     ResearchPacket,
     RiskDecision,
     SettlementResult,
+    TxAttempt,
+    TxIntent,
+    TxReceipt,
 )
 
 
@@ -173,3 +177,46 @@ def test_prediction_risk_execution_settlement_postmortem_roundtrip() -> None:
     assert ExecutionResult.model_validate_json(execution.model_dump_json()) == execution
     assert SettlementResult.model_validate_json(settlement.model_dump_json()) == settlement
     assert PostmortemReport.model_validate_json(postmortem.model_dump_json()) == postmortem
+
+
+def test_transaction_plane_aliases_and_nonce_state_roundtrip() -> None:
+    intent = TxIntent(
+        market_id="m-tx",
+        venue="polymarket",
+        side=OutcomeSide.NO,
+        stake_usd=42.0,
+        limit_price=0.61,
+        rationale="tx-plane",
+    )
+    receipt = TxReceipt(
+        market_id="m-tx",
+        status=TxStatus.SUBMITTED,
+        side=OutcomeSide.NO,
+        stake_usd=42.0,
+        fill_price=None,
+        order_id="tx-1",
+        message="submitted",
+    )
+    attempt = TxAttempt(
+        market_id="m-tx",
+        execution_mode=receipt.execution_mode,
+        lane="main",
+        intent_id="intent-1",
+        venue=intent.venue,
+        side=intent.side,
+        stake_usd=intent.stake_usd,
+        limit_price=intent.limit_price,
+        status=TxStatus.SUBMITTED,
+    )
+    nonce_state = NonceState(
+        chain_id=80_002,
+        account="0xabc",
+        next_nonce=7,
+    )
+
+    assert isinstance(intent, OrderIntent)
+    assert isinstance(receipt, ExecutionResult)
+    assert TxIntent.model_validate_json(intent.model_dump_json()) == intent
+    assert TxReceipt.model_validate_json(receipt.model_dump_json()) == receipt
+    assert TxAttempt.model_validate_json(attempt.model_dump_json()) == attempt
+    assert NonceState.model_validate_json(nonce_state.model_dump_json()) == nonce_state

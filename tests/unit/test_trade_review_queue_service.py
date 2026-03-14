@@ -63,7 +63,7 @@ def test_trade_review_queue_approval_and_note_workflow(tmp_path: Path) -> None:
     queue, persistence = _service(tmp_path)
     queued = queue.enqueue_candidate("review-run-1", _candidate(), _prediction(), _approved_risk())
 
-    pending = queue.list_queue(status=TradeReviewStatus.PENDING, limit=10)
+    pending = queue.list_queue(status=TradeReviewStatus.PENDING_REVIEW, limit=10)
     assert len(pending) == 1
     assert pending[0].queue_id == queued.queue_id
     assert pending[0].model_rationale == ("pred-r1", "pred-r2", "risk-r1", "risk-r2")

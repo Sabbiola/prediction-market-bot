@@ -9,7 +9,7 @@ import pytest
 
 from prediction_market_bot.domain.models import MarketSnapshot
 from prediction_market_bot.infrastructure import LiveResearchIngestionPipeline, build_live_research_sources
-from prediction_market_bot.infrastructure import live_research as live_research_module
+from prediction_market_bot.infrastructure import http_client as http_client_module
 
 
 class _InMemoryPersistence:
@@ -99,7 +99,7 @@ def test_research_ingestion_normalizes_deduplicates_and_persists(monkeypatch: py
             return _MockHttpResponse(json.dumps(openalex_payload))
         raise AssertionError(f"Unexpected URL: {url}")
 
-    monkeypatch.setattr(live_research_module.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(http_client_module.request, "urlopen", fake_urlopen)
 
     sources = build_live_research_sources(
         wikipedia_endpoint_url="https://wikipedia.test/api.php",
@@ -165,7 +165,7 @@ def test_research_ingestion_uses_http_cache(monkeypatch: pytest.MonkeyPatch) -> 
             return _MockHttpResponse(json.dumps(openalex_payload))
         raise AssertionError(f"Unexpected URL: {url}")
 
-    monkeypatch.setattr(live_research_module.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(http_client_module.request, "urlopen", fake_urlopen)
 
     sources = build_live_research_sources(
         wikipedia_endpoint_url="https://wikipedia.test/api.php",
@@ -222,8 +222,8 @@ def test_research_ingestion_retries_after_transient_error(monkeypatch: pytest.Mo
             return _MockHttpResponse(json.dumps(openalex_payload))
         raise AssertionError(f"Unexpected URL: {url}")
 
-    monkeypatch.setattr(live_research_module.request, "urlopen", fake_urlopen)
-    monkeypatch.setattr(live_research_module.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(http_client_module.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(http_client_module.time, "sleep", lambda seconds: None)
 
     sources = build_live_research_sources(
         wikipedia_endpoint_url="https://wikipedia.test/api.php",
@@ -240,3 +240,189 @@ def test_research_ingestion_retries_after_transient_error(monkeypatch: pytest.Mo
     assert attempts["wikipedia"] == 2
     assert batch.retries_used == 1
     assert batch.deduplicated_count >= 1
+
+
+def test_research_ingestion_persists_timeout_source_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime(2026, 3, 13, 12, 0, 0, tzinfo=UTC)
+    persistence = _InMemoryPersistence()
+    openalex_payload = {
+        "results": [
+            {
+                "id": "https://openalex.org/W999",
+                "display_name": "Backup openalex record",
+                "publication_date": "2026-03-01",
+            }
+        ]
+    }
+
+    def fake_urlopen(req: object, timeout: float) -> _MockHttpResponse:
+        del timeout
+        url = getattr(req, "full_url", "")
+        if "wikipedia.test" in url:
+            raise error.URLError("timed out")
+        if "openalex.test" in url:
+            return _MockHttpResponse(json.dumps(openalex_payload))
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(http_client_module.request, "urlopen", fake_urlopen)
+
+    sources = build_live_research_sources(
+        wikipedia_endpoint_url="https://wikipedia.test/api.php",
+        openalex_endpoint_url="https://openalex.test/works",
+        timeout_sec=2.0,
+        max_retries=0,
+        cache_ttl_seconds=0,
+        now_fn=lambda: now,
+    )
+    pipeline = LiveResearchIngestionPipeline(sources=sources, persistence=persistence, now_fn=lambda: now)
+    batch = pipeline.ingest(_market(), run_id="research-timeout-1", query_override="inflation")
+
+    assert batch.source_failures == 1
+    source_failures = [row for row in persistence.artifacts if row[1] == "source_failures"]
+    assert any(row[2]["classification"] == "timeout" for row in source_failures)
+
+
+def test_research_ingestion_persists_403_source_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime(2026, 3, 13, 12, 0, 0, tzinfo=UTC)
+    persistence = _InMemoryPersistence()
+    openalex_payload = {
+        "results": [
+            {
+                "id": "https://openalex.org/W998",
+                "display_name": "Backup openalex record",
+                "publication_date": "2026-03-01",
+            }
+        ]
+    }
+
+    def fake_urlopen(req: object, timeout: float) -> _MockHttpResponse:
+        del timeout
+        url = getattr(req, "full_url", "")
+        if "wikipedia.test" in url:
+            raise error.HTTPError(url, 403, "forbidden", hdrs=None, fp=None)
+        if "openalex.test" in url:
+            return _MockHttpResponse(json.dumps(openalex_payload))
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(http_client_module.request, "urlopen", fake_urlopen)
+
+    sources = build_live_research_sources(
+        wikipedia_endpoint_url="https://wikipedia.test/api.php",
+        openalex_endpoint_url="https://openalex.test/works",
+        timeout_sec=2.0,
+        max_retries=0,
+        cache_ttl_seconds=0,
+        now_fn=lambda: now,
+    )
+    pipeline = LiveResearchIngestionPipeline(sources=sources, persistence=persistence, now_fn=lambda: now)
+    batch = pipeline.ingest(_market(), run_id="research-403-1", query_override="inflation")
+
+    assert batch.source_failures == 1
+    source_failures = [row for row in persistence.artifacts if row[1] == "source_failures"]
+    assert any(row[2]["classification"] == "blocked_403" for row in source_failures)
+
+
+def test_research_ingestion_persists_malformed_payload_source_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime(2026, 3, 13, 12, 0, 0, tzinfo=UTC)
+    persistence = _InMemoryPersistence()
+    openalex_payload = {
+        "results": [
+            {
+                "id": "https://openalex.org/W333",
+                "display_name": "Macro inflation survey",
+                "publication_date": "2026-03-01",
+            }
+        ]
+    }
+
+    def fake_urlopen(req: object, timeout: float) -> _MockHttpResponse:
+        del timeout
+        url = getattr(req, "full_url", "")
+        if "wikipedia.test" in url:
+            return _MockHttpResponse(json.dumps({"query": {"unexpected": []}}))
+        if "openalex.test" in url:
+            return _MockHttpResponse(json.dumps(openalex_payload))
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(http_client_module.request, "urlopen", fake_urlopen)
+
+    sources = build_live_research_sources(
+        wikipedia_endpoint_url="https://wikipedia.test/api.php",
+        openalex_endpoint_url="https://openalex.test/works",
+        timeout_sec=2.0,
+        max_retries=0,
+        cache_ttl_seconds=0,
+        now_fn=lambda: now,
+    )
+    pipeline = LiveResearchIngestionPipeline(sources=sources, persistence=persistence, now_fn=lambda: now)
+    batch = pipeline.ingest(_market(), run_id="research-malformed-1", query_override="inflation")
+
+    assert batch.source_failures == 1
+    source_failures = [row for row in persistence.artifacts if row[1] == "source_failures"]
+    assert any(row[2]["classification"] == "malformed_payload" for row in source_failures)
+
+
+def test_research_ingestion_applies_per_source_headers_and_api_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = datetime(2026, 3, 13, 12, 0, 0, tzinfo=UTC)
+    captured_headers: dict[str, dict[str, str]] = {}
+
+    wikipedia_payload = {
+        "query": {
+            "search": [
+                {
+                    "pageid": 99,
+                    "title": "Inflation outlook",
+                    "snippet": "Inflation decline forecast for next quarter.",
+                    "timestamp": "2026-03-13T10:00:00Z",
+                }
+            ]
+        }
+    }
+    openalex_payload = {
+        "results": [
+            {
+                "id": "https://openalex.org/W222",
+                "display_name": "Macro inflation survey",
+                "publication_date": "2026-03-01",
+            }
+        ]
+    }
+
+    def fake_urlopen(req: object, timeout: float) -> _MockHttpResponse:
+        del timeout
+        url = getattr(req, "full_url", "")
+        header_items = {str(key).lower(): str(value) for key, value in getattr(req, "header_items")()}
+        if "wikipedia.test" in url:
+            captured_headers["wikipedia"] = header_items
+            return _MockHttpResponse(json.dumps(wikipedia_payload))
+        if "openalex.test" in url:
+            captured_headers["openalex"] = header_items
+            return _MockHttpResponse(json.dumps(openalex_payload))
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    monkeypatch.setattr(http_client_module.request, "urlopen", fake_urlopen)
+
+    sources = build_live_research_sources(
+        wikipedia_endpoint_url="https://wikipedia.test/api.php",
+        openalex_endpoint_url="https://openalex.test/works",
+        timeout_sec=2.0,
+        max_retries=0,
+        cache_ttl_seconds=0,
+        wikipedia_headers={"X-Wiki-Header": "wiki"},
+        wikipedia_api_key="wiki-key",
+        wikipedia_api_key_header="X-Wiki-Key",
+        wikipedia_api_key_prefix="",
+        openalex_headers={"X-Openalex-Header": "openalex"},
+        openalex_api_key="openalex-key",
+        openalex_api_key_header="X-Openalex-Key",
+        openalex_api_key_prefix="",
+        now_fn=lambda: now,
+    )
+    pipeline = LiveResearchIngestionPipeline(sources=sources, now_fn=lambda: now)
+    batch = pipeline.ingest(_market(), run_id="research-headers-1", query_override="inflation")
+
+    assert batch.source_failures == 0
+    assert captured_headers["wikipedia"]["x-wiki-header"] == "wiki"
+    assert captured_headers["wikipedia"]["x-wiki-key"] == "wiki-key"
+    assert captured_headers["openalex"]["x-openalex-header"] == "openalex"
+    assert captured_headers["openalex"]["x-openalex-key"] == "openalex-key"

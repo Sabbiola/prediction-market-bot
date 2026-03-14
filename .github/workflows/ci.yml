@@ -49,6 +49,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: quality
+    if: ${{ always() && needs.quality.result != 'cancelled' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -82,4 +83,68 @@ jobs:
           path: |
             data/artifacts/reports/**
             data/artifacts/pipeline_summaries.jsonl
+            data/audit/events.jsonl
+
+  smoke-beta-live:
+    name: Smoke Beta-Live (Mocked Providers + Sandbox Tx)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: quality
+    if: ${{ always() && needs.quality.result != 'cancelled' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          make install
+
+      - name: Validate Startup
+        run: |
+          python -m prediction_market_bot.main validate-startup --config config/app.yaml --agents-config config/agents.yaml --json
+
+      - name: Run Beta-Live Smoke Integration Tests
+        run: |
+          pytest -q tests/integration/test_runtime_mode_selection_integration.py tests/integration/test_sandbox_tx_cli_integration.py tests/integration/test_local_sandbox_chain_integration.py
+
+  beta-live-acceptance:
+    name: Beta-Live Acceptance Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: quality
+    if: ${{ always() && needs.quality.result != 'cancelled' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          make install
+
+      - name: Run Beta-Live Acceptance Suite
+        run: make ci-beta-acceptance
+
+      - name: Upload Acceptance Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: beta-live-acceptance-artifacts-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            data/artifacts/**
             data/audit/events.jsonl

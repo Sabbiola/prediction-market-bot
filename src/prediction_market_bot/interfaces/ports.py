@@ -3,10 +3,12 @@ from __future__ import annotations
 from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
 from prediction_market_bot.domain.models import (
-    ExecutionResult,
     MarketSnapshot,
-    OrderIntent,
+    PendingSettlementRequest,
+    ResolutionCheckResult,
     ResearchFinding,
+    TxIntent,
+    TxReceipt,
 )
 
 
@@ -24,7 +26,25 @@ class ResearchDataPort(Protocol):
 
 @runtime_checkable
 class ExecutionPort(Protocol):
-    def place_order(self, order: OrderIntent) -> ExecutionResult:
+    def place_order(self, order: TxIntent) -> TxReceipt:
+        ...
+
+
+@runtime_checkable
+class PaperExecutorPort(ExecutionPort, Protocol):
+    def place_order(self, order: TxIntent) -> TxReceipt:
+        ...
+
+
+@runtime_checkable
+class ShadowSignExecutorPort(ExecutionPort, Protocol):
+    def place_order(self, order: TxIntent) -> TxReceipt:
+        ...
+
+
+@runtime_checkable
+class SandboxChainExecutorPort(ExecutionPort, Protocol):
+    def place_order(self, order: TxIntent) -> TxReceipt:
         ...
 
 
@@ -37,7 +57,16 @@ class PersistencePort(Protocol):
         ...
 
 
+@runtime_checkable
+class ResolutionPollerPort(Protocol):
+    def poll(self, request: PendingSettlementRequest) -> ResolutionCheckResult:
+        ...
+
+
 # Backward-compatible aliases.
 MarketDataProvider = MarketDataPort
 ResearchSource = ResearchDataPort
 TradeExecutor = ExecutionPort
+PaperExecutor = PaperExecutorPort
+ShadowSignExecutor = ShadowSignExecutorPort
+SandboxChainExecutor = SandboxChainExecutorPort
