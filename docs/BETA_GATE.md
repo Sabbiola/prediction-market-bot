@@ -38,6 +38,11 @@ Il target esegue:
 pytest -q -m acceptance tests/acceptance
 ```
 
+In CI devono risultare verdi anche i job dedicati UI:
+
+- `UI Control Plane (Routes + Rendering)`
+- `Beta-Live Acceptance Gate` (incluso path UI end-to-end)
+
 ## Checklist di Rilascio (PASS/FAIL)
 
 1. Startup validation passa in configurazione staging (`validate-startup`) senza errori bloccanti.
@@ -48,6 +53,11 @@ pytest -q -m acceptance tests/acceptance
 6. I test confermano che la settlement lane chiude posizioni in passaggio separato.
 7. I test confermano tx sandbox tracciabile (`run_id` + `review_queue_id`) e riconciliabile.
 8. Replay e report generation da artefatti persistiti risultano operativi.
+9. I test UI confermano operativita end-to-end su `Review Queue` e `Sandbox TX`, inclusi path bloccati e audit trail azioni.
+10. I test UI confermano monitoraggio operativo (widget live + stale-data counters), banner incident e feed eventi audit.
+11. Il tab `Reports` espone shortcut replay/evaluation consistenti con i comandi CLI documentati.
+12. Il control plane UI e deployabile separatamente in staging (`prediction-market-ui`) con health/readiness verdi.
+13. La acceptance suite include il path UI: login -> overview read -> review approve -> sandbox tx reconcile view.
 
 Se anche un solo punto fallisce: **release bloccata**.
 

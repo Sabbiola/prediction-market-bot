@@ -10,10 +10,12 @@ from typing import Iterator
 
 import pytest
 import yaml
+from fastapi.testclient import TestClient
 
 from prediction_market_bot.infrastructure import http_client as http_client_module
 from prediction_market_bot.main import main
 from prediction_market_bot.services import PaperPortfolioEngine
+from prediction_market_bot.ui.app import create_web_app
 
 pytestmark = pytest.mark.acceptance
 
@@ -160,6 +162,24 @@ def _configure_app_for_sandbox_chain(app_cfg: Path, *, rpc_url: str) -> None:
     payload["sandbox_chain"]["contract_address"] = "0x1234567890123456789012345678901234567890"
     payload["sandbox_chain"]["from_address"] = "0x1111111111111111111111111111111111111111"
     payload["sandbox_chain"]["private_key_env"] = "SANDBOX_CHAIN_PRIVATE_KEY"
+    _write_yaml(app_cfg, payload)
+
+
+def _configure_ui_auth(app_cfg: Path, *, timeout_sec: int = 1800) -> None:
+    payload = yaml.safe_load(app_cfg.read_text(encoding="utf-8")) or {}
+    payload["ui_auth"] = {
+        "enabled": True,
+        "session_secret_env": "PM_BOT_UI_SESSION_SECRET",
+        "session_timeout_sec": timeout_sec,
+        "cookie_name": "pm_bot_ui_session",
+        "cookie_secure": False,
+        "cookie_samesite": "lax",
+        "users": [
+            {"username": "viewer", "role": "viewer", "password": "viewer-pass"},
+            {"username": "operator", "role": "operator", "password": "operator-pass"},
+            {"username": "admin", "role": "admin", "password": "admin-pass"},
+        ],
+    }
     _write_yaml(app_cfg, payload)
 
 
@@ -715,3 +735,80 @@ def test_beta_acceptance_sandbox_chain_submission_path(
             any(item.get("confirmation_status") == "MINED" for item in reconcile_payload),
             "reconciled transaction is not MINED on local sandbox chain.",
         )
+
+
+def test_beta_acceptance_ui_control_plane_path(
+    temp_config_paths: tuple[Path, Path],
+    deterministic_run_id: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_cfg, agents_cfg = temp_config_paths
+    _configure_pipeline_to_force_trade(agents_cfg)
+    _configure_ui_auth(app_cfg)
+    monkeypatch.setenv("PM_BOT_UI_SESSION_SECRET", "beta-ui-session-secret-123456")
+
+    with _local_sandbox_rpc_server() as rpc_url:
+        _configure_app_for_sandbox_chain(app_cfg, rpc_url=rpc_url)
+        run_id = f"{deterministic_run_id}-ui-beta"
+
+        app = create_web_app(config_path=app_cfg, agents_config_path=agents_cfg)
+        with TestClient(app) as client:
+            login = client.post("/api/auth/login", json={"username": "operator", "password": "operator-pass"})
+            _must(login.status_code == 200, "ui login endpoint failed.")
+            login_payload = login.json()
+            _must(bool(login_payload.get("authenticated")), "ui login did not authenticate operator role.")
+
+            run_first = client.post("/api/actions/run-once", json={"run_id": run_id, "force": False})
+            _must(run_first.status_code == 200, "ui run-once failed to enqueue review candidate.")
+            _must(run_first.json().get("status") == "completed", "ui run-once did not complete initial run.")
+
+            overview = client.get(f"/api/tabs/overview?run_id={run_id}")
+            _must(overview.status_code == 200, "ui overview tab is not readable after login.")
+            _must(
+                overview.json().get("run_selector", {}).get("selected_run_id") == run_id,
+                "ui overview did not select the expected run_id.",
+            )
+
+            review_tab = client.get(f"/api/tabs/review-queue?run_id={run_id}&status=PENDING_REVIEW")
+            _must(review_tab.status_code == 200, "ui review queue tab failed.")
+            review_rows = review_tab.json().get("rows") or []
+            _must(bool(review_rows), "ui review queue has no pending candidate to approve.")
+            queue_id = str(review_rows[0]["queue_id"])
+
+            approve = client.post(
+                "/api/actions/review-approve",
+                json={
+                    "queue_id": queue_id,
+                    "operator_id": "ui-beta-operator",
+                    "rationale": "Approved from UI acceptance flow.",
+                    "note": "beta gate",
+                    "confirm": True,
+                },
+            )
+            _must(approve.status_code == 200, "ui review-approve endpoint failed.")
+            _must(
+                approve.json().get("status") == "completed",
+                "ui review-approve did not persist APPROVED decision.",
+            )
+
+            run_second = client.post("/api/actions/run-once", json={"run_id": run_id, "force": False})
+            _must(run_second.status_code == 200, "ui run-once failed after approval.")
+            _must(
+                run_second.json().get("status") == "completed",
+                "ui second run did not complete after review approval.",
+            )
+
+            sandbox_tab = client.get(f"/api/tabs/sandbox-tx?run_id={run_id}")
+            _must(sandbox_tab.status_code == 200, "ui sandbox tx tab failed.")
+            sandbox_payload = sandbox_tab.json()
+            _must(
+                int(sandbox_payload.get("attempts_count", 0)) >= 1,
+                "ui sandbox tx tab has no attempts after approved run.",
+            )
+
+            reconcile = client.post("/api/actions/tx-reconcile", json={"run_id": run_id, "intent_id": "", "limit": 50})
+            _must(reconcile.status_code == 200, "ui tx-reconcile endpoint failed.")
+            _must(
+                reconcile.json().get("status") == "completed",
+                "ui tx-reconcile did not complete successfully.",
+            )

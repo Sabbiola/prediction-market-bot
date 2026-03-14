@@ -1,11 +1,9 @@
-version: "3.9"
-
 services:
-  prediction-market-bot:
+  prediction-market-worker:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: prediction-market-bot
+    container_name: prediction-market-worker
     command:
       - python
       - -m
@@ -24,3 +22,55 @@ services:
       - ./config:/app/config:ro
       - ./data:/app/data
     restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -m
+        - prediction_market_bot.main
+        - healthcheck
+        - --config
+        - config/app.yaml
+        - --agents-config
+        - config/agents.yaml
+        - --json
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  prediction-market-ui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: prediction-market-ui
+    command:
+      - python
+      - -m
+      - prediction_market_bot.ui.server
+      - --config
+      - config/app.yaml
+      - --agents-config
+      - config/agents.yaml
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+    environment:
+      PM_BOT_UI_SESSION_SECRET: ${PM_BOT_UI_SESSION_SECRET:-}
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./config:/app/config:ro
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request as u; [u.urlopen(f'http://127.0.0.1:8080{p}', timeout=5).read() for p in ('/health','/ready')]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s

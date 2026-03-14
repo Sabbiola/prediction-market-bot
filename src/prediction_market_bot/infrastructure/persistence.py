@@ -40,6 +40,9 @@ class JsonlPersistence(PersistencePort):
         rows = self._read_jsonl(self.audit_log_path)
         return [row for row in rows if row.get("run_id") == run_id]
 
+    def read_all_run_events(self) -> list[dict[str, Any]]:
+        return self._read_jsonl(self.audit_log_path)
+
     def read_artifact_records(self, run_id: str, artifact_type: str) -> list[dict[str, Any]]:
         path = self.artifacts_dir / f"{artifact_type}.jsonl"
         rows = self._read_jsonl(path)

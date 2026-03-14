@@ -8,7 +8,13 @@ version = "0.1.0"
 description = "Dry-run multi-agent foundation for prediction markets."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["PyYAML>=6.0.1,<7", "pydantic>=2.8,<3"]
+dependencies = [
+  "PyYAML>=6.0.1,<7",
+  "pydantic>=2.8,<3",
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.30,<1",
+  "jinja2>=3.1,<4",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -16,10 +22,12 @@ dev = [
   "pytest>=8,<9",
   "ruff>=0.5,<1",
   "types-PyYAML>=6.0.12.20241230",
+  "httpx>=0.27,<1",
 ]
 
 [project.scripts]
 prediction-market-bot = "prediction_market_bot.main:main"
+prediction-market-bot-ui = "prediction_market_bot.ui.server:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -36,6 +44,9 @@ exclude = [
   ".ruff_cache*",
   "data*",
 ]
+
+[tool.setuptools.package-data]
+prediction_market_bot = ["ui/templates/*.html"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

@@ -11,9 +11,13 @@ prediction-market-bot/
     agents.yaml
     app.yaml
   docs/
-    ANALISI_DETTAGLIATA.md
+    ARCHITECTURE.md
+    BETA_SCOPE.md
+    BETA_GATE.md
+    OPERATIONS.md
+    DEVELOPMENT.md
+    LEGACY_MAPPING.md
     REFACTOR_PLAN.md
-    LEGACY_TO_TARGET_MAP.md
   src/
     prediction_market_bot/
       app/
@@ -34,6 +38,12 @@ prediction-market-bot/
         postmortem.py
       orchestration/
         coordinator.py
+      ui/
+        app.py
+        server.py
+        read_models.py
+        routes/
+        templates/
       main.py
   tests/
     test_pipeline_smoke.py
@@ -93,6 +103,50 @@ Responsabile di:
 - classificazione errori
 - action items
 - aggiornamento dataset/feature backlog/risk rules
+
+### 9.7 Operator Control Plane / Web UI
+Responsabile di:
+
+- visualizzazione stato operativo runtime (health, run, queue, posizioni, tx)
+- orchestrazione azioni operatore gia esposte dal runtime
+- osservabilita e audit UX per review/settlement/sandbox lane
+- supporto al workflow giornaliero in staging
+
+Non responsabile di:
+
+- logica di prediction/risk/execution/settlement
+- bypass dei guardrail di review e rischio
+- posting ordini live verso venue
+
+Vincoli:
+
+- venue live order posting resta disabilitata in questa fase
+- `SANDBOX_CHAIN` resta la lane transazionale reale di rehearsal
+- tutte le azioni devono restare tracciabili con `run_id` e metadata operatore
+
+Implementazione foundation (stato attuale):
+
+- backend FastAPI in `src/prediction_market_bot/ui/`
+- endpoint base:
+  - `GET /health`
+  - `GET /ready`
+- endpoint tabbed read-only:
+  - `GET /api/tabs/overview`
+  - `GET /api/tabs/scanner`
+  - `GET /api/tabs/research`
+  - `GET /api/tabs/prediction`
+  - `GET /api/tabs/risk`
+  - `GET /api/tabs/execution`
+  - `GET /api/tabs/settlement`
+  - `GET /api/tabs/sandbox-tx`
+  - `GET /api/tabs/reports`
+  - `GET /api/tabs/system`
+- operator actions:
+  - `POST /api/actions/run-once`
+  - `POST /api/actions/pause`
+  - `POST /api/actions/resume`
+- shell HTML server-rendered tramite template, con route `GET /`
+- layer read-model dedicato per aggregare dati runtime senza logica business nei controller
 
 ## 12. Scelte implementative che consiglio senza esitazione
 

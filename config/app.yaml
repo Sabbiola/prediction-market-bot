@@ -93,6 +93,24 @@ sandbox_chain:
   dropped_after_sec: 180
   request_timeout_sec: 8.0
 
+ui_auth:
+  enabled: false
+  session_secret_env: PM_BOT_UI_SESSION_SECRET
+  session_timeout_sec: 1800
+  cookie_name: pm_bot_ui_session
+  cookie_secure: true
+  cookie_samesite: lax
+  users:
+    - username: viewer
+      role: viewer
+      password_env: PM_BOT_UI_VIEWER_PASSWORD
+    - username: operator
+      role: operator
+      password_env: PM_BOT_UI_OPERATOR_PASSWORD
+    - username: admin
+      role: admin
+      password_env: PM_BOT_UI_ADMIN_PASSWORD
+
 storage:
   operational_db:
     driver: sqlite

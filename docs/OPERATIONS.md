@@ -9,6 +9,52 @@ Questa guida descrive l'operativita in ambiente **beta-live staging**:
 - sandbox-chain usata come lane transazionale non-trading
 - audit JSONL + stato operativo SQLite
 
+## Operator Control Plane / Web UI (intended scope)
+
+Responsabilita previste:
+
+- aggregare la vista operativa su health, run status, review queue, open positions, pending settlements, tx states
+- esporre widget di monitoraggio live (`live_source_failures`, `review_queue_depth`, `pending_settlements`, `tx_*`, `open_positions`, `stale_data_*`)
+- esporre banner incident/status con raccomandazioni operatore
+- esporre feed incident/events da audit log lato server (nessun parsing log nel browser)
+- rendere accessibili le azioni operatore gia presenti nel runtime (`pause/resume`, review actions, tx reconcile/resubmit-safe)
+- fornire una vista auditabile delle decisioni (`run_id`, rationale modello/operatore, stati tx)
+- esporre shell tabbed con pannelli iniziali `Overview` e `System/Health`
+
+Non-responsabilita:
+
+- nessuna logica di business nel layer UI
+- nessun calcolo di prediction/risk/execution/settlement nel frontend
+- nessun posting diretto di ordini live su venue
+
+Vincoli operativi:
+
+- la source of truth resta il runtime backend e la sua persistenza operativa
+- `SANDBOX_CHAIN` resta la lane transazionale reale di rehearsal
+- venue live order posting resta disabilitata
+- worker (`prediction-market-worker`) e UI (`prediction-market-ui`) sono processi separati: la UI non e prerequisito runtime
+
+## UI Auth e RBAC (staging)
+
+Autenticazione:
+
+- session-based auth configurata in `config/app.yaml` (`ui_auth`)
+- cookie di sessione con secure defaults (`cookie_secure`, `cookie_samesite`)
+- timeout inattivita controllato da `ui_auth.session_timeout_sec`
+- logout esplicito via UI/API (`POST /logout` o `POST /api/auth/logout`)
+
+Ruoli:
+
+- `viewer`: sola lettura (tab/health/status)
+- `operator`: puo fare review actions, `run-once`, `tx-reconcile`
+- `admin`: puo fare tutto l'operator + `pause/resume` + `admin-settings`
+
+Regole:
+
+- tutte le azioni mutanti richiedono sessione autenticata e ruolo valido
+- ogni azione UI mutante viene auditata con `acting_user` e `acting_role`
+- non esporre mai segreti o credenziali in template/log
+
 ## Comandi operativi principali
 
 ```bash
@@ -20,7 +66,35 @@ python -m prediction_market_bot.main status --config config/app.yaml --agents-co
 python -m prediction_market_bot.main tx-status --config config/app.yaml --agents-config config/agents.yaml --json
 python -m prediction_market_bot.main tx-reconcile --config config/app.yaml --agents-config config/agents.yaml --json
 python -m prediction_market_bot.main tx-resubmit-safe --config config/app.yaml --agents-config config/agents.yaml --intent-id <intent_id> --json
+python -m prediction_market_bot.ui.server --config config/app.yaml --agents-config config/agents.yaml --host 127.0.0.1 --port 8080
+docker compose up -d --build prediction-market-worker prediction-market-ui
 ```
+
+Endpoint UI principali:
+
+- `POST /api/auth/login`
+- `POST /api/auth/logout`
+- `GET /api/auth/session`
+- `GET /api/incidents`
+- `GET /api/tabs/overview`
+- `GET /api/tabs/scanner`
+- `GET /api/tabs/research`
+- `GET /api/tabs/prediction`
+- `GET /api/tabs/risk`
+- `GET /api/tabs/review-queue`
+- `GET /api/tabs/execution`
+- `GET /api/tabs/settlement`
+- `GET /api/tabs/sandbox-tx`
+- `GET /api/tabs/reports`
+- `GET /api/tabs/system`
+- `POST /api/actions/run-once`
+- `POST /api/actions/pause`
+- `POST /api/actions/resume`
+- `POST /api/actions/review-approve`
+- `POST /api/actions/review-reject`
+- `POST /api/actions/tx-reconcile`
+- `POST /api/actions/tx-resubmit-safe`
+- `POST /api/actions/admin-settings`
 
 ## Runbook
 
@@ -40,20 +114,29 @@ Se `validate-startup` fallisce, non avviare scheduler.
 
 1. Avviare:
    - `run-scheduler` in foreground, oppure
-   - container Docker/compose.
+   - container Docker/compose (`prediction-market-worker`).
 2. Verificare da `status`:
    - `paused=false`
    - `pending_review_count`
    - `pending_settlement_count`
    - `runtime_metrics`
 
+## 2.b Avvio UI control plane
+
+1. Avviare `prediction-market-ui` (compose o processo dedicato).
+2. Verificare:
+   - `GET /health` restituisce `status=ok`
+   - `GET /ready` restituisce `ready=true`
+3. Se `ui_auth.enabled=true`, verificare login su `/login` con ruolo corretto.
+
 ## 3. Operativita continua
 
 1. Controllare periodicamente `status --json`.
-2. Monitorare metriche prom textfile in `observability.metrics.path`.
-3. Monitorare review queue:
+2. Controllare in UI i banner incident e il feed `api/incidents`.
+3. Monitorare metriche prom textfile in `observability.metrics.path`.
+4. Monitorare review queue:
    - `review-list --status pending_review`
-4. Per sandbox tx:
+5. Per sandbox tx:
    - `tx-status`
    - `tx-reconcile`
    - `tx-resubmit-safe` solo se stato non pending/mined.

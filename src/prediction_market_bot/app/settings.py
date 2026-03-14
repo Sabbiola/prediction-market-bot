@@ -265,6 +265,25 @@ class ExecutionSettings:
 
 
 @dataclass(slots=True, frozen=True)
+class UiAuthUserSettings:
+    username: str
+    role: str
+    password: str = ""
+    password_env: str = ""
+
+
+@dataclass(slots=True, frozen=True)
+class UiAuthSettings:
+    enabled: bool = False
+    session_secret_env: str = "PM_BOT_UI_SESSION_SECRET"
+    session_timeout_sec: int = 1800
+    cookie_name: str = "pm_bot_ui_session"
+    cookie_secure: bool = True
+    cookie_samesite: str = "lax"
+    users: tuple[UiAuthUserSettings, ...] = ()
+
+
+@dataclass(slots=True, frozen=True)
 class AppSettings:
     runtime: RuntimeSettings
     logging: LoggingSettings
@@ -283,6 +302,7 @@ class AppSettings:
     live_market_data: LiveMarketDataSettings
     live_research: LiveResearchSettings
     sandbox_chain: SandboxChainSettings
+    ui_auth: UiAuthSettings
 
     @classmethod
     def from_dicts(cls, app_config: Mapping[str, Any], agents_config: Mapping[str, Any]) -> "AppSettings":
@@ -303,6 +323,7 @@ class AppSettings:
         wikipedia_research_section = _as_dict(live_research_section.get("wikipedia"))
         openalex_research_section = _as_dict(live_research_section.get("openalex"))
         sandbox_chain_section = _as_dict(app_config.get("sandbox_chain"))
+        ui_auth_section = _as_dict(app_config.get("ui_auth"))
 
         thresholds = _as_dict(agents_config.get("thresholds"))
         risk_section = _as_dict(agents_config.get("risk"))
@@ -535,6 +556,36 @@ class AppSettings:
             dropped_after_sec=int(sandbox_chain_section.get("dropped_after_sec", 180)),
             request_timeout_sec=float(sandbox_chain_section.get("request_timeout_sec", 8.0)),
         )
+        ui_users_raw = ui_auth_section.get("users")
+        ui_users: list[UiAuthUserSettings] = []
+        if isinstance(ui_users_raw, list):
+            for row in ui_users_raw:
+                if not isinstance(row, Mapping):
+                    continue
+                username = _as_str(row.get("username"))
+                role = _as_str(row.get("role")).lower()
+                if not username or role not in {"viewer", "operator", "admin"}:
+                    continue
+                ui_users.append(
+                    UiAuthUserSettings(
+                        username=username,
+                        role=role,
+                        password=_as_str(row.get("password")),
+                        password_env=_as_str(row.get("password_env")),
+                    )
+                )
+        ui_auth = UiAuthSettings(
+            enabled=_as_bool(ui_auth_section.get("enabled"), False),
+            session_secret_env=_as_str(
+                ui_auth_section.get("session_secret_env"),
+                "PM_BOT_UI_SESSION_SECRET",
+            ),
+            session_timeout_sec=max(int(ui_auth_section.get("session_timeout_sec", 1800)), 1),
+            cookie_name=_as_str(ui_auth_section.get("cookie_name"), "pm_bot_ui_session"),
+            cookie_secure=_as_bool(ui_auth_section.get("cookie_secure"), True),
+            cookie_samesite=_as_str(ui_auth_section.get("cookie_samesite"), "lax").lower(),
+            users=tuple(ui_users),
+        )
 
         allow_live_execution = _as_bool(feature_flags.get("allow_live_execution"), False)
         return cls(
@@ -555,6 +606,7 @@ class AppSettings:
             live_market_data=live_market_data,
             live_research=live_research,
             sandbox_chain=sandbox_chain,
+            ui_auth=ui_auth,
         )
 
     def validate_dry_run_only(self, allow_live_execution: bool | None = None) -> None:

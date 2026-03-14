@@ -1,108 +1,84 @@
 # Beta Scope
 
-## Obiettivo beta
+## Obiettivo beta-live
 
-Questa beta definisce un rilascio **paper-trading only** per prediction markets.
-Scopo della beta:
+Questa beta definisce un rilascio staging-safe per prediction markets con:
 
-- validare la pipeline multi-agent end-to-end
-- validare auditabilita e osservabilita operativa
-- validare disciplina di rischio in ambiente non live
-- raccogliere segnali per hardening prima di adapter reali
+- runtime disciplinato e auditabile
+- decisione/rischio nel backend runtime
+- human-in-the-loop obbligatorio nelle modalita beta-live
+- execution non-live su `PAPER` e lane reale di rehearsal su `SANDBOX_CHAIN`
 
-La beta non ha obiettivo di profitto live.
+La beta non include venue live order posting.
 
 ## In-scope
 
-- pipeline completa con agenti:
+- pipeline end-to-end:
   - `ScanAgent`
   - `ResearchAgent`
   - `PredictionAgent`
   - `RiskAgent`
-  - `ExecutionAgent` (dry-run)
-  - `SettlementAgent` (simulato)
+  - `ExecutionAgent`
+  - `SettlementAgent`
   - `PostmortemAgent`
-- comando CLI unico per run dry-run:
-  - `python -m prediction_market_bot.main run --config config/app.yaml --agents-config config/agents.yaml`
-- dependency injection nel coordinatore
-- logging strutturato per ogni stage pipeline
-- persistenza minima locale (JSONL) per:
-  - market snapshots
-  - research packets
-  - prediction results
-  - risk decisions
-  - execution results
-  - settlement results
-  - postmortems
-  - audit events
-- output riassuntivo run (`PipelineSummary`)
-- test:
-  - unit
-  - smoke
-  - integration
-- tipizzazione e validation strict (domain contracts)
+- runtime modes:
+  - `DRY_RUN_STATIC`
+  - `PAPER_LIVE`
+  - `SANDBOX_CHAIN`
+  - `LIVE_DISABLED`
+- execution modes:
+  - `PAPER`
+  - `SHADOW_SIGN`
+  - `SANDBOX_CHAIN`
+  - `LIVE_DISABLED`
+- review queue bloccante con rationale modello/operatore
+- settlement lane separata dal ciclo decisionale
+- sandbox transaction rehearsal lane con reconcile/resubmit-safe
+- persistenza operativa SQLite + artefatti JSONL append-only
+- observability operativa (`healthcheck`, `status`, metriche, audit events)
+- release gate beta-live (quality + smoke + acceptance)
+- **operator UI minima (control-plane)**, limitata a:
+  - visualizzazione stato runtime, queue, posizioni, tx
+  - azioni operatore gia previste dal runtime (review/tx/pause-resume)
+  - nessuna logica decisionale nel layer UI
 
 ## Out-of-scope
 
-- trading live, gestione fondi reali, wallet signing, ordine su venue reale
-- training online nel runtime
-- auto-tuning in produzione
-- dashboard operativa completa e control-plane UI
-- scheduler 24/7 production-grade con HA
-- multi-venue routing e smart order execution
-- persistence production DB con migrazioni complete
-- alerting enterprise (on-call paging, escalation automatica)
+- venue live execution e gestione fondi reali
+- bypass di risk/review guardrails
+- training online e auto-tuning nel runtime
+- smart order routing multi-venue
+- workflow UI non auditabili
+- funzionalita UI che implementano prediction/risk/execution logic
 
 ## Assunzioni operative
 
-- runtime in `dry-run` obbligatorio
 - `feature_flags.allow_live_execution` resta `false`
-- nessun import runtime da codice legacy
-- una sola source of truth config:
-  - `config/app.yaml`
-  - `config/agents.yaml`
-- ogni run produce artefatti persistiti e correlabili con `run_id`
-- operatori eseguono run manuali o schedule controllato, non autopilot live
-- timezone e timestamp tracciati in UTC nei payload operativi
+- review bloccante attiva in `PAPER_LIVE` e `SANDBOX_CHAIN`
+- sandbox-chain usata come rehearsal lane transazionale, non come trading lane
+- ogni run e azione operatore resta correlabile tramite `run_id`
+- runtime e UI condividono la stessa source of truth operativa (backend runtime + storage)
 
 ## Rischi principali
 
-- gap tra comportamento simulato e venue reale (fill, slippage, latency)
-- bias da sorgenti mock o incomplete
-- overconfidence da metriche positive in ambiente sintetico
-- configurazioni non allineate che degradano la decision quality
-- degradazione architetturale se si bypassano ports/adapters
-- rottura audit trail se la persistenza fallisce o e incompleta
+- disallineamento tra runtime e UI se i contratti non restano stabili
+- deriva della UI verso business logic non prevista
+- gap tra comportamento paper/sandbox e venue reali
+- code review/settlement in accumulo senza adeguata operativita giornaliera
 
-## Release gates (Go/No-Go beta)
+## Release gates (Go/No-Go)
 
 Una release beta e promuovibile solo se tutti i gate sono verdi:
 
-1. **Qualita codice**
-- test suite verde (`pytest`)
-- type-check verde (`mypy`)
-- nessuna regressione nota su orchestrazione end-to-end
-
-2. **Integrita pipeline**
-- run dry-run completa senza crash
-- `PipelineSummary` coerente con gli artefatti prodotti
-- stage logs presenti per tutti gli step chiave
-
-3. **Audit e persistenza**
-- scrittura JSONL riuscita per tutte le classi artefatto
-- audit events persistiti con `run_id`
-- assenza di payload critici mancanti nei record
-
-4. **Safety guardrails**
-- live execution disabilitata e verificata
-- blocchi rischio attivi (edge/confidence/min bet/caps)
-- postmortem prodotto per outcome non favorevoli
+1. quality (`lint`, `typecheck`, test base)
+2. smoke dry-run
+3. smoke beta-live (provider mocked + sandbox lane)
+4. beta-live acceptance suite
+5. startup validation e healthcheck coerenti in staging
 
 ## Criteri di uscita dalla beta
 
-La beta si considera conclusa quando:
-
-- stabilita operativa dimostrata su una finestra continua di run dry-run
-- rischio e explainability risultano coerenti su casi eterogenei
-- backlog delle issue bloccanti beta e chiuso
-- esiste piano approvato per introdurre adapter reali in fase successiva
+- stabilita operativa dimostrata su finestra continua di run
+- coda review/settlement/tx gestibile con workflow operatore
+- UI minima control-plane validata senza introdurre logica di business
+- piano approvato per eventuali step successivi (auth/RBAC, hardening, incident tooling)

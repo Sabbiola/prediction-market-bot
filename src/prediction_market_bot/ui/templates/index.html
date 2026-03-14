@@ -1,0 +1,596 @@
+{% extends "base.html" %}
+
+{% macro render_chart(points) -%}
+{% if points %}
+<table>
+  <thead>
+    <tr>
+      <th>Metric</th>
+      <th>Value</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for point in points %}
+    <tr>
+      <td>{{ point.label }}</td>
+      <td>{{ "%.2f"|format(point.value) }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p style="margin: 0.8rem 0 0; color: #94a3b8;">No chart data available.</p>
+{% endif %}
+{%- endmacro %}
+
+{% block content %}
+<h1 style="margin-top: 0;">Operator Control Plane</h1>
+
+<section class="card" style="margin-bottom: 1rem;">
+  <div class="label">Run Selection</div>
+  {% if run_selector_error %}
+  <div class="value warn">{{ run_selector_error }}</div>
+  {% else %}
+  <form method="get" action="/" class="actions" style="margin-top: 0.6rem;">
+    <select name="run_id" id="run-selector" style="border: 1px solid #334155; background: #0b1220; color: #e5e7eb; border-radius: 8px; padding: 0.45rem 0.7rem; min-width: 320px;">
+      {% if run_selector.available %}
+        {% for option in run_selector.options %}
+        <option value="{{ option.run_id }}" {% if option.run_id == run_selector.selected_run_id %}selected{% endif %}>{{ option.label }}</option>
+        {% endfor %}
+      {% else %}
+      <option value="">No runs available</option>
+      {% endif %}
+    </select>
+    <button type="submit">Load Run</button>
+  </form>
+  <p style="margin: 0.6rem 0 0; color: #94a3b8;">
+    Selected: <strong>{{ run_selector.selected_run_id or "n/a" }}</strong> |
+    Latest: <strong>{{ run_selector.latest_run_id or "n/a" }}</strong>
+  </p>
+  {% endif %}
+</section>
+
+<div class="tabs">
+  <button class="tab-btn" data-tab-btn="overview">Overview</button>
+  <button class="tab-btn" data-tab-btn="scanner">Scanner</button>
+  <button class="tab-btn" data-tab-btn="research">Research</button>
+  <button class="tab-btn" data-tab-btn="prediction">Prediction</button>
+  <button class="tab-btn" data-tab-btn="risk">Risk</button>
+  <button class="tab-btn" data-tab-btn="review-queue">Review Queue</button>
+  <button class="tab-btn" data-tab-btn="execution">Execution</button>
+  <button class="tab-btn" data-tab-btn="settlement">Settlement</button>
+  <button class="tab-btn" data-tab-btn="sandbox-tx">Sandbox TX</button>
+  <button class="tab-btn" data-tab-btn="reports">Reports</button>
+  <button class="tab-btn" data-tab-btn="system">System/Health</button>
+</div>
+
+<section class="tab-panel" data-tab-panel="overview">
+  {% if overview_error %}
+  <article class="card"><div class="value warn">{{ overview_error }}</div></article>
+  {% else %}
+  <p style="color: #94a3b8; margin-top: -0.35rem;">
+    Runtime mode: <strong>{{ overview.runtime_mode }}</strong> |
+    Execution mode: <strong>{{ overview.execution_mode }}</strong> |
+    Last run: <strong>{{ overview.last_run.run_id or "n/a" }}</strong>
+  </p>
+  {% if overview.incident_banners %}
+  <section style="margin: 0.8rem 0 1rem;">
+    {% for banner in overview.incident_banners %}
+    <article class="card" style="margin-top: 0.6rem; border-color: {% if banner.level == 'danger' %}#7f1d1d{% elif banner.level == 'warning' %}#78350f{% else %}#1e3a8a{% endif %};">
+      <div class="label">{{ banner.code }}</div>
+      <div class="value {% if banner.level == 'danger' %}danger{% elif banner.level == 'warning' %}warn{% else %}ok{% endif %}">{{ banner.title }}</div>
+      <p style="margin: 0.55rem 0 0;">{{ banner.detail }}</p>
+      <p style="margin: 0.35rem 0 0; color: #94a3b8;">Action: {{ banner.recommendation }}</p>
+    </article>
+    {% endfor %}
+  </section>
+  {% endif %}
+  <section class="grid">
+    <article class="card"><div class="label">Live Source Failures</div><div class="value {% if overview.live_source_failures_total > 0 %}warn{% endif %}">{{ overview.live_source_failures_total }}</div></article>
+    <article class="card"><div class="label">Review Queue Depth</div><div class="value {% if overview.review_queue_depth > 0 %}warn{% endif %}">{{ overview.review_queue_depth }}</div></article>
+    <article class="card"><div class="label">Open Positions</div><div class="value">{{ overview.open_positions_count }}</div></article>
+    <article class="card"><div class="label">Pending Settlements</div><div class="value {% if overview.pending_settlements_count > 0 %}warn{% endif %}">{{ overview.pending_settlements_count }}</div></article>
+    <article class="card"><div class="label">Tx Pending/Mined/Failed</div><div class="value {% if overview.tx_failed_count > 0 %}danger{% endif %}">{{ overview.tx_pending_count }} / {{ overview.tx_mined_count }} / {{ overview.tx_failed_count }}</div></article>
+    <article class="card"><div class="label">Stale Data Events / Blocks</div><div class="value {% if overview.stale_data_events_total > 0 or overview.stale_data_blocked_trades_total > 0 %}warn{% endif %}">{{ overview.stale_data_events_total }} / {{ overview.stale_data_blocked_trades_total }}</div></article>
+  </section>
+
+  <section style="margin-top: 1.25rem;" class="card">
+    <div class="label">Last Run Summary</div>
+    <div class="value {% if overview.last_run.available %}ok{% else %}warn{% endif %}">{{ overview.last_run.status }}</div>
+    <table>
+      <thead><tr><th>Run ID</th><th>Markets</th><th>Candidates</th><th>Executed</th><th>Settled</th></tr></thead>
+      <tbody><tr><td>{{ overview.last_run.run_id or "n/a" }}</td><td>{{ overview.last_run.total_markets }}</td><td>{{ overview.last_run.candidates }}</td><td>{{ overview.last_run.executed }}</td><td>{{ overview.last_run.settled }}</td></tr></tbody>
+    </table>
+    <p style="margin: 0.6rem 0 0;">Note: <strong>{{ overview.last_run.note }}</strong></p>
+  </section>
+
+  <section style="margin-top: 1.25rem;" class="card">
+    <div class="label">Counters</div>
+    {{ render_chart(overview.counters_chart) }}
+  </section>
+
+  <section style="margin-top: 1.25rem;" class="card">
+    <div class="label">Incident / Event Feed (Audit)</div>
+    {% if overview.incidents_feed %}
+    <table>
+      <thead><tr><th>Time</th><th>Severity</th><th>Run</th><th>Event</th><th>Summary</th></tr></thead>
+      <tbody>
+        {% for row in overview.incidents_feed %}
+        <tr><td>{{ row.timestamp }}</td><td>{{ row.severity }}</td><td>{{ row.run_id or "n/a" }}</td><td>{{ row.event_type }}</td><td>{{ row.summary }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p style="margin: 0.8rem 0 0; color: #94a3b8;">No incident events available for the selected scope.</p>
+    {% endif %}
+  </section>
+
+  <section style="margin-top: 1.25rem;" class="card">
+    <div class="label">Operator Actions (POST)</div>
+    <div class="actions">
+      <input id="run-id-input" type="text" placeholder="optional run_id">
+      <button id="action-run-once" type="button">Run Once</button>
+      <input id="pause-reason-input" type="text" placeholder="pause reason">
+      <button id="action-pause" type="button">Pause</button>
+      <button id="action-resume" type="button">Resume</button>
+    </div>
+    <div id="action-log" class="event-log"></div>
+  </section>
+  {% endif %}
+</section>
+
+<section class="tab-panel" data-tab-panel="scanner">
+  {% if scanner_error %}
+  <article class="card"><div class="value warn">{{ scanner_error }}</div></article>
+  {% elif not scanner.available %}
+  <article class="card"><div class="label">Scanner</div><div class="value warn">No scanner data for selected run.</div><p>{{ scanner.note }}</p></article>
+  {% else %}
+  <section class="grid">
+    <article class="card"><div class="label">Total Markets</div><div class="value">{{ scanner.total_markets }}</div></article>
+    <article class="card"><div class="label">Candidates</div><div class="value">{{ scanner.candidates_count }}</div></article>
+    <article class="card"><div class="label">Avg Scan Score</div><div class="value">{{ "%.4f"|format(scanner.avg_scan_score) }}</div></article>
+  </section>
+  <section class="card" style="margin-top: 1rem;"><div class="label">Top Reasons</div>{{ render_chart(scanner.top_reasons) }}</section>
+  <section class="card" style="margin-top: 1rem;">
+    <div class="label">Candidates</div>
+    <table>
+      <thead><tr><th>Market</th><th>Title</th><th>Category</th><th>Score</th><th>Liquidity</th><th>Volume24h</th><th>Spread bps</th><th>Hours to Resolution</th><th>Reasons</th></tr></thead>
+      <tbody>
+        {% for row in scanner.candidates %}
+        <tr><td>{{ row.market_id }}</td><td>{{ row.title }}</td><td>{{ row.category }}</td><td>{{ "%.4f"|format(row.scan_score) }}</td><td>{{ "%.2f"|format(row.liquidity_usd) }}</td><td>{{ "%.2f"|format(row.volume_24h_usd) }}</td><td>{{ row.spread_bps }}</td><td>{{ "%.2f"|format(row.hours_to_resolution) }}</td><td>{{ row.reasons|join(", ") }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+</section>
+
+<section class="tab-panel" data-tab-panel="research">
+  {% if research_error %}
+  <article class="card"><div class="value warn">{{ research_error }}</div></article>
+  {% elif not research.available %}
+  <article class="card"><div class="label">Research</div><div class="value warn">No research data for selected run.</div><p>{{ research.note }}</p></article>
+  {% else %}
+  <section class="grid">
+    <article class="card"><div class="label">Packets</div><div class="value">{{ research.packets_count }}</div></article>
+    <article class="card"><div class="label">Findings</div><div class="value">{{ research.findings_count }}</div></article>
+    <article class="card"><div class="label">Avg Evidence</div><div class="value">{{ "%.4f"|format(research.avg_evidence_strength) }}</div></article>
+    <article class="card"><div class="label">Avg Disagreement</div><div class="value">{{ "%.4f"|format(research.avg_disagreement_score) }}</div></article>
+  </section>
+  <section class="card" style="margin-top: 1rem;"><div class="label">Source Distribution</div>{{ render_chart(research.source_type_distribution) }}</section>
+  <section class="card" style="margin-top: 1rem;">
+    <div class="label">Research Packets</div>
+    <table>
+      <thead><tr><th>Market</th><th>Findings</th><th>Evidence</th><th>Disagreement</th><th>Weighted Sentiment</th><th>Source Types</th><th>Narrative</th></tr></thead>
+      <tbody>
+        {% for row in research.packets %}
+        <tr><td>{{ row.market_id }}</td><td>{{ row.findings_count }}</td><td>{{ "%.4f"|format(row.evidence_strength) }}</td><td>{{ "%.4f"|format(row.disagreement_score) }}</td><td>{{ "%.4f"|format(row.weighted_sentiment) }}</td><td>{{ row.source_types|join(", ") }}</td><td>{{ row.narrative_summary }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+</section>
+
+<section class="tab-panel" data-tab-panel="prediction">
+  {% if prediction_error %}
+  <article class="card"><div class="value warn">{{ prediction_error }}</div></article>
+  {% elif not prediction.available %}
+  <article class="card"><div class="label">Prediction</div><div class="value warn">No prediction data for selected run.</div><p>{{ prediction.note }}</p></article>
+  {% else %}
+  <section class="grid">
+    <article class="card"><div class="label">Predictions</div><div class="value">{{ prediction.predictions_count }}</div></article>
+    <article class="card"><div class="label">Avg Confidence</div><div class="value">{{ "%.4f"|format(prediction.avg_confidence) }}</div></article>
+    <article class="card"><div class="label">Avg Edge (bps)</div><div class="value">{{ "%.2f"|format(prediction.avg_edge_bps) }}</div></article>
+  </section>
+  <section class="card" style="margin-top: 1rem;"><div class="label">Side Distribution</div>{{ render_chart(prediction.side_distribution) }}</section>
+  <section class="card" style="margin-top: 1rem;">
+    <div class="label">Prediction Rows</div>
+    <table>
+      <thead><tr><th>Market</th><th>Side</th><th>Market YES</th><th>Fair YES</th><th>Edge bps</th><th>Confidence</th><th>Rationale</th></tr></thead>
+      <tbody>
+        {% for row in prediction.rows %}
+        <tr><td>{{ row.market_id }}</td><td>{{ row.selected_side }}</td><td>{{ "%.4f"|format(row.market_yes_prob) }}</td><td>{{ "%.4f"|format(row.fair_yes_prob) }}</td><td>{{ "%.2f"|format(row.edge_bps) }}</td><td>{{ "%.4f"|format(row.confidence) }}</td><td>{{ row.rationale|join(" | ") }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+</section>
+
+<section class="tab-panel" data-tab-panel="risk">
+  {% if risk_error %}
+  <article class="card"><div class="value warn">{{ risk_error }}</div></article>
+  {% elif not risk.available %}
+  <article class="card"><div class="label">Risk</div><div class="value warn">No risk data for selected run.</div><p>{{ risk.note }}</p></article>
+  {% else %}
+  <section class="grid">
+    <article class="card"><div class="label">Decisions</div><div class="value">{{ risk.decisions_count }}</div></article>
+    <article class="card"><div class="label">Approved</div><div class="value ok">{{ risk.approved_count }}</div></article>
+    <article class="card"><div class="label">Blocked</div><div class="value warn">{{ risk.blocked_count }}</div></article>
+    <article class="card"><div class="label">Avg Stake USD</div><div class="value">{{ "%.2f"|format(risk.avg_stake_usd) }}</div></article>
+  </section>
+  <section class="card" style="margin-top: 1rem;"><div class="label">Reason Codes</div>{{ render_chart(risk.reason_code_distribution) }}</section>
+  <section class="card" style="margin-top: 1rem;">
+    <div class="label">Risk Rows</div>
+    <table>
+      <thead><tr><th>Market</th><th>Approved</th><th>Side</th><th>Stake USD</th><th>Bankroll Fraction</th><th>Fractional Kelly</th><th>Reasoning</th></tr></thead>
+      <tbody>
+        {% for row in risk.rows %}
+        <tr><td>{{ row.market_id }}</td><td>{% if row.approved %}YES{% else %}NO{% endif %}</td><td>{{ row.side }}</td><td>{{ "%.2f"|format(row.stake_usd) }}</td><td>{{ "%.4f"|format(row.bankroll_fraction) }}</td><td>{{ "%.4f"|format(row.fractional_kelly) }}</td><td>{{ row.reasoning|join(" | ") }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+</section>
+
+<section class="tab-panel" data-tab-panel="review-queue">
+  {% if review_queue_error %}
+  <article class="card"><div class="value warn">{{ review_queue_error }}</div></article>
+  {% elif not review_queue.available %}
+  <article class="card"><div class="label">Review Queue</div><div class="value warn">No review candidates available.</div><p>{{ review_queue.note }}</p></article>
+  {% else %}
+  <section class="grid">
+    <article class="card"><div class="label">Pending</div><div class="value warn">{{ review_queue.pending_count }}</div></article>
+    <article class="card"><div class="label">Approved</div><div class="value ok">{{ review_queue.approved_count }}</div></article>
+    <article class="card"><div class="label">Rejected</div><div class="value">{{ review_queue.rejected_count }}</div></article>
+    <article class="card"><div class="label">Expired</div><div class="value">{{ review_queue.expired_count }}</div></article>
+  </section>
+
+  <section class="card" style="margin-top: 1rem;">
+    <div class="label">Filters</div>
+    <form method="get" action="/" class="actions">
+      <input type="hidden" name="run_id" value="{{ run_selector.selected_run_id }}">
+      <input type="hidden" name="active_tab" value="review-queue">
+      <input type="hidden" name="review_queue_id" value="">
+      <select name="review_status" style="border: 1px solid #334155; background: #0b1220; color: #e5e7eb; border-radius: 8px; padding: 0.45rem 0.7rem; min-width: 240px;">
+        {% for status_opt in review_queue.status_filters %}
+        <option value="{{ status_opt }}" {% if status_opt == review_queue.active_status_filter %}selected{% endif %}>{{ status_opt }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit">Apply Filter</button>
+    </form>
+  </section>
+
+  <section class="card" style="margin-top: 1rem;">
+    <div class="label">Candidates</div>
+    <table>
+      <thead><tr><th>Queue ID</th><th>Run</th><th>Market</th><th>Status</th><th>Side</th><th>Stake USD</th><th>Confidence</th><th>Edge bps</th><th>Updated</th></tr></thead>
+      <tbody>
+        {% for row in review_queue.rows %}
+        <tr>
+          <td><a href="/?run_id={{ run_selector.selected_run_id }}&active_tab=review-queue&review_status={{ review_queue.active_status_filter }}&review_queue_id={{ row.queue_id }}">{{ row.queue_id }}</a></td>
+          <td>{{ row.run_id }}</td>
+          <td>{{ row.market_id }}</td>
+          <td>{{ row.status }}</td>
+          <td>{{ row.side }}</td>
+          <td>{{ "%.2f"|format(row.stake_usd) }}</td>
+          <td>{{ "%.4f"|format(row.confidence) }}</td>
+          <td>{{ "%.2f"|format(row.edge_bps) }}</td>
+          <td>{{ row.updated_at }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  {% if review_queue.selected_item %}
+  <section class="card" style="margin-top: 1rem;">
+    <div class="label">Candidate Detail</div>
+    <p style="margin: 0.4rem 0 0;">queue_id=<code>{{ review_queue.selected_item.queue_id }}</code></p>
+    <p style="margin: 0.4rem 0 0;">market_id=<code>{{ review_queue.selected_item.market_id }}</code> status=<strong>{{ review_queue.selected_item.status }}</strong></p>
+    <p style="margin: 0.4rem 0 0;">model rationale: {{ review_queue.selected_item.model_rationale|join(" | ") }}</p>
+    <p style="margin: 0.4rem 0 0;">prediction rationale: {{ review_queue.selected_item.prediction_rationale|join(" | ") }}</p>
+    <p style="margin: 0.4rem 0 0;">risk rationale: {{ review_queue.selected_item.risk_rationale|join(" | ") }}</p>
+    <p style="margin: 0.4rem 0 0;">operator rationale: {{ review_queue.selected_item.operator_rationale or "n/a" }}</p>
+    {% if review_queue.selected_item.notes %}
+    <p style="margin: 0.4rem 0 0;">notes: {{ review_queue.selected_item.notes|join(" | ") }}</p>
+    {% endif %}
+  </section>
+
+  <section class="card" style="margin-top: 1rem;">
+    <div class="label">Operator Decision</div>
+    <div class="actions">
+      <input id="review-queue-id" type="text" value="{{ review_queue.selected_item.queue_id }}" placeholder="queue_id">
+      <input id="review-operator-id" type="text" placeholder="operator_id">
+      <input id="review-rationale" type="text" placeholder="operator rationale">
+      <input id="review-note" type="text" placeholder="optional note">
+      <button id="action-review-approve" type="button" {% if not review_queue.selected_item.can_approve %}disabled{% endif %}>Approve</button>
+      <button id="action-review-reject" type="button" {% if not review_queue.selected_item.can_reject %}disabled{% endif %}>Reject</button>
+    </div>
+    <div id="review-action-log" class="event-log"></div>
+  </section>
+  {% endif %}
+
+  <section class="card" style="margin-top: 1rem;">
+    <div class="label">Recent Review Actions (Audit)</div>
+    {% if review_queue.recent_action_logs %}
+    <table>
+      <thead><tr><th>Time</th><th>Action</th><th>Status</th><th>Accepted</th><th>Queue</th><th>Operator</th><th>Acting User</th><th>Role</th><th>Message</th></tr></thead>
+      <tbody>
+        {% for row in review_queue.recent_action_logs %}
+        <tr><td>{{ row.created_at }}</td><td>{{ row.action }}</td><td>{{ row.status }}</td><td>{{ row.accepted }}</td><td>{{ row.queue_id }}</td><td>{{ row.operator_id }}</td><td>{{ row.acting_user }}</td><td>{{ row.acting_role }}</td><td>{{ row.message }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p style="margin: 0.8rem 0 0; color: #94a3b8;">No review action logs yet.</p>
+    {% endif %}
+  </section>
+  {% endif %}
+</section>
+
+<section class="tab-panel" data-tab-panel="execution">
+  {% if execution_error %}
+  <article class="card"><div class="value warn">{{ execution_error }}</div></article>
+  {% elif not execution.available %}
+  <article class="card"><div class="label">Execution</div><div class="value warn">No execution data for selected run.</div><p>{{ execution.note }}</p></article>
+  {% else %}
+  <section class="grid">
+    <article class="card"><div class="label">Intents</div><div class="value">{{ execution.intents_count }}</div></article>
+    <article class="card"><div class="label">Executions</div><div class="value">{{ execution.executions_count }}</div></article>
+  </section>
+  <section class="card" style="margin-top: 1rem;"><div class="label">Status Distribution</div>{{ render_chart(execution.status_distribution) }}</section>
+  <section class="card" style="margin-top: 1rem;">
+    <div class="label">Execution Rows</div>
+    <table>
+      <thead><tr><th>Market</th><th>Status</th><th>Side</th><th>Stake USD</th><th>Fill Price</th><th>Order ID</th><th>Mode</th><th>Intent Rationale</th><th>Message</th></tr></thead>
+      <tbody>
+        {% for row in execution.rows %}
+        <tr><td>{{ row.market_id }}</td><td>{{ row.status }}</td><td>{{ row.side }}</td><td>{{ "%.2f"|format(row.stake_usd) }}</td><td>{% if row.fill_price is none %}n/a{% else %}{{ "%.4f"|format(row.fill_price) }}{% endif %}</td><td>{{ row.order_id }}</td><td>{{ row.execution_mode }}</td><td>{{ row.intent_rationale }}</td><td>{{ row.message }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+</section>
+
+<section class="tab-panel" data-tab-panel="settlement">
+  {% if settlement_error %}
+  <article class="card"><div class="value warn">{{ settlement_error }}</div></article>
+  {% elif not settlement.available %}
+  <article class="card"><div class="label">Settlement</div><div class="value warn">No settlement data for selected run.</div><p>{{ settlement.note }}</p></article>
+  {% else %}
+  <section class="grid">
+    <article class="card"><div class="label">Pending Requests</div><div class="value">{{ settlement.pending_requests_count }}</div></article>
+    <article class="card"><div class="label">Resolution Checks</div><div class="value">{{ settlement.resolution_checks_count }}</div></article>
+    <article class="card"><div class="label">Settled</div><div class="value">{{ settlement.settled_count }}</div></article>
+  </section>
+  <section class="card" style="margin-top: 1rem;"><div class="label">Outcome Distribution</div>{{ render_chart(settlement.outcome_distribution) }}</section>
+  <section class="card" style="margin-top: 1rem;">
+    <div class="label">Settlement Rows</div>
+    <table>
+      <thead><tr><th>Market</th><th>Outcome</th><th>Resolved YES</th><th>PnL USD</th><th>Execution Side</th><th>Resolution Reason</th></tr></thead>
+      <tbody>
+        {% for row in settlement.rows %}
+        <tr><td>{{ row.market_id }}</td><td>{{ row.outcome_classification }}</td><td>{{ row.resolved_yes }}</td><td>{{ "%.2f"|format(row.pnl_usd) }}</td><td>{{ row.execution_side }}</td><td>{{ row.resolution_reason }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+</section>
+
+<section class="tab-panel" data-tab-panel="sandbox-tx">
+  {% if sandbox_tx_error %}
+  <article class="card"><div class="value warn">{{ sandbox_tx_error }}</div></article>
+  {% elif not sandbox_tx.available %}
+  <article class="card"><div class="label">Sandbox TX</div><div class="value warn">No sandbox tx data for selected run.</div><p>{{ sandbox_tx.note }}</p></article>
+  {% else %}
+  <section class="grid">
+    <article class="card"><div class="label">Attempts</div><div class="value">{{ sandbox_tx.attempts_count }}</div></article>
+    <article class="card"><div class="label">Receipts</div><div class="value">{{ sandbox_tx.receipts_count }}</div></article>
+    <article class="card"><div class="label">Resubmit Safe</div><div class="value {% if sandbox_tx.can_resubmit_safe %}ok{% else %}warn{% endif %}">{{ sandbox_tx.can_resubmit_safe }}</div></article>
+    <article class="card"><div class="label">Action Hint</div><div class="value">{{ sandbox_tx.action_hint }}</div></article>
+  </section>
+  <section class="card" style="margin-top: 1rem;"><div class="label">Confirmation Distribution</div>{{ render_chart(sandbox_tx.confirmation_distribution) }}</section>
+
+  <section class="card" style="margin-top: 1rem;">
+    <div class="label">Transaction Statuses</div>
+    <table>
+      <thead><tr><th>Intent ID</th><th>Market</th><th>Side</th><th>Mode</th><th>Status</th><th>Tx Hash</th><th>Nonce</th><th>Retry</th><th>Replacement</th><th>Replaced By</th><th>Message</th></tr></thead>
+      <tbody>
+        {% for row in sandbox_tx.rows %}
+        <tr>
+          <td><a href="/?run_id={{ run_selector.selected_run_id }}&active_tab=sandbox-tx&tx_intent_id={{ row.intent_id }}">{{ row.intent_id }}</a></td>
+          <td>{{ row.market_id }}</td>
+          <td>{{ row.side }}</td>
+          <td>{{ row.execution_mode }}</td>
+          <td>{{ row.confirmation_status }}</td>
+          <td>{{ row.tx_hash }}</td>
+          <td>{{ row.nonce if row.nonce is not none else "n/a" }}</td>
+          <td>{{ row.retry_count }}</td>
+          <td>{{ row.replacement_for_tx_hash }}</td>
+          <td>{{ row.replaced_by_tx_hash }}</td>
+          <td>{{ row.message }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  {% if sandbox_tx.selected_intent %}
+  <section class="card" style="margin-top: 1rem;">
+    <div class="label">Intent Detail</div>
+    <p style="margin: 0.4rem 0 0;">intent_id=<code>{{ sandbox_tx.selected_intent.intent_id }}</code></p>
+    <p style="margin: 0.4rem 0 0;">run_id=<code>{{ sandbox_tx.selected_intent.run_id }}</code> market_id=<code>{{ sandbox_tx.selected_intent.market_id }}</code></p>
+    <p style="margin: 0.4rem 0 0;">review_queue_id=<code>{{ sandbox_tx.selected_intent.review_queue_id }}</code></p>
+    <p style="margin: 0.4rem 0 0;">venue={{ sandbox_tx.selected_intent.venue }} side={{ sandbox_tx.selected_intent.side }} stake_usd={{ "%.2f"|format(sandbox_tx.selected_intent.stake_usd) }} limit_price={{ "%.4f"|format(sandbox_tx.selected_intent.limit_price) }}</p>
+    <p style="margin: 0.4rem 0 0;">rationale={{ sandbox_tx.selected_intent.rationale }}</p>
+  </section>
+  {% endif %}
+
+  <section class="card" style="margin-top: 1rem;">
+    <div class="label">Operator Actions</div>
+    <div class="actions">
+      <input id="tx-run-id" type="text" value="{{ sandbox_tx.run_selector.selected_run_id }}" placeholder="run_id">
+      <input id="tx-intent-id" type="text" value="{{ sandbox_tx.active_intent_id }}" placeholder="intent_id">
+      <input id="tx-limit" type="text" value="100" placeholder="limit">
+      <button id="action-tx-reconcile" type="button" {% if not sandbox_tx.can_reconcile %}disabled{% endif %}>Reconcile</button>
+      <button id="action-tx-resubmit-safe" type="button" {% if not sandbox_tx.can_resubmit_safe %}disabled{% endif %}>Safe Resubmit</button>
+    </div>
+    <div id="tx-action-log" class="event-log"></div>
+  </section>
+
+  <section class="card" style="margin-top: 1rem;">
+    <div class="label">Attempt Timeline</div>
+    {% if sandbox_tx.attempt_timeline %}
+    <table>
+      <thead><tr><th>Submitted At</th><th>Status</th><th>Confirmation</th><th>Tx Hash</th><th>Nonce</th><th>Retry</th><th>Replacement</th><th>Replaced By</th><th>Message</th></tr></thead>
+      <tbody>
+        {% for row in sandbox_tx.attempt_timeline %}
+        <tr><td>{{ row.submitted_at }}</td><td>{{ row.status }}</td><td>{{ row.confirmation_status }}</td><td>{{ row.tx_hash }}</td><td>{{ row.nonce if row.nonce is not none else "n/a" }}</td><td>{{ row.retry_count }}</td><td>{{ row.replacement_for_tx_hash }}</td><td>{{ row.replaced_by_tx_hash }}</td><td>{{ row.message }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p style="margin: 0.8rem 0 0; color: #94a3b8;">No attempts for selected intent.</p>
+    {% endif %}
+  </section>
+
+  <section class="card" style="margin-top: 1rem;">
+    <div class="label">Receipt Timeline</div>
+    {% if sandbox_tx.receipt_timeline %}
+    <table>
+      <thead><tr><th>Submitted At</th><th>Confirmed At</th><th>Status</th><th>Confirmation</th><th>Tx Hash</th><th>Nonce</th><th>Order ID</th><th>Message</th></tr></thead>
+      <tbody>
+        {% for row in sandbox_tx.receipt_timeline %}
+        <tr><td>{{ row.submitted_at }}</td><td>{{ row.confirmed_at }}</td><td>{{ row.status }}</td><td>{{ row.confirmation_status }}</td><td>{{ row.tx_hash }}</td><td>{{ row.nonce if row.nonce is not none else "n/a" }}</td><td>{{ row.order_id }}</td><td>{{ row.message }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p style="margin: 0.8rem 0 0; color: #94a3b8;">No receipts for selected intent.</p>
+    {% endif %}
+  </section>
+
+  <section class="card" style="margin-top: 1rem;">
+    <div class="label">Recent TX Actions (Audit)</div>
+    {% if sandbox_tx.recent_action_logs %}
+    <table>
+      <thead><tr><th>Time</th><th>Action</th><th>Status</th><th>Accepted</th><th>Intent</th><th>Acting User</th><th>Role</th><th>Message</th></tr></thead>
+      <tbody>
+        {% for row in sandbox_tx.recent_action_logs %}
+        <tr><td>{{ row.created_at }}</td><td>{{ row.action }}</td><td>{{ row.status }}</td><td>{{ row.accepted }}</td><td>{{ row.intent_id }}</td><td>{{ row.acting_user }}</td><td>{{ row.acting_role }}</td><td>{{ row.message }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p style="margin: 0.8rem 0 0; color: #94a3b8;">No tx action logs yet.</p>
+    {% endif %}
+  </section>
+  {% endif %}
+</section>
+
+<section class="tab-panel" data-tab-panel="reports">
+  {% if reports_error %}
+  <article class="card"><div class="value warn">{{ reports_error }}</div></article>
+  {% elif not reports.available %}
+  <article class="card"><div class="label">Reports</div><div class="value warn">No replay/report data for selected run.</div><p>{{ reports.note }}</p></article>
+  {% else %}
+  <section class="grid">
+    <article class="card"><div class="label">Run ID</div><div class="value">{{ reports.run_id }}</div></article>
+    <article class="card"><div class="label">Markets/Candidates</div><div class="value">{{ reports.total_markets }} / {{ reports.candidates }}</div></article>
+    <article class="card"><div class="label">Executed/Settled</div><div class="value">{{ reports.executed }} / {{ reports.settled }}</div></article>
+    <article class="card"><div class="label">Wins/Losses/Skipped</div><div class="value">{{ reports.wins }} / {{ reports.losses }} / {{ reports.skipped }}</div></article>
+  </section>
+  <section class="card" style="margin-top: 1rem;"><div class="label">Artifact Counts</div>{{ render_chart(reports.artifact_counts) }}</section>
+  <section class="card" style="margin-top: 1rem;"><div class="label">Stage Timings (ms)</div>{{ render_chart(reports.stage_timings_ms) }}</section>
+  <section class="card" style="margin-top: 1rem;"><div class="label">Failure Categories</div>{{ render_chart(reports.failure_categories) }}</section>
+  <section class="card" style="margin-top: 1rem;">
+    <div class="label">Report Paths</div>
+    <p style="margin: 0.4rem 0 0;">Markdown: <code>{{ reports.report_markdown_path or "n/a" }}</code></p>
+    <p style="margin: 0.4rem 0 0;">JSON: <code>{{ reports.report_json_path or "n/a" }}</code></p>
+  </section>
+  <section class="card" style="margin-top: 1rem;">
+    <div class="label">Replay / Evaluation Shortcuts</div>
+    <table>
+      <thead><tr><th>Operation</th><th>Description</th><th>Command</th></tr></thead>
+      <tbody>
+        <tr><td>{{ reports.replay_shortcut.label }}</td><td>{{ reports.replay_shortcut.description }}</td><td><code>{{ reports.replay_shortcut.command }}</code></td></tr>
+        <tr><td>{{ reports.generate_report_shortcut.label }}</td><td>{{ reports.generate_report_shortcut.description }}</td><td><code>{{ reports.generate_report_shortcut.command }}</code></td></tr>
+        <tr><td>{{ reports.eval_run_shortcut.label }}</td><td>{{ reports.eval_run_shortcut.description }}</td><td><code>{{ reports.eval_run_shortcut.command }}</code></td></tr>
+        <tr><td>{{ reports.eval_window_shortcut.label }}</td><td>{{ reports.eval_window_shortcut.description }}</td><td><code>{{ reports.eval_window_shortcut.command }}</code></td></tr>
+      </tbody>
+    </table>
+  </section>
+  <section class="card" style="margin-top: 1rem;">
+    <div class="label">Report Incidents / Events</div>
+    {% if reports.incidents_feed %}
+    <table>
+      <thead><tr><th>Time</th><th>Severity</th><th>Event</th><th>Summary</th></tr></thead>
+      <tbody>
+        {% for row in reports.incidents_feed %}
+        <tr><td>{{ row.timestamp }}</td><td>{{ row.severity }}</td><td>{{ row.event_type }}</td><td>{{ row.summary }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p style="margin: 0.8rem 0 0; color: #94a3b8;">No incident events found for selected run.</p>
+    {% endif %}
+  </section>
+  {% endif %}
+</section>
+
+<section class="tab-panel" data-tab-panel="system">
+  {% if system_error %}
+  <article class="card"><div class="value warn">{{ system_error }}</div></article>
+  {% else %}
+  <section class="grid">
+    <article class="card">
+      <div class="label">Startup Validation</div>
+      <div class="value {% if system.startup_validation.ok %}ok{% else %}danger{% endif %}">{% if system.startup_validation.ok %}OK{% else %}FAILED{% endif %}</div>
+      <p style="margin: 0.6rem 0 0;">errors={{ system.startup_validation.error_count }}, warnings={{ system.startup_validation.warning_count }}, info={{ system.startup_validation.info_count }}</p>
+    </article>
+    <article class="card">
+      <div class="label">Healthcheck</div>
+      <div class="value {% if system.healthcheck.status == 'ok' %}ok{% else %}danger{% endif %}">{{ system.healthcheck.status }}</div>
+      <p style="margin: 0.6rem 0 0;">runtime={{ system.healthcheck.runtime_mode }}, execution={{ system.healthcheck.execution_mode }}</p>
+    </article>
+    <article class="card">
+      <div class="label">DB Connectivity</div>
+      <div class="value {% if system.db_connectivity.status == 'ok' %}ok{% else %}danger{% endif %}">{{ system.db_connectivity.status }}</div>
+      <p style="margin: 0.6rem 0 0;">{{ system.db_connectivity.detail }}</p>
+    </article>
+    <article class="card">
+      <div class="label">Provider Status</div>
+      <div class="value {% if system.provider_status.status == 'ok' %}ok{% else %}warn{% endif %}">{{ system.provider_status.status }}</div>
+      <p style="margin: 0.6rem 0 0;">failures={{ system.provider_status.live_source_failures_total }}</p>
+    </article>
+  </section>
+
+  <section style="margin-top: 1.25rem;" class="card">
+    <div class="label">Startup Checks</div>
+    <table>
+      <thead><tr><th>Name</th><th>Severity</th><th>Status</th><th>Detail</th></tr></thead>
+      <tbody>
+        {% for check in system.startup_validation.checks %}
+        <tr><td>{{ check.name }}</td><td>{{ check.severity }}</td><td>{% if check.ok %}OK{% else %}FAIL{% endif %}</td><td>{{ check.detail }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+</section>
+{% endblock %}

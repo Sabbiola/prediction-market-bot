@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }}</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --surface: #111827;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --accent: #22c55e;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+    }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      background: radial-gradient(circle at top, #1e293b 0%, var(--bg) 50%);
+      color: var(--text);
+    }
+    header {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid #1f2937;
+      background: rgba(17, 24, 39, 0.9);
+      position: sticky;
+      top: 0;
+      backdrop-filter: blur(4px);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+    }
+    .header-auth {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+    .header-auth button {
+      border: 1px solid #334155;
+      background: #0b1220;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 0.35rem 0.7rem;
+      cursor: pointer;
+    }
+    main {
+      padding: 1.5rem;
+      max-width: 1080px;
+      margin: 0 auto;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 1rem;
+    }
+    .card {
+      background: linear-gradient(160deg, rgba(31, 41, 55, 0.92), rgba(15, 23, 42, 0.98));
+      border: 1px solid #1f2937;
+      border-radius: 10px;
+      padding: 0.9rem;
+    }
+    .label {
+      color: var(--muted);
+      font-size: 0.8rem;
+      margin-bottom: 0.25rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .value {
+      font-size: 1.25rem;
+      font-weight: 600;
+    }
+    .ok { color: var(--accent); }
+    .warn { color: var(--warning); }
+    .danger { color: var(--danger); }
+    .tabs {
+      display: flex;
+      gap: 0.6rem;
+      margin-bottom: 1rem;
+      flex-wrap: wrap;
+    }
+    .tab-btn {
+      border: 1px solid #334155;
+      background: #0b1220;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 0.45rem 0.8rem;
+      cursor: pointer;
+    }
+    .tab-btn.active {
+      background: #1d4ed8;
+      border-color: #1d4ed8;
+    }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.6rem;
+      margin: 0.9rem 0 0;
+    }
+    .actions button {
+      border: 1px solid #334155;
+      background: #0b1220;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 0.45rem 0.8rem;
+      cursor: pointer;
+    }
+    .actions input {
+      border: 1px solid #334155;
+      background: #0b1220;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 0.45rem 0.7rem;
+      min-width: 220px;
+    }
+    .event-log {
+      margin-top: 0.8rem;
+      font-size: 0.9rem;
+      color: var(--muted);
+      min-height: 1.2rem;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 1rem;
+      font-size: 0.92rem;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.55rem;
+      border-bottom: 1px solid #1f2937;
+    }
+    th {
+      color: var(--muted);
+      font-weight: 500;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div><strong>Prediction Market Bot</strong> | Operator Control Plane</div>
+    <div class="header-auth">
+      {% if auth_enabled and auth_user and auth_user.username %}
+      <span>user=<strong>{{ auth_user.username }}</strong> role=<strong>{{ auth_user.role }}</strong></span>
+      <form method="post" action="/logout" style="margin:0;">
+        <button type="submit">Logout</button>
+      </form>
+      {% elif auth_enabled %}
+      <span>not authenticated</span>
+      {% else %}
+      <span>auth=disabled</span>
+      {% endif %}
+    </div>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <script>
+    const tabButtons = document.querySelectorAll("[data-tab-btn]");
+    const tabPanels = document.querySelectorAll("[data-tab-panel]");
+    const activate = (name) => {
+      tabButtons.forEach((btn) => btn.classList.toggle("active", btn.dataset.tabBtn === name));
+      tabPanels.forEach((panel) => panel.classList.toggle("active", panel.dataset.tabPanel === name));
+    };
+    tabButtons.forEach((btn) => btn.addEventListener("click", () => activate(btn.dataset.tabBtn)));
+    const activeFromQuery = new URLSearchParams(window.location.search).get("active_tab");
+    if (tabButtons.length > 0) {
+      const exists = [...tabButtons].some((btn) => btn.dataset.tabBtn === activeFromQuery);
+      activate(exists ? activeFromQuery : tabButtons[0].dataset.tabBtn);
+    }
+
+    const callAction = async (path, payload = {}, logId = "action-log") => {
+      const eventLog = document.getElementById(logId);
+      if (eventLog) eventLog.textContent = "Processing action...";
+      try {
+        const response = await fetch(path, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(payload),
+        });
+        const data = await response.json();
+        if (eventLog) {
+          const target = data.queue_id || data.intent_id || data.run_id || "n/a";
+          eventLog.textContent = `${data.action}: ${data.status} (${data.message}) target=${target}`;
+        }
+      } catch (_error) {
+        if (eventLog) eventLog.textContent = "Action failed: backend_unavailable";
+      }
+    };
+
+    const runOnceBtn = document.getElementById("action-run-once");
+    if (runOnceBtn) {
+      runOnceBtn.addEventListener("click", () => {
+        const runId = (document.getElementById("run-id-input") || {}).value || "";
+        callAction("/api/actions/run-once", {run_id: runId, force: false}, "action-log");
+      });
+    }
+    const pauseBtn = document.getElementById("action-pause");
+    if (pauseBtn) {
+      pauseBtn.addEventListener("click", () => {
+        const reason = (document.getElementById("pause-reason-input") || {}).value || "ui_operator_pause";
+        callAction("/api/actions/pause", {reason: reason}, "action-log");
+      });
+    }
+    const resumeBtn = document.getElementById("action-resume");
+    if (resumeBtn) {
+      resumeBtn.addEventListener("click", () => callAction("/api/actions/resume", {}, "action-log"));
+    }
+
+    const reviewApproveBtn = document.getElementById("action-review-approve");
+    if (reviewApproveBtn) {
+      reviewApproveBtn.addEventListener("click", () => {
+        const queueId = (document.getElementById("review-queue-id") || {}).value || "";
+        const operatorId = (document.getElementById("review-operator-id") || {}).value || "";
+        const rationale = (document.getElementById("review-rationale") || {}).value || "";
+        const note = (document.getElementById("review-note") || {}).value || "";
+        if (!window.confirm(`Approve candidate ${queueId}?`)) return;
+        callAction(
+          "/api/actions/review-approve",
+          {queue_id: queueId, operator_id: operatorId, rationale: rationale, note: note, confirm: true},
+          "review-action-log",
+        );
+      });
+    }
+    const reviewRejectBtn = document.getElementById("action-review-reject");
+    if (reviewRejectBtn) {
+      reviewRejectBtn.addEventListener("click", () => {
+        const queueId = (document.getElementById("review-queue-id") || {}).value || "";
+        const operatorId = (document.getElementById("review-operator-id") || {}).value || "";
+        const rationale = (document.getElementById("review-rationale") || {}).value || "";
+        const note = (document.getElementById("review-note") || {}).value || "";
+        if (!window.confirm(`Reject candidate ${queueId}?`)) return;
+        callAction(
+          "/api/actions/review-reject",
+          {queue_id: queueId, operator_id: operatorId, rationale: rationale, note: note, confirm: true},
+          "review-action-log",
+        );
+      });
+    }
+
+    const txReconcileBtn = document.getElementById("action-tx-reconcile");
+    if (txReconcileBtn) {
+      txReconcileBtn.addEventListener("click", () => {
+        const runId = (document.getElementById("tx-run-id") || {}).value || "";
+        const intentId = (document.getElementById("tx-intent-id") || {}).value || "";
+        const limit = Number((document.getElementById("tx-limit") || {}).value || "100");
+        callAction(
+          "/api/actions/tx-reconcile",
+          {run_id: runId, intent_id: intentId, limit: Number.isFinite(limit) ? limit : 100},
+          "tx-action-log",
+        );
+      });
+    }
+    const txResubmitBtn = document.getElementById("action-tx-resubmit-safe");
+    if (txResubmitBtn) {
+      txResubmitBtn.addEventListener("click", () => {
+        const intentId = (document.getElementById("tx-intent-id") || {}).value || "";
+        if (!window.confirm(`Safe resubmit intent ${intentId}?`)) return;
+        callAction(
+          "/api/actions/tx-resubmit-safe",
+          {intent_id: intentId, confirm: true},
+          "tx-action-log",
+        );
+      });
+    }
+  </script>
+</body>
+</html>
