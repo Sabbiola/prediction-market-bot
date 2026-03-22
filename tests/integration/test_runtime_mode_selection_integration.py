@@ -132,7 +132,7 @@ def test_run_once_uses_live_providers_in_paper_live_mode(
             "closed": False,
             "resolved": False,
             "updatedAt": "2026-03-14T11:55:00Z",
-            "endDate": "2026-03-20T11:55:00Z",
+            "endDate": "2027-03-20T11:55:00Z",
             "outcomePrices": "[\"0.58\", \"0.42\"]",
             "liquidity": "45000",
             "volume24hr": "20000",

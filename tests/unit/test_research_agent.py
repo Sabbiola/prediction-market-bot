@@ -73,6 +73,9 @@ def test_research_agent_builds_packet_with_expected_metrics() -> None:
         "Community sees moderate upside.; "
         "Counterpoint from macro feed."
     )
+    assert packet.feature_bundle["market_relevance_score"] >= 0.0
+    assert packet.feature_bundle["timeliness_decay"] >= 0.0
+    assert packet.feature_bundle["source_diversity"] >= 0.0
 
 
 def test_research_agent_is_deterministic_for_input_order() -> None:
@@ -102,6 +105,7 @@ def test_research_agent_is_deterministic_for_input_order() -> None:
     assert packet_a.evidence_strength == packet_b.evidence_strength
     assert packet_a.disagreement_score == packet_b.disagreement_score
     assert packet_a.narrative_summary == packet_b.narrative_summary
+    assert packet_a.feature_bundle == packet_b.feature_bundle
 
 
 def test_research_agent_returns_empty_packet_when_no_findings() -> None:
@@ -113,6 +117,7 @@ def test_research_agent_returns_empty_packet_when_no_findings() -> None:
     assert packet.evidence_strength == 0.0
     assert packet.disagreement_score == 0.0
     assert packet.narrative_summary == "No evidence found."
+    assert packet.feature_bundle == {}
 
 
 def test_research_agent_tracks_source_failures_and_continues() -> None:

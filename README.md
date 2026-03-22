@@ -30,6 +30,88 @@ Il progetto punta a costruire una control plane affidabile per operare in stagin
 Il sistema e **risk-first** e **operator-first**:
 la priorita e ridurre errori operativi, mantenere guardrail attivi e migliorare la qualita decisionale nel tempo.
 
+## Strategy research contract
+
+La ricerca strategica e formalizzata e separata dal runtime operativo:
+
+- contratto research/runtime: `docs/STRATEGY_RESEARCH.md`
+- policy di promozione modelli: `docs/MODEL_PROMOTION.md`
+- policy dataset e split leakage-safe: `docs/DATASETS.md`
+- template model card: `docs/MODEL_CARD_TEMPLATE.md`
+
+Principi chiave:
+
+- target: expectancy positiva e performance risk-adjusted, non profitto garantito
+- benchmark obbligatori da battere prima della promozione
+- metriche primarie esplicite (Brier, log loss, calibrazione, approval rate, edge/ROI)
+- nessun online training o auto-tuning nel runtime
+
+Alternative data e LLM enrichment (research-first):
+
+- fonti in scope: news/rss/web news, Reddit, X
+- uso consentito solo con provenance completa e timestamp alignment leakage-safe
+- LLM usato come layer di enrichment strutturato, non come decision engine autonomo
+- segnali rumorosi/sperimentali restano offline fino a evidenza misurabile
+
+Documenti dedicati:
+
+- `docs/ALT_DATA_RESEARCH.md`
+- `docs/NEWS_SOCIAL_SOURCE_POLICY.md`
+- `docs/LLM_ENRICHMENT.md`
+
+Disciplina di promozione runtime (v2):
+
+- `model_v2` non puo sostituire euristico in beta-live senza decisione operatore esplicita
+- attivazione promoted di default limitata a `SANDBOX_CHAIN` (rehearsal lane)
+- gate evidence-based su benchmark/calibrazione/approval-rate/edge/parity schema-feature
+- drift monitoring esplicito (feature shift, regime shift, coverage research, confidence collapse)
+- rollback sicuro con fallback euristico immediato (`rollback-model-v2`)
+- percorso `alt-data + LLM` promoted attivabile solo in `SANDBOX_CHAIN` dopo gate soddisfatto
+- se coverage/capability alt-data o enrichment non sono disponibili, fallback esplicito a baseline `model_v2` con warning auditabile
+
+Data lake offline per ricerca strategica:
+
+- ingestion storico mercati risolti in percorso separato `strategy_research/data_ingest`
+- comandi CLI dedicati:
+  - `backfill-historical-markets`
+  - `inspect-dataset`
+  - `verify-dataset`
+- corpus evidenze research in percorso separato `strategy_research/research_corpus`
+- comandi CLI dedicati:
+  - `backfill-research-evidence`
+  - `inspect-research-corpus`
+  - `verify-research-alignment`
+- corpus news Google News/RSS in percorso separato `strategy_research/news_corpus`
+- comandi CLI dedicati:
+  - `backfill-news`
+  - `inspect-news-corpus`
+  - `verify-news-source`
+- corpus Reddit OAuth in percorso separato `strategy_research/reddit_corpus`
+- comandi CLI dedicati:
+  - `backfill-reddit`
+  - `inspect-reddit-corpus`
+  - `verify-reddit-oauth`
+- enrichment LLM strutturato in percorso separato `strategy_research/llm_enrichment`
+- comandi CLI dedicati:
+  - `enrich-alt-data`
+  - `inspect-llm-enrichment`
+- alt-data feature store versionato in percorso separato `strategy_research/alt_features`
+- comandi CLI dedicati:
+  - `build-alt-feature-dataset`
+  - `inspect-alt-feature-schema`
+  - `verify-alt-feature-parity`
+- layer raw/normalized separati e checkpoint resumable
+- simulatore strategy walk-forward leakage-safe con accounting bankroll/fill/slippage
+- training/calibration lab offline con model cards:
+  - `train-baseline-models`
+  - `calibrate-model`
+  - `compare-models`
+  - `generate-model-card`
+- artifact contract esplicito per serving runtime:
+  - model artifact `prediction_model_v2` (model_version + feature_schema_version + required_features)
+  - calibration artifact `prediction_calibration_v2` (calibration_version + method + parameters)
+  - parity check runtime-safe prima dell'inferenza
+
 ## Modalita operative
 
 ### 1. DRY_RUN_STATIC
@@ -76,7 +158,12 @@ Venue live execution volutamente non attiva.
    - produce narrative summary
 
 3. **Prediction**
-   - combina probabilita implicita e segnali di ricerca
+   - default: engine euristico stabile
+   - modalita `shadow_scoring`: euristico (primario) + v2 side-by-side per confronto, senza cambiare execution
+   - opzionale in `shadow_scoring`: lane `alt+LLM shadow` separata, con warning espliciti su source coverage/enrichment/schema mismatch
+   - opzionale: `Prediction Engine v2` da artifact offline-promoted con probabilita calibrata
+   - valida schema/version/parity prima dello scoring
+   - fallback euristico configurabile fino a promozione completata
    - produce fair probability, edge, confidence e rationale
 
 4. **Risk**
@@ -145,6 +232,24 @@ Il progetto e oggi in una beta-live tecnica avanzata:
 - acceptance suite presente
 - staging docs presenti
 - web control-plane backend foundation presente (FastAPI + template server-side)
+
+Target operativo attuale:
+
+- promuovere `Prediction Engine v2` in `SANDBOX_CHAIN` con runbook evidence-based
+- mantenere `PAPER_LIVE` come path operativo con guardrail invariati e senza venue live posting
+- rendere sempre visibile in UI quale modello e attivo (versione, gate reason, stato drift)
+- rendere visibile anche il path segnale attivo (`model_v2` baseline vs `model_v2_alt_promoted`), source set attivo, enrichment coverage e disagreement vs baseline
+
+## Workflow promoted-model (sandbox-live)
+
+Percorso sintetico:
+
+1. `promote-model-v2` (con rationale operatore)
+2. `model-promotion-status` (deve risultare `model_v2_allowed` in `SANDBOX_CHAIN`)
+3. `validate-startup` + `run-once` (review queue pending)
+4. `review-approve` + secondo `run-once` (sandbox tx submit)
+5. `tx-reconcile`, settlement lane, replay/report
+6. verifica UI tabs `Overview`/`Prediction` per model version e metriche confronto
 
 ## Backend Operational DB
 
@@ -261,6 +366,32 @@ python -m prediction_market_bot.main run-settlement-lane --config config/app.yam
 python -m prediction_market_bot.main replay-run --config config/app.yaml --agents-config config/agents.yaml --run-id <run_id>
 python -m prediction_market_bot.main generate-report --config config/app.yaml --agents-config config/agents.yaml --run-id <run_id>
 python -m prediction_market_bot.main last-report --config config/app.yaml --agents-config config/agents.yaml --format markdown
+python -m prediction_market_bot.main backfill-historical-markets --config config/app.yaml --agents-config config/agents.yaml --json
+python -m prediction_market_bot.main inspect-dataset --config config/app.yaml --agents-config config/agents.yaml --json
+python -m prediction_market_bot.main verify-dataset --config config/app.yaml --agents-config config/agents.yaml --json
+python -m prediction_market_bot.main backfill-research-evidence --config config/app.yaml --agents-config config/agents.yaml --json
+python -m prediction_market_bot.main inspect-research-corpus --config config/app.yaml --agents-config config/agents.yaml --json
+python -m prediction_market_bot.main verify-research-alignment --config config/app.yaml --agents-config config/agents.yaml --json
+python -m prediction_market_bot.main backfill-news --config config/app.yaml --agents-config config/agents.yaml --topic WORLD --keyword inflation --json
+python -m prediction_market_bot.main inspect-news-corpus --config config/app.yaml --agents-config config/agents.yaml --json
+python -m prediction_market_bot.main verify-news-source --config config/app.yaml --agents-config config/agents.yaml --topic WORLD --json
+python -m prediction_market_bot.main backfill-reddit --config config/app.yaml --agents-config config/agents.yaml --subreddit worldnews --include-comments --json
+python -m prediction_market_bot.main inspect-reddit-corpus --config config/app.yaml --agents-config config/agents.yaml --json
+python -m prediction_market_bot.main verify-reddit-oauth --config config/app.yaml --agents-config config/agents.yaml --subreddit worldnews --json
+python -m prediction_market_bot.main enrich-alt-data --config config/app.yaml --agents-config config/agents.yaml --json
+python -m prediction_market_bot.main inspect-llm-enrichment --config config/app.yaml --agents-config config/agents.yaml --json
+python -m prediction_market_bot.main build-labels --config config/app.yaml --agents-config config/agents.yaml --dataset-id historical-markets --json
+python -m prediction_market_bot.main run-benchmarks --config config/app.yaml --agents-config config/agents.yaml --dataset-id historical-markets --split-mode holdout --json
+python -m prediction_market_bot.main compare-benchmarks --config config/app.yaml --agents-config config/agents.yaml --dataset-id historical-markets --json
+python -m prediction_market_bot.main run-ablation-study --config config/app.yaml --agents-config config/agents.yaml --dataset-id historical-markets --split-mode walk-forward --json
+python -m prediction_market_bot.main compare-alt-data-variants --config config/app.yaml --agents-config config/agents.yaml --dataset-id historical-markets --split test --reference-variant market_only_baseline --json
+python -m prediction_market_bot.main run-walk-forward --config config/app.yaml --agents-config config/agents.yaml --dataset-id historical-markets --baseline-name heuristic_prediction_agent --eval-split test --json
+python -m prediction_market_bot.main generate-strategy-report --config config/app.yaml --agents-config config/agents.yaml --dataset-id historical-markets --run-id <walk_run_id>
+python -m prediction_market_bot.main generate-shadow-report --config config/app.yaml --agents-config config/agents.yaml --run-id <run_id>
+python -m prediction_market_bot.main train-baseline-models --config config/app.yaml --agents-config config/agents.yaml --dataset-id historical-markets --json
+python -m prediction_market_bot.main compare-models --config config/app.yaml --agents-config config/agents.yaml --dataset-id historical-markets --split test --json
+python -m prediction_market_bot.main calibrate-model --config config/app.yaml --agents-config config/agents.yaml --dataset-id historical-markets --run-id <train_run_id> --model-name logistic_regression_baseline --method platt --json
+python -m prediction_market_bot.main generate-model-card --config config/app.yaml --agents-config config/agents.yaml --dataset-id historical-markets --run-id <train_run_id> --model-name logistic_regression_baseline --json
 
 # sandbox tx
 python -m prediction_market_bot.main tx-status --config config/app.yaml --agents-config config/agents.yaml --json
@@ -272,6 +403,7 @@ Setup Postgres (staging-like):
 
 ```bash
 pip install ".[postgres]"
+pip install ".[research]"  # optional: numpy/xgboost for offline training lab
 docker compose --profile staging-postgres up -d postgres-staging
 export OPERATIONAL_DB_DSN="postgresql://pm_bot:pm_bot@127.0.0.1:5432/prediction_market_bot"
 # su Windows PowerShell:

@@ -51,6 +51,22 @@ Task:
 Output:
 - candidati mercato con dossier narrativo
 
+## Fase 2.5 — Strategy Research Contract
+
+Obiettivo:
+rendere misurabile e governabile la promozione dei modelli prima del vero prediction engine.
+
+Task:
+- definire contratto research/runtime (`STRATEGY_RESEARCH.md`)
+- formalizzare policy dataset, split leakage-safe e label
+- definire benchmark da battere e metriche primarie
+- formalizzare promotion gates research -> paper shadow -> sandbox shadow
+- introdurre model card template obbligatoria
+
+Output:
+- criteri di successo espliciti e auditabili
+- no ambiguity su cosa e consentito nel runtime
+
 ## Fase 3 — Prediction Engine
 
 Obiettivo:
@@ -58,13 +74,14 @@ calibrare fair probability vs market odds.
 
 Task:
 - feature store per market snapshots
-- modello XGBoost offline
-- calibrator online
+- modello offline (esempio: XGBoost o equivalente)
+- calibration artifact offline versionato
 - fusione ML + narrative
 - confidence & edge thresholds
 
 Output:
 - `PredictionResult` ripetibile e auditabile
+- integrazione runtime inferenza-only con artifact promossi
 
 ## Fase 4 — Risk / Execution / Settlement
 

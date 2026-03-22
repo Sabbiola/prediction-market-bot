@@ -11,6 +11,7 @@ from prediction_market_bot.infrastructure.http_client import (
     HttpErrorMetadata,
     StructuredHttpClient,
 )
+from prediction_market_bot.services.research_features import build_bundle_from_findings
 
 from .adapters import OpenAlexWorksResearchSource, WikipediaSearchResearchSource
 from .base import StructuredHttpResearchSource
@@ -110,6 +111,18 @@ class LiveResearchIngestionPipeline(ResearchDataPort):
         deduplicated = self._deduplicate(normalized)
         for finding in deduplicated:
             self._persist_normalized(effective_run_id, market.market_id, finding)
+        feature_bundle = build_bundle_from_findings(
+            market_title=market.title,
+            market_category=market.category,
+            event_context=market.category,
+            decision_timestamp_utc=market.updated_at,
+            findings=deduplicated,
+        )
+        self._persist_feature_bundle(
+            effective_run_id,
+            market.market_id,
+            feature_bundle.to_runtime_dict(),
+        )
 
         self._write_event(
             effective_run_id,
@@ -124,6 +137,7 @@ class LiveResearchIngestionPipeline(ResearchDataPort):
                 "cache_hits": cache_hits,
                 "source_total_duration_ms": round(source_total_duration_ms, 3),
                 "ingestion_duration_ms": round(max((perf_counter() - ingestion_started) * 1000.0, 0.0), 3),
+                "feature_bundle": feature_bundle.to_runtime_dict(),
             },
         )
 
@@ -140,6 +154,23 @@ class LiveResearchIngestionPipeline(ResearchDataPort):
             source_total_duration_ms=round(source_total_duration_ms, 3),
             ingestion_duration_ms=round(max((perf_counter() - ingestion_started) * 1000.0, 0.0), 3),
             findings=deduplicated,
+        )
+
+    def _persist_feature_bundle(
+        self,
+        run_id: str,
+        market_id: str,
+        feature_bundle: Mapping[str, float],
+    ) -> None:
+        if not self.persistence:
+            return
+        self.persistence.write_artifact(
+            run_id,
+            "research_feature_bundles",
+            {
+                "market_id": market_id,
+                "feature_bundle": dict(feature_bundle),
+            },
         )
 
     def _deduplicate(self, findings: Sequence[ResearchFinding]) -> tuple[ResearchFinding, ...]:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import Mapping, Sequence
 
 from prediction_market_bot.agents.execution import (
@@ -50,6 +51,8 @@ from prediction_market_bot.interfaces import MarketDataPort, ResearchDataPort, T
 from prediction_market_bot.orchestration import PipelineCoordinator
 from prediction_market_bot.services import PaperPortfolioEngine, SettlementRequestQueueService, TradeReviewQueueService
 from prediction_market_bot.services import AlertEvent, build_alerting_service
+from prediction_market_bot.services.model_promotion import resolve_runtime_model_gate_decision
+from prediction_market_bot.services.operator_control import load_operator_state, operator_state_path
 
 logger = logging.getLogger(__name__)
 
@@ -442,9 +445,89 @@ def _build_critical_alert_hook(settings: AppSettings):
     return _critical_alert_hook
 
 
+def _resolve_alt_shadow_promoted_activation(
+    *,
+    settings: AppSettings,
+    model_gate_allowed: bool,
+    model_gate_effective_engine: str,
+) -> tuple[bool, str]:
+    if not settings.prediction.alt_shadow_enabled:
+        return False, "alt_shadow_disabled"
+    if not settings.prediction.alt_shadow_promoted_enabled:
+        return False, "alt_shadow_promoted_disabled"
+    if settings.runtime.mode != RuntimeMode.SANDBOX_CHAIN:
+        return False, "alt_shadow_promoted_requires_sandbox_chain"
+    allowed_modes = {
+        item.strip().upper()
+        for item in settings.prediction.alt_shadow_promoted_runtime_modes
+        if item.strip()
+    }
+    if allowed_modes and settings.runtime.mode.value not in allowed_modes:
+        return False, "alt_shadow_promoted_runtime_mode_not_allowed"
+    if not model_gate_allowed or model_gate_effective_engine != "model_v2":
+        return False, "model_v2_gate_not_satisfied_for_alt_shadow_promotion"
+    return True, "alt_shadow_promoted_allowed"
+
+
 def build_coordinator(settings: AppSettings, persistence: JsonlPersistence) -> PipelineCoordinator:
     secrets = build_secret_provider(settings)
     operational = build_operational_repositories(settings)
+    state = load_operator_state(
+        operator_state_path(settings.storage.artifacts_dir),
+        repository=operational.operator_control_state,
+    )
+    model_gate_decision = resolve_runtime_model_gate_decision(settings=settings, state=state)
+    if not model_gate_decision.allowed and model_gate_decision.effective_engine != "heuristic":
+        raise ValueError(
+            "prediction_model_gate_blocked "
+            f"reason={model_gate_decision.reason} requested_engine={model_gate_decision.requested_engine} "
+            "Set prediction.model_inference.fallback_to_heuristic=true or promote model_v2 explicitly."
+        )
+    forced_heuristic_reason = settings.prediction.forced_heuristic_reason
+    if model_gate_decision.effective_engine == "heuristic" and model_gate_decision.reason not in {
+        "",
+        "prediction_engine_not_model_v2",
+        "model_v2_allowed",
+    }:
+        forced_heuristic_reason = model_gate_decision.reason
+    prediction_engine = model_gate_decision.effective_engine
+    alt_shadow_promoted_active, alt_shadow_promoted_reason = _resolve_alt_shadow_promoted_activation(
+        settings=settings,
+        model_gate_allowed=model_gate_decision.allowed,
+        model_gate_effective_engine=model_gate_decision.effective_engine,
+    )
+    if alt_shadow_promoted_active:
+        prediction_engine = "model_v2_alt_promoted"
+    elif settings.prediction.alt_shadow_promoted_enabled:
+        logger.warning(
+            "alt_shadow_promotion_not_activated",
+            extra={
+                "event": "alt_shadow_promotion_not_activated",
+                "runtime_mode": settings.runtime.mode.value,
+                "reason": alt_shadow_promoted_reason,
+            },
+        )
+    prediction_settings = replace(
+        settings.prediction,
+        engine=prediction_engine,
+        forced_heuristic_reason=forced_heuristic_reason,
+    )
+    if model_gate_decision.requested_engine != model_gate_decision.effective_engine:
+        logger.warning(
+            "prediction_model_gate_engine_override",
+            extra={
+                "event": "prediction_model_gate_engine_override",
+                **model_gate_decision.to_dict(),
+            },
+        )
+    else:
+        logger.info(
+            "prediction_model_gate_decision",
+            extra={
+                "event": "prediction_model_gate_decision",
+                **model_gate_decision.to_dict(),
+            },
+        )
     http_client = build_http_client(settings, secrets=secrets)
     market_data = build_market_data_provider(settings, persistence, http_client, secrets=secrets)
     research_sources = build_research_sources(settings, persistence, http_client, secrets=secrets)
@@ -458,6 +541,11 @@ def build_coordinator(settings: AppSettings, persistence: JsonlPersistence) -> P
             "research_provider": settings.runtime.research_provider.value,
             "provider_failure_policy": settings.runtime.provider_failure_policy.value,
             "execution_mode": settings.execution.mode.value,
+            "prediction_requested_engine": model_gate_decision.requested_engine,
+            "prediction_effective_engine": model_gate_decision.effective_engine,
+            "prediction_gate_reason": model_gate_decision.reason,
+            "alt_shadow_promoted_active": alt_shadow_promoted_active,
+            "alt_shadow_promoted_reason": alt_shadow_promoted_reason,
         },
     )
 
@@ -574,8 +662,8 @@ def build_coordinator(settings: AppSettings, persistence: JsonlPersistence) -> P
         market_data=market_data,
         scanner=ScanAgent(settings.scan),
         research=research_agent,
-        prediction=PredictionAgent(settings.prediction),
-        risk=RiskAgent(settings.risk, settings.prediction),
+        prediction=PredictionAgent(prediction_settings),
+        risk=RiskAgent(settings.risk, prediction_settings),
         execution=ExecutionAgent(
             settings.venue,
             main_executor,

@@ -43,6 +43,29 @@ def _as_str_seq(value: Any) -> tuple[str, ...]:
     return tuple(payload)
 
 
+def _as_alias_map(value: Any) -> dict[str, tuple[str, ...]]:
+    if not isinstance(value, Mapping):
+        return {}
+    payload: dict[str, tuple[str, ...]] = {}
+    for canonical, raw_aliases in value.items():
+        canonical_text = _as_str(canonical).lower()
+        if not canonical_text:
+            continue
+        aliases: list[str] = []
+        if isinstance(raw_aliases, list):
+            for raw_alias in raw_aliases:
+                alias_text = _as_str(raw_alias).lower()
+                if alias_text:
+                    aliases.append(alias_text)
+        elif isinstance(raw_aliases, str):
+            alias_text = _as_str(raw_aliases).lower()
+            if alias_text:
+                aliases.append(alias_text)
+        if aliases:
+            payload[canonical_text] = tuple(sorted(set(aliases)))
+    return payload
+
+
 def _as_bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
@@ -176,6 +199,44 @@ class PredictionSettings:
     market_weight: float = 0.45
     narrative_weight: float = 0.45
     structure_weight: float = 0.10
+    engine: str = "heuristic"
+    model_artifact_path: str = ""
+    calibration_artifact_path: str = ""
+    model_expected_feature_schema_version: str = "v1"
+    strict_feature_parity: bool = True
+    fallback_to_heuristic: bool = True
+    forced_heuristic_reason: str = ""
+    alt_shadow_enabled: bool = False
+    alt_shadow_model_artifact_path: str = ""
+    alt_shadow_calibration_artifact_path: str = ""
+    alt_shadow_expected_feature_schema_version: str = "alt-v1"
+    alt_shadow_strict_feature_parity: bool = True
+    alt_shadow_required_source_coverage: tuple[str, ...] = ("news", "reddit", "x")
+    alt_shadow_require_llm_enrichment: bool = True
+    alt_shadow_promoted_enabled: bool = False
+    alt_shadow_promoted_runtime_modes: tuple[str, ...] = ("SANDBOX_CHAIN",)
+
+
+@dataclass(slots=True, frozen=True)
+class ModelPromotionSettings:
+    enabled: bool = True
+    require_explicit_approval_in_live_modes: bool = True
+    required_runtime_modes: tuple[str, ...] = ("PAPER_LIVE", "SANDBOX_CHAIN")
+    promoted_runtime_modes: tuple[str, ...] = ("SANDBOX_CHAIN",)
+    benchmark_min_delta_brier: float = 0.0
+    benchmark_min_delta_log_loss: float = 0.0
+    max_calibration_error: float = 0.08
+    max_calibration_brier_increase: float = 0.01
+    approval_rate_min: float = 0.01
+    approval_rate_max: float = 0.80
+    min_edge_capture_ratio: float = 0.50
+    min_realized_vs_expected_edge_ratio: float = 0.30
+    max_shadow_parity_warning_rate: float = 0.05
+    drift_reference_runs: int = 10
+    feature_shift_warn_threshold: float = 0.35
+    market_regime_warn_threshold: float = 0.30
+    research_coverage_warn_threshold: float = 0.25
+    confidence_collapse_warn_threshold: float = 0.20
 
 
 @dataclass(slots=True, frozen=True)
@@ -284,6 +345,33 @@ class LiveResearchSettings:
 
 
 @dataclass(slots=True, frozen=True)
+class AltDataSourceCapabilitiesSettings:
+    requires_oauth: bool = False
+    requires_user_context: bool = False
+    supports_backfill: bool = True
+    supports_live_polling: bool = True
+    supports_search: bool = True
+    supports_thread_context_expansion: bool = False
+
+
+@dataclass(slots=True, frozen=True)
+class AltDataSourceSettings:
+    source_id: str
+    source_class: str
+    enabled: bool = False
+    adapter: str = ""
+    endpoint_url: str = ""
+    credential_env: str = ""
+    capabilities: AltDataSourceCapabilitiesSettings = field(default_factory=AltDataSourceCapabilitiesSettings)
+
+
+@dataclass(slots=True, frozen=True)
+class AltDataSettings:
+    enabled: bool = False
+    sources: tuple[AltDataSourceSettings, ...] = ()
+
+
+@dataclass(slots=True, frozen=True)
 class SandboxChainSettings:
     enabled: bool = False
     rpc_url: str = ""
@@ -298,6 +386,82 @@ class SandboxChainSettings:
     confirmations_required: int = 1
     dropped_after_sec: int = 180
     request_timeout_sec: float = 8.0
+
+
+@dataclass(slots=True, frozen=True)
+class StrategyResearchSettings:
+    base_dir: str = "data/strategy-research"
+    default_dataset_id: str = "historical-markets"
+    markets_endpoint_url: str = "https://gamma-api.polymarket.com/markets"
+    events_endpoint_url: str = "https://gamma-api.polymarket.com/events/{event_id}"
+    snapshots_endpoint_url: str = ""
+    orderbook_endpoint_url: str = ""
+    trades_endpoint_url: str = ""
+    resolutions_endpoint_url: str = ""
+    page_size: int = 200
+    max_pages_per_run: int = 0
+    throttle_sec: float = 0.2
+    include_orderbook: bool = True
+    include_trades: bool = True
+    research_corpus_base_dir: str = "data/strategy-research/research-corpus"
+    research_corpus_default_corpus_id: str = "historical-research-evidence"
+    research_corpus_source_dataset_id: str = "historical-markets"
+    research_corpus_limit_per_source: int = 5
+    research_corpus_throttle_sec: float = 0.1
+    research_corpus_require_published_at: bool = True
+    research_corpus_drop_unaligned: bool = True
+    research_corpus_enabled_sources: tuple[str, ...] = ()
+    news_corpus_base_dir: str = "data/strategy-research/news-corpus"
+    news_corpus_default_corpus_id: str = "historical-news-corpus"
+    news_corpus_default_source_id: str = "news_rss_web"
+    news_corpus_limit_per_query: int = 50
+    news_corpus_throttle_sec: float = 0.0
+    news_corpus_language: str = "en-US"
+    news_corpus_region: str = "US"
+    reddit_corpus_base_dir: str = "data/strategy-research/reddit-corpus"
+    reddit_corpus_default_corpus_id: str = "historical-reddit-corpus"
+    reddit_corpus_default_source_id: str = "reddit"
+    reddit_corpus_limit_per_query: int = 50
+    reddit_corpus_max_pages_per_query: int = 5
+    reddit_corpus_include_comments: bool = False
+    reddit_corpus_comment_limit_per_post: int = 25
+    reddit_corpus_throttle_sec: float = 0.1
+    x_corpus_base_dir: str = "data/strategy-research/x-corpus"
+    x_corpus_default_corpus_id: str = "historical-x-corpus"
+    x_corpus_default_source_id: str = "x"
+    x_corpus_limit_per_query: int = 50
+    x_corpus_max_pages_per_query: int = 5
+    x_corpus_auth_mode: str = "bearer"
+    x_corpus_search_endpoint_path: str = "/2/tweets/search/recent"
+    x_corpus_user_lookup_endpoint_path_template: str = "/2/users/by/username/{username}"
+    x_corpus_user_posts_endpoint_path_template: str = "/2/users/{user_id}/tweets"
+    x_corpus_throttle_sec: float = 0.1
+    linkage_base_dir: str = "data/strategy-research/linkage"
+    linkage_default_linkage_id: str = "historical-evidence-linkage"
+    linkage_source_dataset_id: str = "historical-markets"
+    linkage_news_corpus_id: str = "historical-news-corpus"
+    linkage_reddit_corpus_id: str = "historical-reddit-corpus"
+    linkage_x_corpus_id: str = "historical-x-corpus"
+    linkage_enabled_source_classes: tuple[str, ...] = ("news_rss_web", "reddit", "x")
+    linkage_max_staleness_days: int = 45
+    linkage_similarity_threshold: float = 0.20
+    linkage_ambiguity_margin: float = 0.03
+    linkage_max_candidates_per_evidence: int = 5
+    linkage_alias_map: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    llm_enrichment_base_dir: str = "data/strategy-research/llm-enrichment"
+    llm_enrichment_default_enrichment_id: str = "historical-llm-enrichment"
+    llm_enrichment_default_linkage_id: str = "historical-evidence-linkage"
+    llm_enrichment_news_corpus_id: str = "historical-news-corpus"
+    llm_enrichment_reddit_corpus_id: str = "historical-reddit-corpus"
+    llm_enrichment_x_corpus_id: str = "historical-x-corpus"
+    llm_enrichment_enabled: bool = False
+    llm_enrichment_provider: str = "deterministic"
+    llm_enrichment_model_id: str = "deterministic-enrichment-v1"
+    llm_enrichment_prompt_version: str = "v1"
+    llm_enrichment_enable_fallback: bool = True
+    llm_enrichment_allow_external_provider: bool = False
+    llm_enrichment_include_states: tuple[str, ...] = ("linked", "ambiguous")
+    llm_enrichment_throttle_sec: float = 0.0
 
 
 @dataclass(slots=True, frozen=True)
@@ -375,11 +539,14 @@ class AppSettings:
     prediction: PredictionSettings
     risk: RiskSettings
     execution: ExecutionSettings
+    model_promotion: ModelPromotionSettings
     http: HttpSettings
     alerting: AlertingSettings
     live_market_data: LiveMarketDataSettings
     live_research: LiveResearchSettings
+    alt_data: AltDataSettings
     sandbox_chain: SandboxChainSettings
+    strategy_research: StrategyResearchSettings
     ui_auth: UiAuthSettings
     security: SecuritySettings
 
@@ -402,9 +569,21 @@ class AppSettings:
         alerting_webhook_section = _as_dict(alerting_section.get("webhook"))
         live_market_section = _as_dict(app_config.get("live_market_data"))
         live_research_section = _as_dict(app_config.get("live_research"))
+        alt_data_section = _as_dict(app_config.get("alt_data"))
+        alt_data_sources_section = _as_dict(alt_data_section.get("sources"))
+        legacy_research_sources = _as_dict(app_config.get("research_sources"))
         wikipedia_research_section = _as_dict(live_research_section.get("wikipedia"))
         openalex_research_section = _as_dict(live_research_section.get("openalex"))
         sandbox_chain_section = _as_dict(app_config.get("sandbox_chain"))
+        strategy_research_section = _as_dict(app_config.get("strategy_research"))
+        historical_ingest_section = _as_dict(strategy_research_section.get("historical_data_ingest"))
+        research_corpus_section = _as_dict(strategy_research_section.get("research_corpus"))
+        news_corpus_section = _as_dict(strategy_research_section.get("news_corpus"))
+        reddit_corpus_section = _as_dict(strategy_research_section.get("reddit_corpus"))
+        x_corpus_section = _as_dict(strategy_research_section.get("x_corpus"))
+        linkage_section = _as_dict(strategy_research_section.get("linkage"))
+        llm_enrichment_section = _as_dict(strategy_research_section.get("llm_enrichment"))
+        model_promotion_section = _as_dict(app_config.get("model_promotion"))
         ui_auth_section = _as_dict(app_config.get("ui_auth"))
         security_section = _as_dict(app_config.get("security"))
         secrets_section = _as_dict(security_section.get("secrets"))
@@ -414,6 +593,7 @@ class AppSettings:
         risk_section = _as_dict(agents_config.get("risk"))
         prediction_agent = _as_dict(_as_dict(agents_config.get("agents")).get("prediction"))
         components = _as_dict(prediction_agent.get("components"))
+        model_inference = _as_dict(prediction_agent.get("model_inference"))
 
         runtime_mode = _parse_runtime_mode(runtime_section.get("mode", app_section.get("mode", "DRY_RUN_STATIC")))
         runtime = RuntimeSettings(
@@ -489,12 +669,52 @@ class AppSettings:
             min_hours_to_resolution=float(thresholds.get("min_hours_to_resolution", 6.0)),
             max_spread_bps=int(thresholds.get("max_spread_bps", 300)),
         )
+        alt_shadow_inference = _as_dict(model_inference.get("alt_shadow"))
         prediction = PredictionSettings(
             min_confidence=float(thresholds.get("min_confidence", 0.62)),
             min_edge_bps=int(thresholds.get("min_edge_bps", 300)),
             market_weight=float(components.get("market_weight", 0.45)),
             narrative_weight=float(components.get("narrative_weight", 0.45)),
             structure_weight=float(components.get("structure_weight", 0.10)),
+            engine=_as_str(model_inference.get("engine"), "heuristic").lower(),
+            model_artifact_path=_as_str(model_inference.get("model_artifact_path")),
+            calibration_artifact_path=_as_str(model_inference.get("calibration_artifact_path")),
+            model_expected_feature_schema_version=_as_str(
+                model_inference.get("feature_schema_version"),
+                "v1",
+            ),
+            strict_feature_parity=_as_bool(model_inference.get("strict_feature_parity"), True),
+            fallback_to_heuristic=_as_bool(model_inference.get("fallback_to_heuristic"), True),
+            forced_heuristic_reason=_as_str(model_inference.get("forced_heuristic_reason")),
+            alt_shadow_enabled=_as_bool(alt_shadow_inference.get("enabled"), False),
+            alt_shadow_model_artifact_path=_as_str(
+                alt_shadow_inference.get("model_artifact_path")
+            ),
+            alt_shadow_calibration_artifact_path=_as_str(
+                alt_shadow_inference.get("calibration_artifact_path")
+            ),
+            alt_shadow_expected_feature_schema_version=_as_str(
+                alt_shadow_inference.get("feature_schema_version"),
+                "alt-v1",
+            ),
+            alt_shadow_strict_feature_parity=_as_bool(
+                alt_shadow_inference.get("strict_feature_parity"),
+                True,
+            ),
+            alt_shadow_required_source_coverage=_as_str_seq(
+                alt_shadow_inference.get("required_source_coverage") or ["news", "reddit", "x"]
+            ),
+            alt_shadow_require_llm_enrichment=_as_bool(
+                alt_shadow_inference.get("require_llm_enrichment"),
+                True,
+            ),
+            alt_shadow_promoted_enabled=_as_bool(
+                alt_shadow_inference.get("promoted_enabled"),
+                False,
+            ),
+            alt_shadow_promoted_runtime_modes=_as_str_seq(
+                alt_shadow_inference.get("promoted_runtime_modes") or ["SANDBOX_CHAIN"]
+            ),
         )
         risk = RiskSettings(
             bankroll_usd=float(risk_section.get("bankroll_usd", 10_000.0)),
@@ -602,6 +822,54 @@ class AppSettings:
                 retry_backoff_sec=max(float(alerting_webhook_section.get("retry_backoff_sec", 0.5)), 0.0),
             ),
         )
+        model_promotion = ModelPromotionSettings(
+            enabled=_as_bool(model_promotion_section.get("enabled"), True),
+            require_explicit_approval_in_live_modes=_as_bool(
+                model_promotion_section.get("require_explicit_approval_in_live_modes"),
+                True,
+            ),
+            required_runtime_modes=_as_str_seq(
+                model_promotion_section.get("required_runtime_modes")
+            )
+            or ("PAPER_LIVE", "SANDBOX_CHAIN"),
+            promoted_runtime_modes=_as_str_seq(
+                model_promotion_section.get("promoted_runtime_modes")
+            )
+            or ("SANDBOX_CHAIN",),
+            benchmark_min_delta_brier=float(model_promotion_section.get("benchmark_min_delta_brier", 0.0)),
+            benchmark_min_delta_log_loss=float(model_promotion_section.get("benchmark_min_delta_log_loss", 0.0)),
+            max_calibration_error=max(float(model_promotion_section.get("max_calibration_error", 0.08)), 0.0),
+            max_calibration_brier_increase=float(
+                model_promotion_section.get("max_calibration_brier_increase", 0.01)
+            ),
+            approval_rate_min=max(float(model_promotion_section.get("approval_rate_min", 0.01)), 0.0),
+            approval_rate_max=min(max(float(model_promotion_section.get("approval_rate_max", 0.80)), 0.0), 1.0),
+            min_edge_capture_ratio=float(model_promotion_section.get("min_edge_capture_ratio", 0.50)),
+            min_realized_vs_expected_edge_ratio=float(
+                model_promotion_section.get("min_realized_vs_expected_edge_ratio", 0.30)
+            ),
+            max_shadow_parity_warning_rate=max(
+                float(model_promotion_section.get("max_shadow_parity_warning_rate", 0.05)),
+                0.0,
+            ),
+            drift_reference_runs=max(int(model_promotion_section.get("drift_reference_runs", 10)), 1),
+            feature_shift_warn_threshold=max(
+                float(model_promotion_section.get("feature_shift_warn_threshold", 0.35)),
+                0.0,
+            ),
+            market_regime_warn_threshold=max(
+                float(model_promotion_section.get("market_regime_warn_threshold", 0.30)),
+                0.0,
+            ),
+            research_coverage_warn_threshold=max(
+                float(model_promotion_section.get("research_coverage_warn_threshold", 0.25)),
+                0.0,
+            ),
+            confidence_collapse_warn_threshold=max(
+                float(model_promotion_section.get("confidence_collapse_warn_threshold", 0.20)),
+                0.0,
+            ),
+        )
 
         live_market_data = LiveMarketDataSettings(
             enabled=_as_bool(
@@ -673,6 +941,13 @@ class AppSettings:
             openalex_api_key_prefix=str(openalex_research_section.get("api_key_prefix", "Bearer ")),
             openalex_require_api_key=_as_bool(openalex_research_section.get("require_api_key"), False),
         )
+        alt_data = AltDataSettings(
+            enabled=_as_bool(alt_data_section.get("enabled"), False),
+            sources=_parse_alt_data_sources(
+                alt_data_sources_section=alt_data_sources_section,
+                legacy_sources_section=legacy_research_sources,
+            ),
+        )
         sandbox_chain = SandboxChainSettings(
             enabled=_as_bool(sandbox_chain_section.get("enabled"), False),
             rpc_url=str(sandbox_chain_section.get("rpc_url", "")),
@@ -687,6 +962,183 @@ class AppSettings:
             confirmations_required=int(sandbox_chain_section.get("confirmations_required", 1)),
             dropped_after_sec=int(sandbox_chain_section.get("dropped_after_sec", 180)),
             request_timeout_sec=float(sandbox_chain_section.get("request_timeout_sec", 8.0)),
+        )
+        strategy_research = StrategyResearchSettings(
+            base_dir=_as_str(historical_ingest_section.get("base_dir"), "data/strategy-research"),
+            default_dataset_id=_as_str(historical_ingest_section.get("default_dataset_id"), "historical-markets"),
+            markets_endpoint_url=_as_str(
+                historical_ingest_section.get("markets_endpoint_url"),
+                "https://gamma-api.polymarket.com/markets",
+            ),
+            events_endpoint_url=_as_str(
+                historical_ingest_section.get("events_endpoint_url"),
+                "https://gamma-api.polymarket.com/events/{event_id}",
+            ),
+            snapshots_endpoint_url=_as_str(historical_ingest_section.get("snapshots_endpoint_url")),
+            orderbook_endpoint_url=_as_str(historical_ingest_section.get("orderbook_endpoint_url")),
+            trades_endpoint_url=_as_str(historical_ingest_section.get("trades_endpoint_url")),
+            resolutions_endpoint_url=_as_str(historical_ingest_section.get("resolutions_endpoint_url")),
+            page_size=max(int(historical_ingest_section.get("page_size", 200)), 1),
+            max_pages_per_run=max(int(historical_ingest_section.get("max_pages_per_run", 0)), 0),
+            throttle_sec=max(float(historical_ingest_section.get("throttle_sec", 0.2)), 0.0),
+            include_orderbook=_as_bool(historical_ingest_section.get("include_orderbook"), True),
+            include_trades=_as_bool(historical_ingest_section.get("include_trades"), True),
+            research_corpus_base_dir=_as_str(
+                research_corpus_section.get("base_dir"),
+                "data/strategy-research/research-corpus",
+            ),
+            research_corpus_default_corpus_id=_as_str(
+                research_corpus_section.get("default_corpus_id"),
+                "historical-research-evidence",
+            ),
+            research_corpus_source_dataset_id=_as_str(
+                research_corpus_section.get("source_dataset_id"),
+                _as_str(historical_ingest_section.get("default_dataset_id"), "historical-markets"),
+            ),
+            research_corpus_limit_per_source=max(int(research_corpus_section.get("limit_per_source", 5)), 1),
+            research_corpus_throttle_sec=max(float(research_corpus_section.get("throttle_sec", 0.1)), 0.0),
+            research_corpus_require_published_at=_as_bool(research_corpus_section.get("require_published_at"), True),
+            research_corpus_drop_unaligned=_as_bool(research_corpus_section.get("drop_unaligned"), True),
+            research_corpus_enabled_sources=_as_str_seq(research_corpus_section.get("enabled_sources")),
+            news_corpus_base_dir=_as_str(
+                news_corpus_section.get("base_dir"),
+                "data/strategy-research/news-corpus",
+            ),
+            news_corpus_default_corpus_id=_as_str(
+                news_corpus_section.get("default_corpus_id"),
+                "historical-news-corpus",
+            ),
+            news_corpus_default_source_id=_as_str(
+                news_corpus_section.get("source_id"),
+                "news_rss_web",
+            ),
+            news_corpus_limit_per_query=max(int(news_corpus_section.get("limit_per_query", 50)), 1),
+            news_corpus_throttle_sec=max(float(news_corpus_section.get("throttle_sec", 0.0)), 0.0),
+            news_corpus_language=_as_str(news_corpus_section.get("language"), "en-US"),
+            news_corpus_region=_as_str(news_corpus_section.get("region"), "US"),
+            reddit_corpus_base_dir=_as_str(
+                reddit_corpus_section.get("base_dir"),
+                "data/strategy-research/reddit-corpus",
+            ),
+            reddit_corpus_default_corpus_id=_as_str(
+                reddit_corpus_section.get("default_corpus_id"),
+                "historical-reddit-corpus",
+            ),
+            reddit_corpus_default_source_id=_as_str(
+                reddit_corpus_section.get("source_id"),
+                "reddit",
+            ),
+            reddit_corpus_limit_per_query=max(int(reddit_corpus_section.get("limit_per_query", 50)), 1),
+            reddit_corpus_max_pages_per_query=max(int(reddit_corpus_section.get("max_pages_per_query", 5)), 0),
+            reddit_corpus_include_comments=_as_bool(reddit_corpus_section.get("include_comments"), False),
+            reddit_corpus_comment_limit_per_post=max(int(reddit_corpus_section.get("comment_limit_per_post", 25)), 1),
+            reddit_corpus_throttle_sec=max(float(reddit_corpus_section.get("throttle_sec", 0.1)), 0.0),
+            x_corpus_base_dir=_as_str(
+                x_corpus_section.get("base_dir"),
+                "data/strategy-research/x-corpus",
+            ),
+            x_corpus_default_corpus_id=_as_str(
+                x_corpus_section.get("default_corpus_id"),
+                "historical-x-corpus",
+            ),
+            x_corpus_default_source_id=_as_str(
+                x_corpus_section.get("source_id"),
+                "x",
+            ),
+            x_corpus_limit_per_query=max(int(x_corpus_section.get("limit_per_query", 50)), 1),
+            x_corpus_max_pages_per_query=max(int(x_corpus_section.get("max_pages_per_query", 5)), 0),
+            x_corpus_auth_mode=_as_str(x_corpus_section.get("auth_mode"), "bearer").lower(),
+            x_corpus_search_endpoint_path=_as_str(
+                x_corpus_section.get("search_endpoint_path"),
+                "/2/tweets/search/recent",
+            ),
+            x_corpus_user_lookup_endpoint_path_template=_as_str(
+                x_corpus_section.get("user_lookup_endpoint_path_template"),
+                "/2/users/by/username/{username}",
+            ),
+            x_corpus_user_posts_endpoint_path_template=_as_str(
+                x_corpus_section.get("user_posts_endpoint_path_template"),
+                "/2/users/{user_id}/tweets",
+            ),
+            x_corpus_throttle_sec=max(float(x_corpus_section.get("throttle_sec", 0.1)), 0.0),
+            linkage_base_dir=_as_str(
+                linkage_section.get("base_dir"),
+                "data/strategy-research/linkage",
+            ),
+            linkage_default_linkage_id=_as_str(
+                linkage_section.get("default_linkage_id"),
+                "historical-evidence-linkage",
+            ),
+            linkage_source_dataset_id=_as_str(
+                linkage_section.get("source_dataset_id"),
+                _as_str(historical_ingest_section.get("default_dataset_id"), "historical-markets"),
+            ),
+            linkage_news_corpus_id=_as_str(
+                linkage_section.get("news_corpus_id"),
+                _as_str(news_corpus_section.get("default_corpus_id"), "historical-news-corpus"),
+            ),
+            linkage_reddit_corpus_id=_as_str(
+                linkage_section.get("reddit_corpus_id"),
+                _as_str(reddit_corpus_section.get("default_corpus_id"), "historical-reddit-corpus"),
+            ),
+            linkage_x_corpus_id=_as_str(
+                linkage_section.get("x_corpus_id"),
+                _as_str(x_corpus_section.get("default_corpus_id"), "historical-x-corpus"),
+            ),
+            linkage_enabled_source_classes=_as_str_seq(
+                linkage_section.get("enabled_source_classes") or ["news_rss_web", "reddit", "x"]
+            ),
+            linkage_max_staleness_days=max(int(linkage_section.get("max_staleness_days", 45)), 0),
+            linkage_similarity_threshold=max(
+                0.0,
+                min(float(linkage_section.get("similarity_threshold", 0.20)), 1.0),
+            ),
+            linkage_ambiguity_margin=max(
+                0.0,
+                min(float(linkage_section.get("ambiguity_margin", 0.03)), 1.0),
+            ),
+            linkage_max_candidates_per_evidence=max(int(linkage_section.get("max_candidates_per_evidence", 5)), 1),
+            linkage_alias_map=_as_alias_map(linkage_section.get("alias_map")),
+            llm_enrichment_base_dir=_as_str(
+                llm_enrichment_section.get("base_dir"),
+                "data/strategy-research/llm-enrichment",
+            ),
+            llm_enrichment_default_enrichment_id=_as_str(
+                llm_enrichment_section.get("default_enrichment_id"),
+                "historical-llm-enrichment",
+            ),
+            llm_enrichment_default_linkage_id=_as_str(
+                llm_enrichment_section.get("linkage_id"),
+                _as_str(linkage_section.get("default_linkage_id"), "historical-evidence-linkage"),
+            ),
+            llm_enrichment_news_corpus_id=_as_str(
+                llm_enrichment_section.get("news_corpus_id"),
+                _as_str(news_corpus_section.get("default_corpus_id"), "historical-news-corpus"),
+            ),
+            llm_enrichment_reddit_corpus_id=_as_str(
+                llm_enrichment_section.get("reddit_corpus_id"),
+                _as_str(reddit_corpus_section.get("default_corpus_id"), "historical-reddit-corpus"),
+            ),
+            llm_enrichment_x_corpus_id=_as_str(
+                llm_enrichment_section.get("x_corpus_id"),
+                _as_str(x_corpus_section.get("default_corpus_id"), "historical-x-corpus"),
+            ),
+            llm_enrichment_enabled=_as_bool(llm_enrichment_section.get("enabled"), False),
+            llm_enrichment_provider=_as_str(llm_enrichment_section.get("provider"), "deterministic").lower(),
+            llm_enrichment_model_id=_as_str(
+                llm_enrichment_section.get("model_id"),
+                "deterministic-enrichment-v1",
+            ),
+            llm_enrichment_prompt_version=_as_str(llm_enrichment_section.get("prompt_version"), "v1"),
+            llm_enrichment_enable_fallback=_as_bool(llm_enrichment_section.get("enable_fallback"), True),
+            llm_enrichment_allow_external_provider=_as_bool(
+                llm_enrichment_section.get("allow_external_provider"),
+                False,
+            ),
+            llm_enrichment_include_states=_as_str_seq(
+                llm_enrichment_section.get("include_states") or ["linked", "ambiguous"]
+            ),
+            llm_enrichment_throttle_sec=max(float(llm_enrichment_section.get("throttle_sec", 0.0)), 0.0),
         )
         ui_users_raw = ui_auth_section.get("users")
         ui_users: list[UiAuthUserSettings] = []
@@ -756,11 +1208,14 @@ class AppSettings:
             prediction=prediction,
             risk=risk,
             execution=execution,
+            model_promotion=model_promotion,
             http=http,
             alerting=alerting,
             live_market_data=live_market_data,
             live_research=live_research,
+            alt_data=alt_data,
             sandbox_chain=sandbox_chain,
+            strategy_research=strategy_research,
             ui_auth=ui_auth,
             security=security,
         )
@@ -788,3 +1243,124 @@ class AppSettings:
 
     def effective_manual_review_queue(self) -> bool:
         return self.enable_manual_review_queue or self.requires_blocking_trade_review()
+
+
+def _default_alt_data_capabilities_for_source_class(source_class: str) -> AltDataSourceCapabilitiesSettings:
+    normalized = source_class.strip().lower()
+    if normalized == "reddit":
+        return AltDataSourceCapabilitiesSettings(
+            requires_oauth=True,
+            requires_user_context=False,
+            supports_backfill=True,
+            supports_live_polling=True,
+            supports_search=True,
+            supports_thread_context_expansion=True,
+        )
+    if normalized == "x":
+        return AltDataSourceCapabilitiesSettings(
+            requires_oauth=True,
+            requires_user_context=False,
+            supports_backfill=True,
+            supports_live_polling=True,
+            supports_search=True,
+            supports_thread_context_expansion=True,
+        )
+    return AltDataSourceCapabilitiesSettings(
+        requires_oauth=False,
+        requires_user_context=False,
+        supports_backfill=True,
+        supports_live_polling=True,
+        supports_search=True,
+        supports_thread_context_expansion=False,
+    )
+
+
+def _parse_alt_data_source(
+    *,
+    source_id: str,
+    payload: Mapping[str, Any],
+) -> AltDataSourceSettings:
+    source_key = source_id.strip().lower()
+    source_class = _as_str(payload.get("source_class"), source_key).lower()
+    defaults = _default_alt_data_capabilities_for_source_class(source_class)
+    capability_payload = _as_dict(payload.get("capabilities"))
+    capabilities = AltDataSourceCapabilitiesSettings(
+        requires_oauth=_as_bool(
+            capability_payload.get("requires_oauth"),
+            defaults.requires_oauth,
+        ),
+        requires_user_context=_as_bool(
+            capability_payload.get("requires_user_context"),
+            defaults.requires_user_context,
+        ),
+        supports_backfill=_as_bool(
+            capability_payload.get("supports_backfill"),
+            defaults.supports_backfill,
+        ),
+        supports_live_polling=_as_bool(
+            capability_payload.get("supports_live_polling"),
+            defaults.supports_live_polling,
+        ),
+        supports_search=_as_bool(
+            capability_payload.get("supports_search"),
+            defaults.supports_search,
+        ),
+        supports_thread_context_expansion=_as_bool(
+            capability_payload.get("supports_thread_context_expansion"),
+            defaults.supports_thread_context_expansion,
+        ),
+    )
+    return AltDataSourceSettings(
+        source_id=source_key,
+        source_class=source_class or "news_rss_web",
+        enabled=_as_bool(payload.get("enabled"), False),
+        adapter=_as_str(payload.get("adapter"), source_key),
+        endpoint_url=_as_str(payload.get("endpoint_url")),
+        credential_env=_as_str(payload.get("credential_env")),
+        capabilities=capabilities,
+    )
+
+
+def _parse_alt_data_sources(
+    *,
+    alt_data_sources_section: Mapping[str, Any],
+    legacy_sources_section: Mapping[str, Any],
+) -> tuple[AltDataSourceSettings, ...]:
+    sources: list[AltDataSourceSettings] = []
+    if alt_data_sources_section:
+        for raw_source_id, raw_payload in alt_data_sources_section.items():
+            source_id = _as_str(raw_source_id).lower()
+            if not source_id:
+                continue
+            sources.append(_parse_alt_data_source(source_id=source_id, payload=_as_dict(raw_payload)))
+        return tuple(sources)
+
+    if not legacy_sources_section:
+        return ()
+
+    legacy_to_class = {
+        "twitter": "x",
+        "x": "x",
+        "reddit": "reddit",
+        "rss": "news_rss_web",
+        "official": "news_rss_web",
+    }
+    for raw_source_id, raw_payload in legacy_sources_section.items():
+        source_id = _as_str(raw_source_id).lower()
+        if not source_id:
+            continue
+        source_payload = _as_dict(raw_payload)
+        source_class = legacy_to_class.get(source_id, source_id)
+        defaults = _default_alt_data_capabilities_for_source_class(source_class)
+        sources.append(
+            AltDataSourceSettings(
+                source_id=source_id,
+                source_class=source_class,
+                enabled=_as_bool(source_payload.get("enabled"), False),
+                adapter=f"legacy_{source_id}",
+                endpoint_url="",
+                credential_env="",
+                capabilities=defaults,
+            )
+        )
+    return tuple(sources)

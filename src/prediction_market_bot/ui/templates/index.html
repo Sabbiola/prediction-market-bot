@@ -73,6 +73,36 @@
     Execution mode: <strong>{{ overview.execution_mode }}</strong> |
     Last run: <strong>{{ overview.last_run.run_id or "n/a" }}</strong>
   </p>
+  <section class="card" style="margin-bottom: 1rem;">
+    <div class="label">Model Visibility</div>
+    <p style="margin: 0.4rem 0 0;">
+      requested=<strong>{{ overview.model_visibility.requested_engine or "n/a" }}</strong> |
+      effective=<strong>{{ overview.model_visibility.effective_engine or "n/a" }}</strong> |
+      active_model_version=<strong>{{ overview.model_visibility.active_model_version or "heuristic" }}</strong>
+    </p>
+    <p style="margin: 0.4rem 0 0;">
+      calibration=<strong>{{ overview.model_visibility.calibration_version or "n/a" }}</strong>
+      ({{ overview.model_visibility.calibration_method or "n/a" }}) |
+      gate_reason=<strong>{{ overview.model_visibility.gate_reason }}</strong>
+    </p>
+    {% if overview.model_visibility.active_source_set %}
+    <p style="margin: 0.4rem 0 0;">
+      active_source_set=<strong>{{ overview.model_visibility.active_source_set|join(", ") }}</strong>
+    </p>
+    {% endif %}
+  </section>
+  {% if overview.drift_alert %}
+  <section class="card" style="margin-bottom: 1rem;">
+    <div class="label">Drift Alert</div>
+    <div class="value {% if overview.drift_alert.overall_status == 'critical' %}danger{% elif overview.drift_alert.overall_status == 'warning' %}warn{% else %}ok{% endif %}">
+      {{ overview.drift_alert.overall_status }}
+    </div>
+    <p style="margin: 0.4rem 0 0;">
+      run_id=<strong>{{ overview.drift_alert.current_run_id or "n/a" }}</strong> |
+      checked_at=<strong>{{ overview.drift_alert.created_at_utc or "n/a" }}</strong>
+    </p>
+  </section>
+  {% endif %}
   {% if overview.incident_banners %}
   <section style="margin: 0.8rem 0 1rem;">
     {% for banner in overview.incident_banners %}
@@ -202,7 +232,97 @@
     <article class="card"><div class="label">Predictions</div><div class="value">{{ prediction.predictions_count }}</div></article>
     <article class="card"><div class="label">Avg Confidence</div><div class="value">{{ "%.4f"|format(prediction.avg_confidence) }}</div></article>
     <article class="card"><div class="label">Avg Edge (bps)</div><div class="value">{{ "%.2f"|format(prediction.avg_edge_bps) }}</div></article>
+    <article class="card"><div class="label">Active Model Version</div><div class="value">{{ prediction.model_visibility.active_model_version or "heuristic" }}</div></article>
   </section>
+  <section class="card" style="margin-top: 1rem;">
+    <div class="label">Model / Calibration</div>
+    <p style="margin: 0.4rem 0 0;">
+      requested={{ prediction.model_visibility.requested_engine or "n/a" }} |
+      effective={{ prediction.model_visibility.effective_engine or "n/a" }} |
+      gate_reason={{ prediction.model_visibility.gate_reason }}
+    </p>
+    <p style="margin: 0.4rem 0 0;">
+      model_name={{ prediction.model_visibility.model_name or "n/a" }} |
+      schema={{ prediction.model_visibility.feature_schema_version or "n/a" }} |
+      calibration={{ prediction.model_visibility.calibration_version or "n/a" }} ({{ prediction.model_visibility.calibration_method or "n/a" }})
+    </p>
+    {% if prediction.model_visibility.active_source_set %}
+    <p style="margin: 0.4rem 0 0;">
+      active_source_set={{ prediction.model_visibility.active_source_set|join(", ") }}
+    </p>
+    {% endif %}
+  </section>
+  <section class="card" style="margin-top: 1rem;"><div class="label">Calibration Summary</div>{{ render_chart(prediction.calibration_summary) }}</section>
+  <section class="card" style="margin-top: 1rem;"><div class="label">Approval Rate Summary</div>{{ render_chart(prediction.approval_rate_summary) }}</section>
+  <section class="card" style="margin-top: 1rem;"><div class="label">Disagreement Buckets</div>{{ render_chart(prediction.disagreement_buckets) }}</section>
+  {% if prediction.enrichment_coverage is not none %}
+  <section class="card" style="margin-top: 1rem;">
+    <div class="label">Enrichment Coverage</div>
+    <div class="value">{{ "%.4f"|format(prediction.enrichment_coverage) }}</div>
+  </section>
+  {% endif %}
+  {% if prediction.disagreement_vs_baseline %}
+  <section class="card" style="margin-top: 1rem;">
+    <div class="label">Disagreement vs Baseline</div>
+    {{ render_chart(prediction.disagreement_vs_baseline) }}
+  </section>
+  {% endif %}
+  {% if prediction.shadow_comparison %}
+  <section class="card" style="margin-top: 1rem;">
+    <div class="label">Shadow-vs-Live Comparison (Selected Run)</div>
+    <table>
+      <thead><tr><th>Run</th><th>Total Rows</th><th>Rows with v2</th><th>Parity Warnings</th><th>Heuristic Approval</th><th>v2 Approval</th><th>Delta</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>{{ prediction.shadow_comparison.run_id }}</td>
+          <td>{{ prediction.shadow_comparison.total_rows }}</td>
+          <td>{{ prediction.shadow_comparison.rows_with_model_v2 }}</td>
+          <td>{{ prediction.shadow_comparison.rows_with_parity_warnings }}</td>
+          <td>{% if prediction.shadow_comparison.approval_rate_heuristic is none %}n/a{% else %}{{ "%.4f"|format(prediction.shadow_comparison.approval_rate_heuristic) }}{% endif %}</td>
+          <td>{% if prediction.shadow_comparison.approval_rate_model_v2 is none %}n/a{% else %}{{ "%.4f"|format(prediction.shadow_comparison.approval_rate_model_v2) }}{% endif %}</td>
+          <td>{% if prediction.shadow_comparison.approval_rate_delta_model_minus_heuristic is none %}n/a{% else %}{{ "%.4f"|format(prediction.shadow_comparison.approval_rate_delta_model_minus_heuristic) }}{% endif %}</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+  {% if prediction.shadow_history %}
+  <section class="card" style="margin-top: 1rem;">
+    <div class="label">Shadow Comparison History</div>
+    <table>
+      <thead><tr><th>Run</th><th>Total</th><th>v2 Rows</th><th>Parity Warnings</th><th>Approval Delta</th></tr></thead>
+      <tbody>
+        {% for row in prediction.shadow_history %}
+        <tr>
+          <td>{{ row.run_id }}</td>
+          <td>{{ row.total_rows }}</td>
+          <td>{{ row.rows_with_model_v2 }}</td>
+          <td>{{ row.rows_with_parity_warnings }}</td>
+          <td>{% if row.approval_rate_delta_model_minus_heuristic is none %}n/a{% else %}{{ "%.4f"|format(row.approval_rate_delta_model_minus_heuristic) }}{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+  {% if prediction.drift_alert %}
+  <section class="card" style="margin-top: 1rem;">
+    <div class="label">Drift Alerts</div>
+    <div class="value {% if prediction.drift_alert.overall_status == 'critical' %}danger{% elif prediction.drift_alert.overall_status == 'warning' %}warn{% else %}ok{% endif %}">
+      {{ prediction.drift_alert.overall_status }}
+    </div>
+    {% if prediction.drift_alert.signals %}
+    <table>
+      <thead><tr><th>Signal</th><th>Status</th><th>Detail</th></tr></thead>
+      <tbody>
+        {% for signal in prediction.drift_alert.signals %}
+        <tr><td>{{ signal.name }}</td><td>{{ signal.status }}</td><td>{{ signal.detail }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </section>
+  {% endif %}
   <section class="card" style="margin-top: 1rem;"><div class="label">Side Distribution</div>{{ render_chart(prediction.side_distribution) }}</section>
   <section class="card" style="margin-top: 1rem;">
     <div class="label">Prediction Rows</div>

@@ -10,6 +10,11 @@ from .run_summary_service import (
     ReplaySummary,
     WindowEvaluation,
 )
+from .shadow_scoring_service import (
+    ShadowScoringReport,
+    build_shadow_scoring_report,
+    render_shadow_scoring_report_markdown,
+)
 
 __all__ = [
     "BrierMetrics",
@@ -17,11 +22,14 @@ __all__ = [
     "REPLAY_ARTIFACT_TYPES",
     "ReplayDecisionRecord",
     "ReplaySummary",
+    "ShadowScoringReport",
     "WindowEvaluation",
+    "build_shadow_scoring_report",
     "evaluate_window",
     "generate_eval_report_markdown",
     "generate_report_markdown",
     "list_run_ids",
+    "render_shadow_scoring_report_markdown",
     "replay_run",
     "write_report",
 ]

@@ -54,3 +54,48 @@ def test_validate_startup_fails_when_sandbox_submit_tx_missing_required_config(
     failed_names = {row["name"] for row in payload["checks"] if not row["ok"]}
     assert "sandbox_chain_rpc_url" in failed_names
     assert "sandbox_chain_contract_address" in failed_names
+
+
+def test_validate_startup_fails_when_alt_data_oauth_source_has_missing_credential(
+    temp_config_paths: tuple[Path, Path],
+    capsys: object,
+) -> None:
+    app_cfg, agents_cfg = temp_config_paths
+    raw = _read_yaml(app_cfg)
+    raw["alt_data"] = {
+        "enabled": True,
+        "sources": {
+            "reddit": {
+                "enabled": True,
+                "source_class": "reddit",
+                "adapter": "reddit_oauth_adapter",
+                "credential_env": "REDDIT_ACCESS_TOKEN",
+                "capabilities": {
+                    "requires_oauth": True,
+                    "requires_user_context": False,
+                    "supports_backfill": True,
+                    "supports_live_polling": True,
+                    "supports_search": True,
+                    "supports_thread_context_expansion": True,
+                },
+            }
+        },
+    }
+    _write_yaml(app_cfg, raw)
+
+    exit_code = main(
+        [
+            "validate-startup",
+            "--config",
+            str(app_cfg),
+            "--agents-config",
+            str(agents_cfg),
+            "--json",
+        ]
+    )
+    assert exit_code == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    checks = {row["name"]: row for row in payload["checks"]}
+    assert checks["alt_data_sources"]["ok"] is False
+    assert "REDDIT_ACCESS_TOKEN" in checks["alt_data_sources"]["detail"]

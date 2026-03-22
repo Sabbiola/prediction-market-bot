@@ -577,3 +577,22 @@ Se emerge un dubbio di progettazione, scegliere sempre la soluzione che:
 - aumenta auditabilità
 - preserva contratti chiari
 - impedisce il ritorno del monolite legacy
+
+---
+
+## 18. Regola su documentazione ufficiale e MCP
+
+Quando il comportamento di una sorgente/API non è certo:
+
+- consultare prima documentazione ufficiale del provider
+- usare i tool MCP disponibili per verificare i dettagli operativi
+- non introdurre assunzioni non verificate su:
+  - rate limits
+  - policy di autenticazione
+  - semantica timestamp/campi
+  - condizioni d'errore/retry
+
+Per integrazioni OpenAI/Codex/OpenAI API:
+
+- usare documentazione ufficiale OpenAI via MCP quando disponibile
+- evitare riferimenti non ufficiali come base contrattuale di architettura

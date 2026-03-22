@@ -9,8 +9,10 @@ from prediction_market_bot.app.config import load_settings
 from prediction_market_bot.app.logging import configure_logging
 from prediction_market_bot.services import (
     PaperPortfolioEngine,
+    build_shadow_scoring_report,
     generate_report_markdown,
     load_operator_state,
+    render_shadow_scoring_report_markdown,
     replay_run,
     write_report,
 )
@@ -95,6 +97,74 @@ def paper_portfolio_state_command(
             "unrealized_pnl_usd": snapshot.unrealized_pnl_usd,
         },
     )
+    return 0
+
+
+def generate_shadow_report_command(
+    config_path: Path,
+    agents_config_path: Path,
+    run_id: str,
+    output_path: Path | None = None,
+    *,
+    as_json: bool = False,
+    profile: bool = False,
+) -> int:
+    settings = load_settings(config_path, agents_config_path)
+    configure_logging(settings.logging)
+    profiler = build_command_profiler(settings=settings, profile=profile)
+    persistence = build_persistence(settings)
+    with profiler.measure("shadow_report_query"):
+        report = build_shadow_scoring_report(persistence, run_id)
+
+    if report.total_rows == 0:
+        logger.error(
+            "shadow_report_not_found",
+            extra={
+                "event": "shadow_report_not_found",
+                "run_id": run_id,
+                "warnings": list(report.warnings),
+            },
+        )
+        emit_command_profile(profiler=profiler, logger=logger, command="generate-shadow-report", run_id=run_id)
+        return 1
+
+    if as_json:
+        with profiler.measure("shadow_report_render_json"):
+            print(json.dumps(report.to_dict(), indent=2))
+        logger.info(
+            "shadow_report_generated",
+            extra={
+                "event": "shadow_report_generated",
+                "run_id": run_id,
+                "format": "json",
+                "total_rows": report.total_rows,
+                "rows_with_model_v2": report.rows_with_model_v2,
+                "rows_with_alt_llm_shadow": report.rows_with_alt_llm_shadow,
+                "rows_with_parity_warnings": report.rows_with_parity_warnings,
+            },
+        )
+        emit_command_profile(profiler=profiler, logger=logger, command="generate-shadow-report", run_id=run_id)
+        return 0
+
+    with profiler.measure("shadow_report_render_markdown"):
+        markdown = render_shadow_scoring_report_markdown(report)
+    destination = output_path or Path(settings.storage.artifacts_dir) / "reports" / f"{run_id}.shadow.md"
+    with profiler.measure("shadow_report_write_file"):
+        written = write_report(destination, markdown)
+    logger.info(
+        "shadow_report_generated",
+        extra={
+            "event": "shadow_report_generated",
+            "run_id": run_id,
+            "format": "markdown",
+            "output_path": str(written),
+            "total_rows": report.total_rows,
+            "rows_with_model_v2": report.rows_with_model_v2,
+            "rows_with_alt_llm_shadow": report.rows_with_alt_llm_shadow,
+            "rows_with_parity_warnings": report.rows_with_parity_warnings,
+        },
+    )
+    emit_command_profile(profiler=profiler, logger=logger, command="generate-shadow-report", run_id=run_id)
     return 0
 
 

@@ -166,6 +166,7 @@ class ResearchPacket(StrictModel):
     evidence_strength: Probability
     disagreement_score: Probability
     narrative_summary: str
+    feature_bundle: dict[str, float] = Field(default_factory=dict)
 
 
 class PredictionResult(StrictModel):

@@ -232,6 +232,49 @@ class PipelineCoordinator:
                     duration_ms=round(prediction_duration_ms, 3),
                 )
                 self._persist_artifact(effective_run_id, "prediction_results", prediction_result.model_dump(mode="json"))
+                runtime_features_payload = getattr(self.prediction, "last_runtime_features", None)
+                if isinstance(runtime_features_payload, dict):
+                    self._persist_artifact(
+                        effective_run_id,
+                        "prediction_runtime_features",
+                        {
+                            "market_id": market_id,
+                            **runtime_features_payload,
+                        },
+                    )
+                shadow_payload = getattr(self.prediction, "last_shadow_comparison", None)
+                if isinstance(shadow_payload, dict):
+                    comparison_kind = str(shadow_payload.get("comparison_kind") or "").strip().lower()
+                    comparison_artifact_type = (
+                        "prediction_alt_comparisons"
+                        if comparison_kind == "alt_promoted_vs_model_v2_baseline"
+                        else "prediction_shadow_comparisons"
+                    )
+                    self._persist_artifact(
+                        effective_run_id,
+                        comparison_artifact_type,
+                        shadow_payload,
+                    )
+                    shadow_parity_status = str(shadow_payload.get("parity_status") or "")
+                    if shadow_parity_status and shadow_parity_status != "ok":
+                        self._emit_stage(
+                            "prediction_parity_warning",
+                            run_id=effective_run_id,
+                            market_id=market_id,
+                            status=shadow_parity_status,
+                            warnings=shadow_payload.get("parity_warnings"),
+                        )
+                parity_warnings = getattr(self.prediction, "last_parity_warnings", ())
+                if isinstance(parity_warnings, Sequence) and parity_warnings:
+                    warning_payload: dict[str, object] = {
+                        "market_id": market_id,
+                        "warnings": [str(item) for item in parity_warnings if str(item).strip()],
+                    }
+                    self._persist_artifact(
+                        effective_run_id,
+                        "prediction_parity_warnings",
+                        warning_payload,
+                    )
 
                 current_stage = "risk"
                 stage_started = perf_counter()

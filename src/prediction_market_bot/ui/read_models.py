@@ -14,8 +14,10 @@ from prediction_market_bot.domain.models import TradeReviewItem, TxAttempt, TxIn
 from prediction_market_bot.infrastructure.operational_sqlite import OperationalRepositories
 from prediction_market_bot.infrastructure.persistence import JsonlPersistence
 from prediction_market_bot.services import (
+    OperatorControlState,
     RuntimeMetricsSnapshot,
     TradeReviewQueueService,
+    build_shadow_scoring_report,
     collect_runtime_metrics,
     list_run_ids,
     load_operator_state,
@@ -23,6 +25,7 @@ from prediction_market_bot.services import (
     replay_run,
     validate_startup,
 )
+from prediction_market_bot.services.model_promotion import build_model_drift_report, resolve_runtime_model_gate_decision
 
 from .models import (
     ChartPointResponse,
@@ -35,6 +38,7 @@ from .models import (
     IncidentEventResponse,
     IncidentsFeedResponse,
     LastRunSummaryResponse,
+    ModelVisibilityResponse,
     OverviewTabResponse,
     PredictionRowResponse,
     PredictionTabResponse,
@@ -53,6 +57,7 @@ from .models import (
     RunOptionResponse,
     RunSelectorResponse,
     RuntimeMetricsResponse,
+    ShadowComparisonHistoryRowResponse,
     SandboxTxAttemptTimelineRowResponse,
     SandboxTxIntentDetailResponse,
     SandboxTxReceiptTimelineRowResponse,
@@ -64,6 +69,8 @@ from .models import (
     SettlementTabResponse,
     StartupValidationSummaryResponse,
     SystemHealthTabResponse,
+    DriftAlertResponse,
+    DriftSignalResponse,
     UiActionLogRowResponse,
 )
 
@@ -203,6 +210,8 @@ class UiReadModelService:
                 operator_state_path(settings.storage.artifacts_dir),
                 repository=self._context.operational.operator_control_state,
             )
+            model_visibility = self._model_visibility(state=state)
+            drift_alert = self._drift_alert(run_id=selector.selected_run_id)
             metrics = _to_metrics_response(
                 collect_runtime_metrics(
                     settings=settings,
@@ -238,6 +247,8 @@ class UiReadModelService:
                 tx_failed_count=metrics.tx_failed_count,
                 stale_data_events_total=metrics.stale_data_events_total,
                 stale_data_blocked_trades_total=metrics.stale_data_blocked_trades_total,
+                model_visibility=model_visibility,
+                drift_alert=drift_alert,
                 counters_chart=(
                     ChartPointResponse(label="live_source_failures", value=float(metrics.live_source_failures_total)),
                     ChartPointResponse(label="review_queue_depth", value=float(metrics.review_queue_depth)),
@@ -466,8 +477,45 @@ class UiReadModelService:
     def prediction_tab(self, run_id: str | None = None) -> PredictionTabResponse:
         selector = self.run_selector(run_id)
         run = selector.selected_run_id
+        state = load_operator_state(
+            operator_state_path(self._context.settings.storage.artifacts_dir),
+            repository=self._context.operational.operator_control_state,
+        )
+        model_visibility = self._model_visibility(state=state)
+        drift_alert = self._drift_alert(run_id=run)
+        shadow_report = self._shadow_report(run_id=run) if run else None
+        shadow_summary = self._shadow_summary(run_id=run, report=shadow_report) if run else None
+        alt_promoted_summary = self._alt_promoted_summary(run_id=run) if run else None
+        shadow_history = self._shadow_history(active_run_id=run)
+        calibration_summary = (
+            self._chart_from_shadow_calibration(shadow_report)
+            if shadow_report is not None
+            else ()
+        )
+        approval_rate_summary: tuple[ChartPointResponse, ...] = (
+            self._chart_from_shadow_approval(shadow_report)
+            if shadow_report is not None
+            else ()
+        )
+        disagreement_buckets = shadow_summary.disagreement_buckets if shadow_summary is not None else ()
+        enrichment_coverage: float | None = None
+        disagreement_vs_baseline: tuple[ChartPointResponse, ...] = ()
+        if shadow_summary is None and alt_promoted_summary is not None:
+            disagreement_buckets = _chart_from_mapping(alt_promoted_summary.get("disagreement_buckets"))
+            disagreement_vs_baseline = disagreement_buckets
+            enrichment_coverage = _to_optional_float(alt_promoted_summary.get("enrichment_coverage"))
+            approval_rate_summary = _chart_from_mapping(
+                alt_promoted_summary.get("approval_rate"),
+                preferred_order=("model_v2_rate", "alt_llm_promoted_rate", "approval_rate_delta_alt_minus_model_v2"),
+            )
         if not run:
-            return _empty_prediction(selector, "no_run_selected")
+            return _empty_prediction(
+                selector,
+                "no_run_selected",
+                model_visibility=model_visibility,
+                shadow_history=shadow_history,
+                drift_alert=drift_alert,
+            )
         predictions = self._artifact_payloads(run, "prediction_results")
         rows: list[PredictionRowResponse] = []
         side_counter: dict[str, int] = {}
@@ -501,6 +549,15 @@ class UiReadModelService:
             predictions_count=count,
             avg_confidence=round(confidence_sum / count, 4) if count > 0 else 0.0,
             avg_edge_bps=round(edge_sum_bps / count, 2) if count > 0 else 0.0,
+            model_visibility=model_visibility,
+            calibration_summary=calibration_summary,
+            shadow_comparison=shadow_summary,
+            shadow_history=shadow_history,
+            approval_rate_summary=approval_rate_summary,
+            disagreement_buckets=disagreement_buckets,
+            enrichment_coverage=enrichment_coverage,
+            disagreement_vs_baseline=disagreement_vs_baseline,
+            drift_alert=drift_alert,
             side_distribution=_chart_from_counter(side_counter),
             rows=tuple(rows[:30]),
         )
@@ -832,6 +889,272 @@ class UiReadModelService:
             incidents_feed=self._incident_events(run_id=run, limit=20),
         )
 
+    def _model_visibility(self, *, state: OperatorControlState | None = None) -> ModelVisibilityResponse:
+        settings = self._context.settings
+        operator_state = state
+        if operator_state is None:
+            operator_state = load_operator_state(
+                operator_state_path(settings.storage.artifacts_dir),
+                repository=self._context.operational.operator_control_state,
+            )
+        decision = resolve_runtime_model_gate_decision(
+            settings=settings,
+            state=operator_state,
+        )
+        alt_promoted_modes = {
+            item.strip().upper()
+            for item in settings.prediction.alt_shadow_promoted_runtime_modes
+            if item.strip()
+        }
+        alt_promoted_active = bool(
+            settings.prediction.alt_shadow_enabled
+            and settings.prediction.alt_shadow_promoted_enabled
+            and settings.runtime.mode.value == "SANDBOX_CHAIN"
+            and (not alt_promoted_modes or settings.runtime.mode.value in alt_promoted_modes)
+            and decision.allowed
+            and decision.effective_engine == "model_v2"
+        )
+        model_artifact_path = (
+            settings.prediction.alt_shadow_model_artifact_path
+            if alt_promoted_active and settings.prediction.alt_shadow_model_artifact_path.strip()
+            else settings.prediction.model_artifact_path
+        )
+        calibration_artifact_path = (
+            settings.prediction.alt_shadow_calibration_artifact_path
+            if alt_promoted_active and settings.prediction.alt_shadow_calibration_artifact_path.strip()
+            else settings.prediction.calibration_artifact_path
+        )
+        artifact_payload = self._read_json_mapping(Path(model_artifact_path))
+        model_name = _to_text(artifact_payload.get("model_name")) or "heuristic"
+        feature_schema_version = _to_text(artifact_payload.get("feature_schema_version")) or (
+            settings.prediction.alt_shadow_expected_feature_schema_version
+            if alt_promoted_active
+            else settings.prediction.model_expected_feature_schema_version
+        )
+        calibration_version = ""
+        calibration_method = ""
+        artifact_calibration = _as_map(artifact_payload.get("calibration"))
+        if artifact_calibration:
+            calibration_version = _to_text(artifact_calibration.get("calibration_version"))
+            calibration_method = _to_text(artifact_calibration.get("method"))
+        if (not calibration_version or not calibration_method) and calibration_artifact_path.strip():
+            calibration_payload = self._read_json_mapping(Path(calibration_artifact_path))
+            calibration_version = calibration_version or _to_text(calibration_payload.get("calibration_version"))
+            calibration_method = calibration_method or _to_text(calibration_payload.get("method"))
+        active_model_version = _to_text(artifact_payload.get("model_version"))
+        if not active_model_version and not alt_promoted_active:
+            active_model_version = decision.model_version
+        active_source_set: tuple[str, ...] = ()
+        effective_engine = decision.effective_engine
+        gate_reason = decision.reason
+        if alt_promoted_active:
+            effective_engine = "model_v2_alt_promoted"
+            gate_reason = "model_v2_allowed_alt_promoted_path_active"
+            active_source_set = tuple(
+                source.strip().lower()
+                for source in settings.prediction.alt_shadow_required_source_coverage
+                if source.strip()
+            )
+        return ModelVisibilityResponse(
+            runtime_mode=settings.runtime.mode.value,
+            requested_engine=decision.requested_engine,
+            effective_engine=effective_engine,
+            gate_required=decision.gate_required,
+            gate_reason=gate_reason,
+            active_model_version=active_model_version,
+            model_name=model_name,
+            feature_schema_version=feature_schema_version,
+            calibration_version=calibration_version,
+            calibration_method=calibration_method,
+            active_source_set=active_source_set,
+            promoted_model_version=getattr(operator_state, "model_v2_promoted_model_version", ""),
+            promoted_at=getattr(operator_state, "model_v2_promoted_at", ""),
+            rollback_active=bool(getattr(operator_state, "model_v2_rollback_active", False)),
+            rollback_reason=getattr(operator_state, "model_v2_rollback_reason", ""),
+        )
+
+    def _shadow_report(self, *, run_id: str) -> object | None:
+        if not run_id.strip():
+            return None
+        report = build_shadow_scoring_report(self._context.persistence, run_id)
+        if report.total_rows <= 0:
+            return None
+        return report
+
+    def _shadow_summary(self, *, run_id: str, report: object | None = None) -> ShadowComparisonHistoryRowResponse | None:
+        resolved = report if report is not None else self._shadow_report(run_id=run_id)
+        if resolved is None:
+            return None
+        total_rows = int(getattr(resolved, "total_rows", 0))
+        rows_with_model_v2 = int(getattr(resolved, "rows_with_model_v2", 0))
+        if total_rows <= 0 and rows_with_model_v2 <= 0:
+            return None
+        approval_rate = _as_map(getattr(resolved, "approval_rate", {}))
+        disagreement = _as_map(getattr(resolved, "disagreement_buckets", {}))
+        return ShadowComparisonHistoryRowResponse(
+            run_id=run_id,
+            total_rows=total_rows,
+            rows_with_model_v2=rows_with_model_v2,
+            rows_with_parity_warnings=int(getattr(resolved, "rows_with_parity_warnings", 0)),
+            approval_rate_heuristic=_to_optional_float(approval_rate.get("heuristic_rate")),
+            approval_rate_model_v2=_to_optional_float(approval_rate.get("model_v2_rate")),
+            approval_rate_delta_model_minus_heuristic=_to_optional_float(
+                approval_rate.get("approval_rate_delta_model_minus_heuristic")
+            ),
+            disagreement_buckets=_chart_from_mapping(disagreement),
+        )
+
+    def _shadow_history(self, *, active_run_id: str, limit: int = 8) -> tuple[ShadowComparisonHistoryRowResponse, ...]:
+        if limit <= 0:
+            return ()
+        run_ids = list_run_ids(self._context.persistence, limit_runs=100)
+        ordered: list[str] = []
+        if active_run_id.strip():
+            ordered.append(active_run_id.strip())
+        ordered.extend(reversed(run_ids))
+        history: list[ShadowComparisonHistoryRowResponse] = []
+        seen: set[str] = set()
+        for candidate in ordered:
+            rid = candidate.strip()
+            if not rid or rid in seen:
+                continue
+            seen.add(rid)
+            summary = self._shadow_summary(run_id=rid)
+            if summary is None:
+                continue
+            history.append(summary)
+            if len(history) >= limit:
+                break
+        return tuple(history)
+
+    def _drift_alert(self, *, run_id: str) -> DriftAlertResponse | None:
+        if not run_id.strip():
+            return None
+        try:
+            report = build_model_drift_report(
+                settings=self._context.settings,
+                persistence=self._context.persistence,
+                run_id=run_id,
+            )
+        except Exception:
+            return None
+        signals = tuple(
+            DriftSignalResponse(
+                name=signal.name,
+                status=signal.status,
+                detail=signal.detail,
+                current_value=signal.current_value,
+                reference_value=signal.reference_value,
+                threshold=signal.threshold,
+            )
+            for signal in report.signals
+        )
+        return DriftAlertResponse(
+            overall_status=report.overall_status,
+            current_run_id=report.current_run_id,
+            created_at_utc=report.created_at_utc,
+            warnings=tuple(report.warnings),
+            signals=signals,
+        )
+
+    def _alt_promoted_summary(self, *, run_id: str) -> dict[str, object] | None:
+        rows = self._artifact_payloads(run_id, "prediction_alt_comparisons")
+        if not rows:
+            return None
+        disagreement_buckets: dict[str, int] = {}
+        enrichment_values: list[float] = []
+        model_v2_approved = 0
+        alt_approved = 0
+        approval_sample = 0
+        for payload in rows:
+            bucket = _to_text(payload.get("disagreement_bucket")) or "unknown"
+            disagreement_buckets[bucket] = disagreement_buckets.get(bucket, 0) + 1
+            enrichment = _to_optional_float(payload.get("enrichment_coverage"))
+            if enrichment is not None:
+                enrichment_values.append(enrichment)
+            approvals = _as_map(payload.get("approvals"))
+            model_flag = approvals.get("model_v2")
+            alt_flag = approvals.get("alt_llm_promoted")
+            if isinstance(model_flag, bool):
+                approval_sample += 1
+                if model_flag:
+                    model_v2_approved += 1
+                if isinstance(alt_flag, bool) and alt_flag:
+                    alt_approved += 1
+        approval_rate: dict[str, float | None] = {
+            "model_v2_rate": None,
+            "alt_llm_promoted_rate": None,
+            "approval_rate_delta_alt_minus_model_v2": None,
+        }
+        if approval_sample > 0:
+            model_rate = model_v2_approved / approval_sample
+            alt_rate = alt_approved / approval_sample
+            approval_rate = {
+                "model_v2_rate": round(model_rate, 8),
+                "alt_llm_promoted_rate": round(alt_rate, 8),
+                "approval_rate_delta_alt_minus_model_v2": round(alt_rate - model_rate, 8),
+            }
+        enrichment_coverage = None
+        if enrichment_values:
+            enrichment_coverage = round(sum(enrichment_values) / len(enrichment_values), 8)
+        return {
+            "rows_count": len(rows),
+            "disagreement_buckets": disagreement_buckets,
+            "enrichment_coverage": enrichment_coverage,
+            "approval_rate": approval_rate,
+        }
+
+    @staticmethod
+    def _chart_from_shadow_calibration(report: object | None) -> tuple[ChartPointResponse, ...]:
+        if report is None:
+            return ()
+        calibration = _as_map(getattr(report, "calibration", {}))
+        rows: list[ChartPointResponse] = []
+        mapping = (
+            ("heuristic_brier", "heuristic_brier"),
+            ("model_v2_brier", "model_v2_brier"),
+            ("brier_delta_model_minus_heuristic", "brier_delta"),
+            ("heuristic_calibration_gap", "heuristic_calibration_gap"),
+            ("model_v2_calibration_gap", "model_v2_calibration_gap"),
+            ("calibration_gap_delta_model_minus_heuristic", "calibration_gap_delta"),
+        )
+        for key, label in mapping:
+            value = _to_optional_float(calibration.get(key))
+            if value is None:
+                continue
+            rows.append(ChartPointResponse(label=label, value=value))
+        return tuple(rows)
+
+    @staticmethod
+    def _chart_from_shadow_approval(report: object | None) -> tuple[ChartPointResponse, ...]:
+        if report is None:
+            return ()
+        approval = _as_map(getattr(report, "approval_rate", {}))
+        rows: list[ChartPointResponse] = []
+        mapping = (
+            ("heuristic_rate", "heuristic_rate"),
+            ("model_v2_rate", "model_v2_rate"),
+            ("approval_rate_delta_model_minus_heuristic", "approval_rate_delta"),
+        )
+        for key, label in mapping:
+            value = _to_optional_float(approval.get(key))
+            if value is None:
+                continue
+            rows.append(ChartPointResponse(label=label, value=value))
+        return tuple(rows)
+
+    @staticmethod
+    def _read_json_mapping(path: Path) -> dict[str, Any]:
+        if not path or not path.exists():
+            return {}
+        try:
+            import json
+
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        return dict(raw) if isinstance(raw, Mapping) else {}
+
     def _last_run_summary(self, run_id: str) -> LastRunSummaryResponse:
         selected = run_id or self.run_selector().latest_run_id
         if not selected:
@@ -992,7 +1315,14 @@ def _empty_research(selector: RunSelectorResponse, note: str) -> ResearchTabResp
     )
 
 
-def _empty_prediction(selector: RunSelectorResponse, note: str) -> PredictionTabResponse:
+def _empty_prediction(
+    selector: RunSelectorResponse,
+    note: str,
+    *,
+    model_visibility: ModelVisibilityResponse,
+    shadow_history: tuple[ShadowComparisonHistoryRowResponse, ...] = (),
+    drift_alert: DriftAlertResponse | None = None,
+) -> PredictionTabResponse:
     return PredictionTabResponse(
         generated_at=datetime.now(UTC).isoformat(),
         run_selector=selector,
@@ -1001,6 +1331,15 @@ def _empty_prediction(selector: RunSelectorResponse, note: str) -> PredictionTab
         predictions_count=0,
         avg_confidence=0.0,
         avg_edge_bps=0.0,
+        model_visibility=model_visibility,
+        calibration_summary=(),
+        shadow_comparison=None,
+        shadow_history=shadow_history,
+        approval_rate_summary=(),
+        disagreement_buckets=(),
+        enrichment_coverage=None,
+        disagreement_vs_baseline=(),
+        drift_alert=drift_alert,
         side_distribution=(),
         rows=(),
     )
@@ -1325,16 +1664,33 @@ def _chart_from_counter(counter: Mapping[str, int], *, limit: int = 10) -> tuple
     return tuple(ChartPointResponse(label=label, value=float(value)) for label, value in items[:limit] if label)
 
 
-def _chart_from_mapping(raw: object, *, limit: int = 16) -> tuple[ChartPointResponse, ...]:
+def _chart_from_mapping(
+    raw: object,
+    *,
+    limit: int = 16,
+    preferred_order: Sequence[str] = (),
+) -> tuple[ChartPointResponse, ...]:
     if not isinstance(raw, Mapping):
         return ()
+    preferred_map = {item.strip(): index for index, item in enumerate(preferred_order) if item.strip()}
     points: list[ChartPointResponse] = []
+    order_key: dict[str, int] = {}
     for key, value in raw.items():
         label = _to_text(key)
         if not label:
             continue
+        if label in preferred_map:
+            order_key[label] = preferred_map[label]
         points.append(ChartPointResponse(label=label, value=_to_float(value)))
-    points.sort(key=lambda item: item.value, reverse=True)
+    if preferred_map:
+        points.sort(
+            key=lambda item: (
+                order_key.get(item.label, len(preferred_map) + 1),
+                -item.value,
+            )
+        )
+    else:
+        points.sort(key=lambda item: item.value, reverse=True)
     return tuple(points[:limit])
 
 

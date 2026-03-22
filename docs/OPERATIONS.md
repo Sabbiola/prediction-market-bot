@@ -187,10 +187,147 @@ python -m prediction_market_bot.main status --config config/app.yaml --agents-co
 python -m prediction_market_bot.main tx-status --config config/app.yaml --agents-config config/agents.yaml --json
 python -m prediction_market_bot.main tx-reconcile --config config/app.yaml --agents-config config/agents.yaml --json
 python -m prediction_market_bot.main tx-resubmit-safe --config config/app.yaml --agents-config config/agents.yaml --intent-id <intent_id> --json
+python -m prediction_market_bot.main evaluate-model-promotion --config config/app.yaml --agents-config config/agents.yaml --json
+python -m prediction_market_bot.main model-promotion-status --config config/app.yaml --agents-config config/agents.yaml --json
+python -m prediction_market_bot.main promote-model-v2 --config config/app.yaml --agents-config config/agents.yaml --rationale "<reason>" --json
+python -m prediction_market_bot.main rollback-model-v2 --config config/app.yaml --agents-config config/agents.yaml --rationale "<incident reason>" --json
+python -m prediction_market_bot.main clear-model-v2-rollback --config config/app.yaml --agents-config config/agents.yaml --rationale "<close incident>" --json
+python -m prediction_market_bot.main drift-status --config config/app.yaml --agents-config config/agents.yaml --json
+python -m prediction_market_bot.main record-threshold-tuning --config config/app.yaml --agents-config config/agents.yaml --rationale "<why>" --ticket "<chg-id>" --json
+python -m prediction_market_bot.main generate-shadow-report --config config/app.yaml --agents-config config/agents.yaml --run-id <run_id> --output data/artifacts/reports/<run_id>.shadow.md
 python -m prediction_market_bot.ui.server --config config/app.yaml --agents-config config/agents.yaml --host 127.0.0.1 --port 8080
 docker compose up -d --build prediction-market-worker prediction-market-ui
 docker compose --profile staging-postgres up -d postgres-staging
 ```
+
+## Model promotion, drift e rollback runbook
+
+Gate runtime:
+
+- `model_v2` puo sostituire euristico solo con promozione esplicita in operator state
+- per mode `PAPER_LIVE`/`SANDBOX_CHAIN` il gate e bloccante (se configurazione default)
+- mismatch versione artifact/promozione o rollback attivo bloccano il path v2
+- path `alt+LLM promoted`:
+  - attivabile solo quando `model_v2` e consentito dal gate
+  - attivabile solo in `SANDBOX_CHAIN`
+  - richiede `agents.prediction.model_inference.alt_shadow.promoted_enabled=true`
+  - se coverage/enrichment/capability non sono disponibili, fallback esplicito a baseline `model_v2` con reason code auditabile
+
+Procedura promozione consigliata:
+
+1. `evaluate-model-promotion` e verificare `passed=true`.
+2. Allegare output evaluation + shadow report + walk-forward al change record.
+3. `promote-model-v2 --rationale "..."`
+4. Verificare con `model-promotion-status` che:
+   - gate decision sia `model_v2_allowed`
+   - versione promoted allineata a artifact attuale.
+5. Se si usa il path enriched:
+   - verificare in UI tab `Prediction`:
+     - `effective_engine=model_v2_alt_promoted`
+     - `active_source_set`
+     - `enrichment_coverage`
+     - `disagreement_vs_baseline`
+
+Procedura rollback (incident):
+
+1. `rollback-model-v2 --rationale "..."`
+2. Confermare fallback euristico con `model-promotion-status` / `status`.
+3. Eseguire `drift-status` e raccogliere segnali.
+4. Dopo analisi incident, `clear-model-v2-rollback` solo con approvazione.
+
+Monitoraggio drift:
+
+- eseguire `drift-status` periodicamente (o schedulato in automation)
+- trattare `critical` come evento operatore actionable
+- usare i signal detail per distinguere:
+  - shift feature input
+  - regime market
+  - degrado coverage research
+  - collasso confidence/approval
+
+Threshold tuning (disciplinato):
+
+- mai tuning implicito nel runtime
+- registrare ogni proposta con `record-threshold-tuning`
+- includere ticket, rationale, valori correnti e proposti
+- applicare modifiche solo via config versionata dopo evidence review
+
+## Runbook Sandbox-Live v2 (dress rehearsal)
+
+Obiettivo:
+
+- verificare che `model_v2` operi in `SANDBOX_CHAIN` senza indebolire review/risk guardrail
+- produrre evidenza ripetibile per il gate finale beta-live
+
+Procedura raccomandata:
+
+1. Preparazione
+   - configurare runtime `SANDBOX_CHAIN`
+   - verificare artifact model/calibration v2 disponibili
+2. Promozione controllata
+   - `promote-model-v2 --rationale "..."`
+   - `model-promotion-status --json` e confermare:
+     - `gate_decision.reason=model_v2_allowed`
+     - `gate_decision.effective_engine=model_v2`
+3. Startup checks
+   - `validate-startup`
+   - `healthcheck --json`
+4. Rehearsal run end-to-end
+   - primo `run-once` (atteso: review queue `PENDING_REVIEW`)
+   - `review-approve` con rationale
+   - secondo `run-once` (atteso: submit sandbox tx)
+   - `tx-status --json`
+   - `tx-reconcile --json`
+5. Lifecycle e reporting
+   - `paper-portfolio-state --json`
+   - `run-settlement-lane --run-id <run_id>`
+   - `replay-run --run-id <run_id>`
+   - `generate-report --run-id <run_id>`
+6. Verifica UI control-plane
+   - tab `Overview`: model attivo, gate reason, drift alert
+   - tab `Prediction`: model version, calibration summary, shadow/disagreement/approval summary
+
+Criteri PASS:
+
+- nessuna esecuzione senza review `APPROVED`
+- tx sandbox tracciata e riconciliata
+- replay/report generabili da artifact persistiti
+- model visibility esplicita e coerente in UI
+
+Nota:
+
+- venue live order posting resta disabilitata
+- `PAPER_LIVE` resta path shadow/guarded; attivazione promoted v2 limitata a `SANDBOX_CHAIN` salvo override config esplicito
+
+## Shadow scoring operativo (Prediction Engine v2)
+
+Modalita consigliata pre-promotion:
+
+1. configurare `agents.prediction.model_inference.engine=shadow_scoring`
+2. mantenere artifact v2 valorizzato (`model_artifact_path`, opzionale `calibration_artifact_path`)
+3. eseguire run normali (`run-once` / scheduler) con execution invariata
+4. generare report di confronto:
+
+```bash
+python -m prediction_market_bot.main generate-shadow-report --config config/app.yaml --agents-config config/agents.yaml --run-id <run_id>
+python -m prediction_market_bot.main generate-shadow-report --config config/app.yaml --agents-config config/agents.yaml --run-id <run_id> --json
+```
+
+Output atteso:
+
+- confronto euristico vs v2 persistito in `prediction_shadow_comparisons.jsonl`
+- confronto opzionale euristico vs `alt_llm_shadow` persistito nello stesso artifact quando `model_inference.alt_shadow.enabled=true`
+- warning parity visibili in `prediction_parity_warnings.jsonl` e audit event `prediction_parity_warning`
+- warning espliciti attesi per path alt+LLM:
+  - `missing_source_coverage`
+  - `enrichment_pipeline_failure`
+  - mismatch schema/feature contract
+- metriche confronto:
+  - prediction delta
+  - confidence delta
+  - approval-rate delta
+  - disagreement buckets
+  - delta calibrazione/edge (v2 e alt+LLM, quando disponibili)
 
 Note implementative (report/replay/eval):
 
@@ -353,6 +490,20 @@ Azione: bloccare avvio, correggere config/segreti, rilanciare `validate-startup`
 - aumento `pm_bot_live_source_failures_total`
 
 Azione: verificare endpoint/API key, applicare fallback policy o pausa operativa.
+
+## Prediction shadow parity
+
+- `prediction_parity_warning`
+- `prediction_parity_warnings` artifact non vuoto
+- report shadow senza `model_v2_prediction` disponibile
+- report shadow con `alt_llm_shadow_status` non `available` quando la lane alt+LLM e abilitata
+
+Azione:
+
+1. verificare `feature_schema_version` atteso vs artifact promoted.
+2. verificare `required_features` nel modello rispetto al bundle runtime-safe.
+3. se abilitato `alt_shadow`, verificare coverage sorgenti richieste (`news/reddit/x`) e `f_alt_enrichment_coverage`.
+4. rigenerare artifact offline o riallineare contract prima di qualsiasi promotion decision.
 
 ## Review gate
 

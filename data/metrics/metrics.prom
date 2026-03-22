@@ -1,0 +1,27 @@
+# HELP pm_bot_live_source_failures_total Total live source failure artifacts recorded.
+# TYPE pm_bot_live_source_failures_total gauge
+pm_bot_live_source_failures_total 0
+# HELP pm_bot_review_queue_depth Current pending review queue depth.
+# TYPE pm_bot_review_queue_depth gauge
+pm_bot_review_queue_depth 0
+# HELP pm_bot_open_positions Current open paper positions.
+# TYPE pm_bot_open_positions gauge
+pm_bot_open_positions 0
+# HELP pm_bot_pending_settlements Current pending settlement requests.
+# TYPE pm_bot_pending_settlements gauge
+pm_bot_pending_settlements 0
+# HELP pm_bot_tx_pending Current pending sandbox transactions.
+# TYPE pm_bot_tx_pending gauge
+pm_bot_tx_pending 0
+# HELP pm_bot_tx_mined Current mined sandbox transactions.
+# TYPE pm_bot_tx_mined gauge
+pm_bot_tx_mined 0
+# HELP pm_bot_tx_failed Current failed/dropped sandbox transactions.
+# TYPE pm_bot_tx_failed gauge
+pm_bot_tx_failed 0
+# HELP pm_bot_stale_data_events_total Total stale-data events observed in pipeline counters.
+# TYPE pm_bot_stale_data_events_total gauge
+pm_bot_stale_data_events_total 0
+# HELP pm_bot_stale_data_blocked_total Risk decisions blocked due to stale market data.
+# TYPE pm_bot_stale_data_blocked_total gauge
+pm_bot_stale_data_blocked_total 0

@@ -125,9 +125,12 @@ def test_research_ingestion_normalizes_deduplicates_and_persists(monkeypatch: py
     raw_rows = [row for row in persistence.artifacts if row[1] == "raw_research_findings"]
     normalized_rows = [row for row in persistence.artifacts if row[1] == "normalized_research_findings"]
     dedup_rows = [row for row in persistence.artifacts if row[1] == "deduped_research_findings"]
+    feature_rows = [row for row in persistence.artifacts if row[1] == "research_feature_bundles"]
     assert len(raw_rows) == 3
     assert len(normalized_rows) == 3
     assert len(dedup_rows) == 2
+    assert len(feature_rows) == 1
+    assert feature_rows[0][2]["feature_bundle"]["market_relevance_score"] >= 0.0
     assert any(event_type == "research_ingestion_end" for _, event_type, _ in persistence.events)
     assert any(event_type == "research_ingestion_source_end" for _, event_type, _ in persistence.events)
 

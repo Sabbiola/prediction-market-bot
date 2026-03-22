@@ -1,5 +1,6 @@
 """Application services package."""
 
+from .paper_portfolio import PaperPortfolioEngine, PaperPortfolioSnapshot, PaperPositionSnapshot
 from .operator_control import (
     OperatorControlState,
     load_operator_state,
@@ -7,18 +8,20 @@ from .operator_control import (
     save_operator_state,
 )
 from .alerting import AlertEvent, AlertingService, build_alerting_service
-from .paper_portfolio import PaperPortfolioEngine, PaperPortfolioSnapshot, PaperPositionSnapshot
 from .resolution import DeterministicResolutionPoller
 from .history import (
     BrierMetrics,
     CalibrationMetrics,
     ReplayDecisionRecord,
     ReplaySummary,
+    ShadowScoringReport,
     WindowEvaluation,
+    build_shadow_scoring_report,
     evaluate_window,
     generate_eval_report_markdown,
     generate_report_markdown,
     list_run_ids,
+    render_shadow_scoring_report_markdown,
     replay_run,
     write_report,
 )
@@ -27,6 +30,12 @@ from .trade_review import TradeReviewQueueService
 from .transactions import SandboxTransactionService, TxStatusSnapshot
 from .startup import StartupCheck, StartupValidationReport, validate_startup
 from .metrics import RuntimeMetricsSnapshot, collect_runtime_metrics, write_prometheus_textfile
+from .research_features import (
+    ResearchEvidencePoint,
+    ResearchFeatureBundle,
+    build_bundle_from_findings,
+    build_research_feature_bundle,
+)
 
 __all__ = [
     "BrierMetrics",
@@ -40,13 +49,16 @@ __all__ = [
     "DeterministicResolutionPoller",
     "ReplayDecisionRecord",
     "ReplaySummary",
+    "ShadowScoringReport",
     "WindowEvaluation",
+    "build_shadow_scoring_report",
     "evaluate_window",
     "generate_eval_report_markdown",
     "generate_report_markdown",
     "load_operator_state",
     "list_run_ids",
     "operator_state_path",
+    "render_shadow_scoring_report_markdown",
     "replay_run",
     "save_operator_state",
     "SettlementRequestQueueService",
@@ -59,6 +71,10 @@ __all__ = [
     "write_prometheus_textfile",
     "validate_startup",
     "RuntimeMetricsSnapshot",
+    "ResearchEvidencePoint",
+    "ResearchFeatureBundle",
     "TxStatusSnapshot",
+    "build_bundle_from_findings",
+    "build_research_feature_bundle",
     "write_report",
 ]

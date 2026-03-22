@@ -23,6 +23,16 @@ class OperatorControlState:
     scheduler_last_started_at: str = ""
     scheduler_last_tick_at: str = ""
     scheduler_iterations: int = 0
+    model_v2_promoted: bool = False
+    model_v2_promoted_model_version: str = ""
+    model_v2_promoted_at: str = ""
+    model_v2_promotion_rationale: str = ""
+    model_v2_promotion_evaluation_run_id: str = ""
+    model_v2_rollback_active: bool = False
+    model_v2_rollback_reason: str = ""
+    model_v2_rollback_at: str = ""
+    model_v2_last_drift_status: str = ""
+    model_v2_last_drift_checked_at: str = ""
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "OperatorControlState":
@@ -40,6 +50,16 @@ class OperatorControlState:
             scheduler_last_started_at=_to_text(payload.get("scheduler_last_started_at")),
             scheduler_last_tick_at=_to_text(payload.get("scheduler_last_tick_at")),
             scheduler_iterations=_to_int(payload.get("scheduler_iterations")),
+            model_v2_promoted=bool(payload.get("model_v2_promoted", False)),
+            model_v2_promoted_model_version=_to_text(payload.get("model_v2_promoted_model_version")),
+            model_v2_promoted_at=_to_text(payload.get("model_v2_promoted_at")),
+            model_v2_promotion_rationale=_to_text(payload.get("model_v2_promotion_rationale")),
+            model_v2_promotion_evaluation_run_id=_to_text(payload.get("model_v2_promotion_evaluation_run_id")),
+            model_v2_rollback_active=bool(payload.get("model_v2_rollback_active", False)),
+            model_v2_rollback_reason=_to_text(payload.get("model_v2_rollback_reason")),
+            model_v2_rollback_at=_to_text(payload.get("model_v2_rollback_at")),
+            model_v2_last_drift_status=_to_text(payload.get("model_v2_last_drift_status")),
+            model_v2_last_drift_checked_at=_to_text(payload.get("model_v2_last_drift_checked_at")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -57,6 +77,16 @@ class OperatorControlState:
             "scheduler_last_started_at": self.scheduler_last_started_at,
             "scheduler_last_tick_at": self.scheduler_last_tick_at,
             "scheduler_iterations": self.scheduler_iterations,
+            "model_v2_promoted": self.model_v2_promoted,
+            "model_v2_promoted_model_version": self.model_v2_promoted_model_version,
+            "model_v2_promoted_at": self.model_v2_promoted_at,
+            "model_v2_promotion_rationale": self.model_v2_promotion_rationale,
+            "model_v2_promotion_evaluation_run_id": self.model_v2_promotion_evaluation_run_id,
+            "model_v2_rollback_active": self.model_v2_rollback_active,
+            "model_v2_rollback_reason": self.model_v2_rollback_reason,
+            "model_v2_rollback_at": self.model_v2_rollback_at,
+            "model_v2_last_drift_status": self.model_v2_last_drift_status,
+            "model_v2_last_drift_checked_at": self.model_v2_last_drift_checked_at,
         }
 
 

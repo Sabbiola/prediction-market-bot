@@ -62,6 +62,29 @@ prediction-market-bot/
           evaluation_service.py
           report_service.py
           history_queries.py
+      strategy_research/
+        data_ingest/
+          provider.py
+          service.py
+          normalizer.py
+          storage.py
+        linkage/
+          models.py
+          service.py
+          storage.py
+        features/
+          schema.py
+          service.py
+          storage.py
+          models.py
+        alt_features/
+          schema.py
+          service.py
+          storage.py
+          models.py
+        simulator/
+          models.py
+          service.py
       main.py
   tests/
     test_pipeline_smoke.py
@@ -124,6 +147,7 @@ Responsabile di:
 - sentiment / stance
 - sintesi narrativa
 - contradiction / disagreement detection
+- emissione bundle feature research deterministico multi-dimensione
 
 Boundary implementativo ingestion live research:
 
@@ -132,6 +156,7 @@ Boundary implementativo ingestion live research:
 - `infrastructure/research/cache.py`: policy condivisa retry/cache/http fetch.
 - `infrastructure/research/pipeline.py`: orchestrazione ingestione, deduplica, persistenza artefatti/eventi.
 - `infrastructure/live_research.py`: shim di compatibilita per import legacy.
+- `services/research_features.py`: feature engineering shared runtime/offline (relevance, decay, priors, conflict, diversity, alignment, novelty).
 
 ### 9.3 Probabilistic Modeling
 Responsabile di:
@@ -141,6 +166,23 @@ Responsabile di:
 - fair probability
 - edge vs market
 - confidence
+
+Boundary serving runtime (Prediction Engine v2):
+
+- `agents/prediction.py` resta entrypoint unico del `PredictionAgent`.
+- path default: engine euristico (backward-compatible).
+- path `shadow_scoring`: euristico primario + modello v2 side-by-side (solo osservabilita, execution invariata).
+- path opzionale `model_v2`: inference da artifact offline versionato.
+- contract esplicito validato a runtime:
+  - `feature_schema_version`
+  - `model_version`
+  - `calibration_version`
+  - feature parity (`required_features` vs feature runtime-safe)
+- mismatch contratto/parity:
+  - fail chiaro (`PredictionModelArtifactError`) se fallback disabilitato
+  - fallback euristico se `fallback_to_heuristic=true`
+  - in `shadow_scoring` mismatch sempre visibile via warning/artifact (`prediction_parity_warnings`, `prediction_shadow_comparisons`)
+- nessun training online nel runtime; il runtime carica solo artifact promossi.
 
 ### 9.4 Risk & Portfolio
 Responsabile di:
@@ -211,6 +253,119 @@ Implementazione foundation (stato attuale):
   - `POST /api/actions/resume`
 - shell HTML server-rendered tramite template, con route `GET /`
 - layer read-model dedicato per aggregare dati runtime senza logica business nei controller
+
+### 9.8 Strategy Research Offline Data Lake
+Responsabile di:
+
+- ingestione storica dei mercati risolti per ricerca offline
+- persistenza separata raw/normalized con checkpoint resumable
+- verifica coerenza dataset per training/evaluation
+- generazione label leakage-safe da mercati risolti
+- benchmark baseline temporali e confronti run-to-run
+- generazione feature dataset versionati:
+  - `features/*` per segnali market+research
+  - `alt_features/*` per segnali news/social/LLM leakage-safe
+
+Non responsabile di:
+
+- serving runtime in `run-once`/scheduler
+- decisioni di prediction/risk/execution nel loop operativo
+- tuning online o modifica dinamica threshold in produzione
+
+Boundary:
+
+- package dedicato `src/prediction_market_bot/strategy_research/data_ingest/`
+- package dedicato `src/prediction_market_bot/strategy_research/research_corpus/`
+- package dedicato `src/prediction_market_bot/strategy_research/linkage/`
+- package dedicato `src/prediction_market_bot/strategy_research/benchmarking/`
+- package dedicato `src/prediction_market_bot/strategy_research/features/`
+- package dedicato `src/prediction_market_bot/strategy_research/simulator/`
+- package dedicato `src/prediction_market_bot/strategy_research/training/`
+- comandi CLI dedicati (`backfill-historical-markets`, `inspect-dataset`, `verify-dataset`)
+- comandi CLI dedicati corpus evidenze (`backfill-research-evidence`, `inspect-research-corpus`, `verify-research-alignment`)
+- comandi CLI dedicati linkage evidenze (`build-linkage`, `inspect-linkage`, `verify-linkage-quality`)
+- comandi CLI dedicati labels/benchmark (`build-labels`, `run-benchmarks`, `compare-benchmarks`)
+- comandi CLI dedicati feature store (`build-feature-dataset`, `inspect-feature-schema`, `verify-feature-parity`)
+- comandi CLI dedicati simulazione strategica (`run-walk-forward`, `generate-strategy-report`)
+- comandi CLI dedicati training/calibration (`train-baseline-models`, `calibrate-model`, `compare-models`, `generate-model-card`)
+- configurazione dedicata in `strategy_research.historical_data_ingest`
+- configurazione dedicata in `strategy_research.research_corpus`
+- configurazione dedicata in `strategy_research.linkage`
+
+### 9.9 Alternative Data Ingestion (News/Social)
+Responsabile di:
+
+- ingestione e normalizzazione classi sorgente `news_rss_web`, `reddit`, `x`
+- deduplica/provenance/timestamp alignment leakage-safe
+- quality gating del segnale prima dell'uso modellistico
+
+Boundary:
+
+- ingestion rumorosa fuori da `PredictionAgent` e fuori da policy `RiskAgent`
+- contract adapter capability-gated in `infrastructure/alt_data/`:
+  - `base.py`
+  - `capabilities.py`
+  - `models.py`
+  - `registry.py`
+- adapter source-specific in infrastructure/research (o package dedicato alt-data), policy e schema in `strategy_research/*`
+- capability enable/disable guidata da ambiente + credenziali (no fail-open silenzioso)
+
+Comportamento di bootstrap/startup:
+
+- registrazione sorgenti guidata da config (`alt_data.sources`)
+- validazione credenziali e capability delle sorgenti abilitate
+- failure esplicito in startup validation se una sorgente abilitata non e pronta
+
+Riferimento policy:
+
+- `docs/ALT_DATA_RESEARCH.md`
+- `docs/NEWS_SOCIAL_SOURCE_POLICY.md`
+
+### 9.9.1 Event/Entity/Market Linker (offline)
+
+Responsabile di:
+
+- collegare evidenze alt-data a `event_id`/`market_id` con regole deterministic-first
+- applicare similarity + alias resolution + time-window constraints
+- preservare traceability con score breakdown e reason code
+
+Boundary:
+
+- vive in `strategy_research/linkage/` (offline, fuori dal runtime decision loop)
+- persiste stati espliciti: `linked`, `ambiguous`, `unresolved`, `stale_evidence`
+- non forza linkage quando la confidenza e insufficiente o ambigua
+- output usato da dataset/feature engineering, non da execution live diretto
+
+### 9.10 LLM Enrichment Layer
+Responsabile di:
+
+- trasformare testo/evidenze in segnali strutturati (stance, relevance, contradiction, novelty)
+- mantenere contratti output versionati e provenance-aware
+- supportare ricerca offline e shadow analysis senza cambiare behavior execution
+
+Non responsabile di:
+
+- decisioni di approvazione trade
+- override di review/risk guardrails
+- training o auto-tuning online nel runtime
+
+Boundary:
+
+- default path deterministico non-LLM
+- feature LLM usabili in runtime solo dopo promotion gate e parity checks
+- fallback deterministico obbligatorio per evitare dipendenza hard da provider LLM
+- implementazione offline corrente:
+  - `strategy_research/llm_enrichment/provider.py`
+  - `strategy_research/llm_enrichment/service.py`
+  - `strategy_research/llm_enrichment/storage.py`
+  - `strategy_research/llm_enrichment/models.py`
+- comandi CLI:
+  - `enrich-alt-data`
+  - `inspect-llm-enrichment`
+
+Riferimento policy:
+
+- `docs/LLM_ENRICHMENT.md`
 
 ## 12. Scelte implementative che consiglio senza esitazione
 

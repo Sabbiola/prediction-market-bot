@@ -6,6 +6,7 @@ from typing import Sequence
 
 from prediction_market_bot.domain.models import MarketCandidate, ResearchFinding, ResearchPacket
 from prediction_market_bot.interfaces import ResearchSource
+from prediction_market_bot.services.research_features import build_bundle_from_findings
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +29,20 @@ class ResearchAgent:
                 evidence_strength=0.0,
                 disagreement_score=0.0,
                 narrative_summary="No evidence found.",
+                feature_bundle={},
             )
 
         weighted_sentiment = self._weighted_sentiment(findings)
         evidence_strength = self._evidence_strength(findings)
         disagreement_score = self._disagreement_score(findings, weighted_sentiment)
         narrative_summary = self._build_summary(findings)
+        bundle = build_bundle_from_findings(
+            market_title=candidate.market.title,
+            market_category=candidate.market.category,
+            event_context=candidate.market.category,
+            decision_timestamp_utc=candidate.market.updated_at,
+            findings=findings,
+        )
 
         return ResearchPacket(
             market_id=candidate.market.market_id,
@@ -42,6 +51,7 @@ class ResearchAgent:
             evidence_strength=round(evidence_strength, 4),
             disagreement_score=round(disagreement_score, 4),
             narrative_summary=narrative_summary,
+            feature_bundle=bundle.to_runtime_dict(),
         )
 
     def _collect_findings(self, candidate: MarketCandidate) -> tuple[ResearchFinding, ...]:

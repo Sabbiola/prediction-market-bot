@@ -153,6 +153,28 @@ agents:
       market_weight: 0.45
       narrative_weight: 0.45
       structure_weight: 0.10
+    model_inference:
+      engine: heuristic
+      model_artifact_path: ""
+      calibration_artifact_path: ""
+      feature_schema_version: v1
+      strict_feature_parity: true
+      fallback_to_heuristic: true
+      forced_heuristic_reason: ""
+      alt_shadow:
+        enabled: false
+        model_artifact_path: ""
+        calibration_artifact_path: ""
+        feature_schema_version: alt-v1
+        strict_feature_parity: true
+        promoted_enabled: false
+        promoted_runtime_modes:
+          - SANDBOX_CHAIN
+        required_source_coverage:
+          - news
+          - reddit
+          - x
+        require_llm_enrichment: true
     responsibilities:
       - estimate_fair_probability
       - compute_edge

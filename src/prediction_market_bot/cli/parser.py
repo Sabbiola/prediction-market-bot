@@ -447,6 +447,149 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit command timing profile summary to stderr/logs.",
     )
 
+    shadow_report = subparsers.add_parser(
+        "generate-shadow-report",
+        help="Generate side-by-side shadow comparison report (heuristic vs model-v2 and optional alt-data/LLM path).",
+    )
+    shadow_report.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    shadow_report.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    shadow_report.add_argument("--run-id", required=True, help="Run id with persisted prediction shadow comparisons.")
+    shadow_report.add_argument("--output", type=Path, default=None, help="Optional markdown output path.")
+    shadow_report.add_argument("--json", action="store_true", help="Print shadow comparison report as JSON.")
+    shadow_report.add_argument(
+        "--profile",
+        action="store_true",
+        help="Emit command timing profile summary to stderr/logs.",
+    )
+
+    evaluate_promotion = subparsers.add_parser(
+        "evaluate-model-promotion",
+        help="Evaluate model promotion gate evidence from offline metrics + runtime shadow artifacts.",
+    )
+    evaluate_promotion.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    evaluate_promotion.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    evaluate_promotion.add_argument("--dataset-id", default=None, help="Optional strategy dataset id override.")
+    evaluate_promotion.add_argument("--benchmark-run-id", default=None, help="Optional benchmark run id override.")
+    evaluate_promotion.add_argument("--training-run-id", default=None, help="Optional training run id override.")
+    evaluate_promotion.add_argument("--walk-forward-run-id", default=None, help="Optional walk-forward run id override.")
+    evaluate_promotion.add_argument("--shadow-run-id", default=None, help="Optional shadow scoring run id override.")
+    evaluate_promotion.add_argument("--output", type=Path, default=None, help="Optional JSON output file path.")
+    evaluate_promotion.add_argument("--json", action="store_true", help="Print evaluation payload as JSON.")
+
+    promotion_status = subparsers.add_parser(
+        "model-promotion-status",
+        help="Show runtime promotion/rollback gate status and latest drift summary.",
+    )
+    promotion_status.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    promotion_status.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    promotion_status.add_argument("--run-id", default=None, help="Optional run id for drift report target.")
+    promotion_status.add_argument("--reference-runs", type=int, default=None, help="Optional drift reference run count.")
+    promotion_status.add_argument("--json", action="store_true", help="Print status payload as JSON.")
+
+    promote_model = subparsers.add_parser(
+        "promote-model-v2",
+        help="Persist explicit operator promotion decision for runtime model_v2.",
+    )
+    promote_model.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    promote_model.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    promote_model.add_argument("--rationale", required=True, help="Operator rationale for promotion.")
+    promote_model.add_argument("--model-version", default="", help="Optional explicit model version override.")
+    promote_model.add_argument("--dataset-id", default=None, help="Optional dataset id override for evaluation.")
+    promote_model.add_argument("--benchmark-run-id", default=None, help="Optional benchmark run id override.")
+    promote_model.add_argument("--training-run-id", default=None, help="Optional training run id override.")
+    promote_model.add_argument("--walk-forward-run-id", default=None, help="Optional walk-forward run id override.")
+    promote_model.add_argument("--shadow-run-id", default=None, help="Optional shadow scoring run id override.")
+    promote_model.add_argument(
+        "--force",
+        action="store_true",
+        help="Allow promotion even when gate evaluation fails (requires explicit sign-off).",
+    )
+    promote_model.add_argument("--json", action="store_true", help="Print promotion payload as JSON.")
+
+    rollback_model = subparsers.add_parser(
+        "rollback-model-v2",
+        help="Enable rollback flag that forces runtime fallback to heuristic prediction engine.",
+    )
+    rollback_model.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    rollback_model.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    rollback_model.add_argument("--rationale", required=True, help="Operator rationale for rollback activation.")
+    rollback_model.add_argument("--json", action="store_true", help="Print rollback payload as JSON.")
+
+    clear_rollback_model = subparsers.add_parser(
+        "clear-model-v2-rollback",
+        help="Clear rollback flag to re-enable promoted model_v2 selection checks.",
+    )
+    clear_rollback_model.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    clear_rollback_model.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    clear_rollback_model.add_argument("--rationale", default="", help="Optional operator rationale for clearing rollback.")
+    clear_rollback_model.add_argument("--json", action="store_true", help="Print rollback-clear payload as JSON.")
+
+    drift_status = subparsers.add_parser(
+        "drift-status",
+        help="Compute model drift report from runtime artifacts and update operator drift status.",
+    )
+    drift_status.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    drift_status.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    drift_status.add_argument("--run-id", default=None, help="Optional run id to evaluate for drift.")
+    drift_status.add_argument("--reference-runs", type=int, default=None, help="Optional reference run count override.")
+    drift_status.add_argument("--json", action="store_true", help="Print drift payload as JSON.")
+
+    threshold_tuning = subparsers.add_parser(
+        "record-threshold-tuning",
+        help="Record reproducible threshold-tuning decision metadata (audit-only, no runtime auto-tuning).",
+    )
+    threshold_tuning.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    threshold_tuning.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    threshold_tuning.add_argument("--rationale", required=True, help="Operator rationale for threshold proposal.")
+    threshold_tuning.add_argument("--dataset-id", default="", help="Optional dataset id reference.")
+    threshold_tuning.add_argument("--target-model-version", default="", help="Optional target model version reference.")
+    threshold_tuning.add_argument("--min-confidence", type=float, default=None, help="Proposed min confidence.")
+    threshold_tuning.add_argument("--min-edge-bps", type=int, default=None, help="Proposed min edge bps.")
+    threshold_tuning.add_argument("--approval-rate-min", type=float, default=None, help="Proposed approval-rate min.")
+    threshold_tuning.add_argument("--approval-rate-max", type=float, default=None, help="Proposed approval-rate max.")
+    threshold_tuning.add_argument("--ticket", default="", help="Optional change ticket/issue reference.")
+    threshold_tuning.add_argument("--json", action="store_true", help="Print tuning record payload as JSON.")
+
     smoke_live = subparsers.add_parser("smoke-live-data", help="Fetch one live read-only market data batch.")
     smoke_live.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
     smoke_live.add_argument(
@@ -517,6 +660,1101 @@ def build_parser() -> argparse.ArgumentParser:
         help="Linear backoff base used between retries.",
     )
     smoke_research.add_argument("--cache-ttl-sec", type=int, default=600, help="In-memory HTTP cache TTL.")
+
+    backfill_historical = subparsers.add_parser(
+        "backfill-historical-markets",
+        help="Backfill resolved-market historical dataset for offline strategy research.",
+    )
+    backfill_historical.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    backfill_historical.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    backfill_historical.add_argument("--dataset-id", default=None, help="Optional dataset id override.")
+    backfill_historical.add_argument("--page-size", type=int, default=None, help="Optional page size override.")
+    backfill_historical.add_argument("--max-pages", type=int, default=None, help="Optional max pages per run override.")
+    backfill_historical.add_argument("--start-cursor", default=None, help="Optional cursor override for resumable backfill.")
+    backfill_historical.add_argument(
+        "--checkpoint-path",
+        type=Path,
+        default=None,
+        help="Optional checkpoint path override.",
+    )
+    backfill_historical.add_argument(
+        "--reset-checkpoint",
+        action="store_true",
+        help="Reset checkpoint before running backfill.",
+    )
+    backfill_historical.add_argument("--date-from", default=None, help="Inclusive date filter start (YYYY-MM-DD).")
+    backfill_historical.add_argument("--date-to", default=None, help="Inclusive date filter end (YYYY-MM-DD).")
+    backfill_historical.add_argument("--json", action="store_true", help="Print backfill summary payload as JSON.")
+
+    inspect_dataset = subparsers.add_parser(
+        "inspect-dataset",
+        help="Inspect historical strategy-research dataset layout and counts.",
+    )
+    inspect_dataset.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    inspect_dataset.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    inspect_dataset.add_argument("--dataset-id", default=None, help="Optional dataset id override.")
+    inspect_dataset.add_argument("--checkpoint-path", type=Path, default=None, help="Optional checkpoint path override.")
+    inspect_dataset.add_argument("--json", action="store_true", help="Print dataset inspection payload as JSON.")
+
+    verify_dataset = subparsers.add_parser(
+        "verify-dataset",
+        help="Verify historical strategy-research dataset consistency and completeness.",
+    )
+    verify_dataset.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    verify_dataset.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    verify_dataset.add_argument("--dataset-id", default=None, help="Optional dataset id override.")
+    verify_dataset.add_argument("--checkpoint-path", type=Path, default=None, help="Optional checkpoint path override.")
+    verify_dataset.add_argument("--json", action="store_true", help="Print dataset verification payload as JSON.")
+
+    backfill_research = subparsers.add_parser(
+        "backfill-research-evidence",
+        help="Backfill offline research evidence corpus aligned to market decision timelines.",
+    )
+    backfill_research.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    backfill_research.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    backfill_research.add_argument("--corpus-id", default=None, help="Optional research corpus id override.")
+    backfill_research.add_argument(
+        "--source-dataset-id",
+        default=None,
+        help="Historical market dataset id used for market timeline alignment.",
+    )
+    backfill_research.add_argument("--limit-markets", type=int, default=None, help="Optional max markets per run.")
+    backfill_research.add_argument(
+        "--limit-per-source",
+        type=int,
+        default=None,
+        help="Optional max findings requested per source.",
+    )
+    backfill_research.add_argument(
+        "--decision-date-from",
+        default=None,
+        help="Inclusive decision date filter start (YYYY-MM-DD).",
+    )
+    backfill_research.add_argument(
+        "--decision-date-to",
+        default=None,
+        help="Inclusive decision date filter end (YYYY-MM-DD).",
+    )
+    backfill_research.add_argument(
+        "--checkpoint-path",
+        type=Path,
+        default=None,
+        help="Optional checkpoint path override.",
+    )
+    backfill_research.add_argument(
+        "--reset-checkpoint",
+        action="store_true",
+        help="Reset research corpus checkpoint before backfill.",
+    )
+    backfill_research.add_argument("--json", action="store_true", help="Print backfill summary payload as JSON.")
+
+    inspect_research = subparsers.add_parser(
+        "inspect-research-corpus",
+        help="Inspect offline research evidence corpus layout and counts.",
+    )
+    inspect_research.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    inspect_research.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    inspect_research.add_argument("--corpus-id", default=None, help="Optional research corpus id override.")
+    inspect_research.add_argument("--source-dataset-id", default=None, help="Optional source dataset id override.")
+    inspect_research.add_argument("--checkpoint-path", type=Path, default=None, help="Optional checkpoint path override.")
+    inspect_research.add_argument("--json", action="store_true", help="Print corpus inspection payload as JSON.")
+
+    verify_research = subparsers.add_parser(
+        "verify-research-alignment",
+        help="Verify offline research evidence timeline alignment and provenance integrity.",
+    )
+    verify_research.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    verify_research.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    verify_research.add_argument("--corpus-id", default=None, help="Optional research corpus id override.")
+    verify_research.add_argument("--source-dataset-id", default=None, help="Optional source dataset id override.")
+    verify_research.add_argument("--checkpoint-path", type=Path, default=None, help="Optional checkpoint path override.")
+    verify_research.add_argument("--json", action="store_true", help="Print verification payload as JSON.")
+
+    backfill_news = subparsers.add_parser(
+        "backfill-news",
+        help="Backfill Google News/RSS-style offline news corpus for strategy research.",
+    )
+    backfill_news.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    backfill_news.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    backfill_news.add_argument("--corpus-id", default=None, help="Optional news corpus id override.")
+    backfill_news.add_argument(
+        "--topic",
+        action="append",
+        default=[],
+        help="Topic/category query (repeatable), example: WORLD or BUSINESS.",
+    )
+    backfill_news.add_argument(
+        "--keyword",
+        action="append",
+        default=[],
+        help="Keyword/entity query (repeatable).",
+    )
+    backfill_news.add_argument(
+        "--limit-per-query",
+        type=int,
+        default=None,
+        help="Optional maximum articles fetched per query.",
+    )
+    backfill_news.add_argument(
+        "--checkpoint-path",
+        type=Path,
+        default=None,
+        help="Optional checkpoint path override.",
+    )
+    backfill_news.add_argument(
+        "--reset-checkpoint",
+        action="store_true",
+        help="Reset news corpus checkpoint before backfill.",
+    )
+    backfill_news.add_argument("--json", action="store_true", help="Print backfill summary payload as JSON.")
+
+    inspect_news = subparsers.add_parser(
+        "inspect-news-corpus",
+        help="Inspect offline news corpus layout and counts.",
+    )
+    inspect_news.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    inspect_news.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    inspect_news.add_argument("--corpus-id", default=None, help="Optional news corpus id override.")
+    inspect_news.add_argument("--checkpoint-path", type=Path, default=None, help="Optional checkpoint path override.")
+    inspect_news.add_argument("--json", action="store_true", help="Print corpus inspection payload as JSON.")
+
+    verify_news_source = subparsers.add_parser(
+        "verify-news-source",
+        help="Verify news source access and corpus consistency.",
+    )
+    verify_news_source.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    verify_news_source.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    verify_news_source.add_argument("--corpus-id", default=None, help="Optional news corpus id override.")
+    verify_news_source.add_argument("--checkpoint-path", type=Path, default=None, help="Optional checkpoint path override.")
+    verify_news_source.add_argument(
+        "--topic",
+        action="append",
+        default=[],
+        help="Topic/category query to probe source readiness (repeatable).",
+    )
+    verify_news_source.add_argument(
+        "--keyword",
+        action="append",
+        default=[],
+        help="Keyword/entity query to probe source readiness (repeatable).",
+    )
+    verify_news_source.add_argument(
+        "--limit-per-query",
+        type=int,
+        default=None,
+        help="Optional maximum articles fetched per probe query.",
+    )
+    verify_news_source.add_argument("--json", action="store_true", help="Print verification payload as JSON.")
+
+    backfill_reddit = subparsers.add_parser(
+        "backfill-reddit",
+        help="Backfill offline Reddit corpus with OAuth-backed submissions/comments.",
+    )
+    backfill_reddit.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    backfill_reddit.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    backfill_reddit.add_argument("--corpus-id", default=None, help="Optional reddit corpus id override.")
+    backfill_reddit.add_argument(
+        "--subreddit",
+        action="append",
+        default=[],
+        help="Subreddit query (repeatable), example: worldnews.",
+    )
+    backfill_reddit.add_argument(
+        "--keyword",
+        action="append",
+        default=[],
+        help="Keyword query (repeatable).",
+    )
+    backfill_reddit.add_argument(
+        "--limit-per-query",
+        type=int,
+        default=None,
+        help="Optional maximum submissions fetched per query page.",
+    )
+    backfill_reddit.add_argument(
+        "--max-pages-per-query",
+        type=int,
+        default=None,
+        help="Optional maximum pages fetched per query. 0 means unbounded.",
+    )
+    include_comments_group = backfill_reddit.add_mutually_exclusive_group()
+    include_comments_group.add_argument(
+        "--include-comments",
+        dest="include_comments",
+        action="store_true",
+        help="Include comments ingest per submission.",
+    )
+    include_comments_group.add_argument(
+        "--no-include-comments",
+        dest="include_comments",
+        action="store_false",
+        help="Disable comments ingest per submission.",
+    )
+    backfill_reddit.set_defaults(include_comments=None)
+    backfill_reddit.add_argument(
+        "--comment-limit-per-post",
+        type=int,
+        default=None,
+        help="Optional maximum comments fetched per submission when comments are enabled.",
+    )
+    backfill_reddit.add_argument(
+        "--checkpoint-path",
+        type=Path,
+        default=None,
+        help="Optional checkpoint path override.",
+    )
+    backfill_reddit.add_argument(
+        "--reset-checkpoint",
+        action="store_true",
+        help="Reset reddit corpus checkpoint before backfill.",
+    )
+    backfill_reddit.add_argument(
+        "--incremental",
+        action="store_true",
+        help="Run incremental mode (probe recent page per query with dedup).",
+    )
+    backfill_reddit.add_argument("--json", action="store_true", help="Print backfill summary payload as JSON.")
+
+    inspect_reddit = subparsers.add_parser(
+        "inspect-reddit-corpus",
+        help="Inspect offline Reddit corpus layout and counts.",
+    )
+    inspect_reddit.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    inspect_reddit.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    inspect_reddit.add_argument("--corpus-id", default=None, help="Optional reddit corpus id override.")
+    inspect_reddit.add_argument("--checkpoint-path", type=Path, default=None, help="Optional checkpoint path override.")
+    inspect_reddit.add_argument("--json", action="store_true", help="Print corpus inspection payload as JSON.")
+
+    verify_reddit = subparsers.add_parser(
+        "verify-reddit-oauth",
+        help="Verify Reddit OAuth source access and corpus consistency.",
+    )
+    verify_reddit.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    verify_reddit.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    verify_reddit.add_argument("--corpus-id", default=None, help="Optional reddit corpus id override.")
+    verify_reddit.add_argument("--checkpoint-path", type=Path, default=None, help="Optional checkpoint path override.")
+    verify_reddit.add_argument(
+        "--subreddit",
+        action="append",
+        default=[],
+        help="Subreddit query to probe source readiness (repeatable).",
+    )
+    verify_reddit.add_argument(
+        "--keyword",
+        action="append",
+        default=[],
+        help="Keyword query to probe source readiness (repeatable).",
+    )
+    verify_reddit.add_argument(
+        "--limit-per-query",
+        type=int,
+        default=None,
+        help="Optional maximum submissions fetched per probe query.",
+    )
+    verify_comments_group = verify_reddit.add_mutually_exclusive_group()
+    verify_comments_group.add_argument(
+        "--include-comments",
+        dest="include_comments",
+        action="store_true",
+        help="Probe comments ingest per submission.",
+    )
+    verify_comments_group.add_argument(
+        "--no-include-comments",
+        dest="include_comments",
+        action="store_false",
+        help="Skip comment probe calls.",
+    )
+    verify_reddit.set_defaults(include_comments=None)
+    verify_reddit.add_argument(
+        "--comment-limit-per-post",
+        type=int,
+        default=None,
+        help="Optional maximum comments fetched per submission during source verification.",
+    )
+    verify_reddit.add_argument("--json", action="store_true", help="Print verification payload as JSON.")
+
+    backfill_x = subparsers.add_parser(
+        "backfill-x",
+        help="Backfill offline X corpus with capability-gated API ingestion.",
+    )
+    backfill_x.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    backfill_x.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    backfill_x.add_argument("--corpus-id", default=None, help="Optional X corpus id override.")
+    backfill_x.add_argument(
+        "--account",
+        action="append",
+        default=[],
+        help="Tracked account query (repeatable), example: elonmusk.",
+    )
+    backfill_x.add_argument(
+        "--keyword",
+        action="append",
+        default=[],
+        help="Keyword query (repeatable).",
+    )
+    backfill_x.add_argument(
+        "--limit-per-query",
+        type=int,
+        default=None,
+        help="Optional maximum posts fetched per query page.",
+    )
+    backfill_x.add_argument(
+        "--max-pages-per-query",
+        type=int,
+        default=None,
+        help="Optional maximum pages fetched per query. 0 means unbounded.",
+    )
+    backfill_x.add_argument(
+        "--checkpoint-path",
+        type=Path,
+        default=None,
+        help="Optional checkpoint path override.",
+    )
+    backfill_x.add_argument(
+        "--reset-checkpoint",
+        action="store_true",
+        help="Reset X corpus checkpoint before backfill.",
+    )
+    backfill_x.add_argument(
+        "--incremental",
+        action="store_true",
+        help="Run incremental mode (probe recent page per query with dedup).",
+    )
+    backfill_x.add_argument("--json", action="store_true", help="Print backfill summary payload as JSON.")
+
+    inspect_x = subparsers.add_parser(
+        "inspect-x-corpus",
+        help="Inspect offline X corpus layout and counts.",
+    )
+    inspect_x.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    inspect_x.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    inspect_x.add_argument("--corpus-id", default=None, help="Optional X corpus id override.")
+    inspect_x.add_argument("--checkpoint-path", type=Path, default=None, help="Optional checkpoint path override.")
+    inspect_x.add_argument("--json", action="store_true", help="Print corpus inspection payload as JSON.")
+
+    verify_x = subparsers.add_parser(
+        "verify-x-source",
+        help="Verify X source access and corpus consistency.",
+    )
+    verify_x.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    verify_x.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    verify_x.add_argument("--corpus-id", default=None, help="Optional X corpus id override.")
+    verify_x.add_argument("--checkpoint-path", type=Path, default=None, help="Optional checkpoint path override.")
+    verify_x.add_argument(
+        "--account",
+        action="append",
+        default=[],
+        help="Tracked account query to probe source readiness (repeatable).",
+    )
+    verify_x.add_argument(
+        "--keyword",
+        action="append",
+        default=[],
+        help="Keyword query to probe source readiness (repeatable).",
+    )
+    verify_x.add_argument(
+        "--limit-per-query",
+        type=int,
+        default=None,
+        help="Optional maximum posts fetched per probe query.",
+    )
+    verify_x.add_argument("--json", action="store_true", help="Print verification payload as JSON.")
+
+    build_linkage = subparsers.add_parser(
+        "build-linkage",
+        help="Build offline deterministic evidence->event/market linkage artifacts.",
+    )
+    build_linkage.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    build_linkage.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    build_linkage.add_argument("--linkage-id", default=None, help="Optional linkage artifact id override.")
+    build_linkage.add_argument("--dataset-id", default=None, help="Optional historical dataset id override.")
+    build_linkage.add_argument("--news-corpus-id", default=None, help="Optional news corpus id override.")
+    build_linkage.add_argument("--reddit-corpus-id", default=None, help="Optional reddit corpus id override.")
+    build_linkage.add_argument("--x-corpus-id", default=None, help="Optional X corpus id override.")
+    build_linkage.add_argument("--checkpoint-path", type=Path, default=None, help="Optional checkpoint path override.")
+    build_linkage.add_argument(
+        "--reset-checkpoint",
+        action="store_true",
+        help="Reset linkage checkpoint before processing.",
+    )
+    build_linkage.add_argument(
+        "--limit-evidence",
+        type=int,
+        default=None,
+        help="Optional maximum number of evidence rows processed in this run.",
+    )
+    build_linkage.add_argument(
+        "--decision-date-from",
+        default=None,
+        help="Optional lower date bound for market decision timestamp (YYYY-MM-DD).",
+    )
+    build_linkage.add_argument(
+        "--decision-date-to",
+        default=None,
+        help="Optional upper date bound for market decision timestamp (YYYY-MM-DD).",
+    )
+    build_linkage.add_argument("--json", action="store_true", help="Print linkage build payload as JSON.")
+
+    inspect_linkage = subparsers.add_parser(
+        "inspect-linkage",
+        help="Inspect linkage artifact counts/checkpoint and state distribution.",
+    )
+    inspect_linkage.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    inspect_linkage.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    inspect_linkage.add_argument("--linkage-id", default=None, help="Optional linkage artifact id override.")
+    inspect_linkage.add_argument("--dataset-id", default=None, help="Optional historical dataset id override.")
+    inspect_linkage.add_argument(
+        "--checkpoint-path",
+        type=Path,
+        default=None,
+        help="Optional checkpoint path override.",
+    )
+    inspect_linkage.add_argument("--json", action="store_true", help="Print linkage inspection payload as JSON.")
+
+    verify_linkage = subparsers.add_parser(
+        "verify-linkage-quality",
+        help="Verify linkage quality constraints and explicit unresolved/ambiguous states.",
+    )
+    verify_linkage.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    verify_linkage.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    verify_linkage.add_argument("--linkage-id", default=None, help="Optional linkage artifact id override.")
+    verify_linkage.add_argument("--dataset-id", default=None, help="Optional historical dataset id override.")
+    verify_linkage.add_argument(
+        "--checkpoint-path",
+        type=Path,
+        default=None,
+        help="Optional checkpoint path override.",
+    )
+    verify_linkage.add_argument("--json", action="store_true", help="Print linkage verification payload as JSON.")
+
+    enrich_alt_data = subparsers.add_parser(
+        "enrich-alt-data",
+        help="Run offline LLM enrichment over linked alt-data evidence records.",
+    )
+    enrich_alt_data.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    enrich_alt_data.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    enrich_alt_data.add_argument("--enrichment-id", default=None, help="Optional enrichment artifact id override.")
+    enrich_alt_data.add_argument("--linkage-id", default=None, help="Optional linkage artifact id override.")
+    enrich_alt_data.add_argument("--news-corpus-id", default=None, help="Optional news corpus id override.")
+    enrich_alt_data.add_argument("--reddit-corpus-id", default=None, help="Optional reddit corpus id override.")
+    enrich_alt_data.add_argument("--x-corpus-id", default=None, help="Optional x corpus id override.")
+    enrich_alt_data.add_argument(
+        "--checkpoint-path",
+        type=Path,
+        default=None,
+        help="Optional checkpoint path override.",
+    )
+    enrich_alt_data.add_argument("--reset-checkpoint", action="store_true", help="Reset enrichment checkpoint first.")
+    enrich_alt_data.add_argument(
+        "--limit-records",
+        type=int,
+        default=None,
+        help="Optional maximum linked evidence rows processed in this run.",
+    )
+    enrich_alt_data.add_argument("--json", action="store_true", help="Print enrichment summary payload as JSON.")
+
+    inspect_llm_enrichment = subparsers.add_parser(
+        "inspect-llm-enrichment",
+        help="Inspect LLM enrichment artifact counts/checkpoint and status distribution.",
+    )
+    inspect_llm_enrichment.add_argument(
+        "--config",
+        default="config/app.yaml",
+        type=Path,
+        help="Path to app config YAML.",
+    )
+    inspect_llm_enrichment.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    inspect_llm_enrichment.add_argument("--enrichment-id", default=None, help="Optional enrichment artifact id override.")
+    inspect_llm_enrichment.add_argument("--linkage-id", default=None, help="Optional linkage artifact id override.")
+    inspect_llm_enrichment.add_argument(
+        "--checkpoint-path",
+        type=Path,
+        default=None,
+        help="Optional checkpoint path override.",
+    )
+    inspect_llm_enrichment.add_argument("--json", action="store_true", help="Print enrichment inspection payload as JSON.")
+
+    build_labels = subparsers.add_parser(
+        "build-labels",
+        help="Build reproducible leakage-safe labels from resolved historical markets.",
+    )
+    build_labels.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    build_labels.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    build_labels.add_argument("--dataset-id", default=None, help="Historical dataset id to label.")
+    build_labels.add_argument("--corpus-id", default=None, help="Optional research corpus id for feature enrichment.")
+    build_labels.add_argument("--labels-path", type=Path, default=None, help="Optional labels output path override.")
+    build_labels.add_argument("--json", action="store_true", help="Print labels build payload as JSON.")
+
+    run_benchmarks = subparsers.add_parser(
+        "run-benchmarks",
+        help="Run baseline benchmarks on labeled historical dataset splits.",
+    )
+    run_benchmarks.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    run_benchmarks.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    run_benchmarks.add_argument("--dataset-id", default=None, help="Historical dataset id.")
+    run_benchmarks.add_argument("--labels-path", type=Path, default=None, help="Optional labels path override.")
+    run_benchmarks.add_argument(
+        "--split-mode",
+        choices=("holdout", "walk-forward"),
+        default="holdout",
+        help="Temporal split mode.",
+    )
+    run_benchmarks.add_argument("--train-ratio", type=float, default=0.6, help="Holdout train ratio.")
+    run_benchmarks.add_argument("--validation-ratio", type=float, default=0.2, help="Holdout validation ratio.")
+    run_benchmarks.add_argument("--train-days", type=int, default=120, help="Walk-forward train window days.")
+    run_benchmarks.add_argument(
+        "--validation-days",
+        type=int,
+        default=30,
+        help="Walk-forward validation window days.",
+    )
+    run_benchmarks.add_argument("--test-days", type=int, default=30, help="Walk-forward test window days.")
+    run_benchmarks.add_argument("--step-days", type=int, default=30, help="Walk-forward step days.")
+    run_benchmarks.add_argument("--max-folds", type=int, default=0, help="Max walk-forward folds. 0 means all.")
+    run_benchmarks.add_argument(
+        "--min-confidence",
+        type=float,
+        default=None,
+        help="Approval threshold confidence override.",
+    )
+    run_benchmarks.add_argument(
+        "--min-edge-bps",
+        type=int,
+        default=None,
+        help="Approval threshold edge bps override.",
+    )
+    run_benchmarks.add_argument("--json", action="store_true", help="Print benchmark summary payload as JSON.")
+
+    compare_benchmarks = subparsers.add_parser(
+        "compare-benchmarks",
+        help="Compare two benchmark runs (or latest two if omitted).",
+    )
+    compare_benchmarks.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    compare_benchmarks.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    compare_benchmarks.add_argument("--dataset-id", default=None, help="Historical dataset id.")
+    compare_benchmarks.add_argument("--run-a", default=None, help="First benchmark run id.")
+    compare_benchmarks.add_argument("--run-b", default=None, help="Second benchmark run id.")
+    compare_benchmarks.add_argument(
+        "--split",
+        choices=("train", "validation", "test"),
+        default="test",
+        help="Split to compare.",
+    )
+    compare_benchmarks.add_argument("--json", action="store_true", help="Print comparison payload as JSON.")
+
+    run_ablation = subparsers.add_parser(
+        "run-ablation-study",
+        help="Run offline ablation study for market/research/news/reddit/x/LLM feature variants.",
+    )
+    run_ablation.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    run_ablation.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    run_ablation.add_argument("--dataset-id", default=None, help="Historical dataset id.")
+    run_ablation.add_argument("--labels-path", type=Path, default=None, help="Optional labels path override.")
+    run_ablation.add_argument(
+        "--alt-feature-rows-path",
+        type=Path,
+        default=None,
+        help="Optional alt_feature_rows.jsonl path override.",
+    )
+    run_ablation.add_argument(
+        "--split-mode",
+        choices=("holdout", "walk-forward"),
+        default="walk-forward",
+        help="Temporal split mode.",
+    )
+    run_ablation.add_argument("--train-ratio", type=float, default=0.6, help="Holdout train ratio.")
+    run_ablation.add_argument("--validation-ratio", type=float, default=0.2, help="Holdout validation ratio.")
+    run_ablation.add_argument("--train-days", type=int, default=120, help="Walk-forward train window days.")
+    run_ablation.add_argument("--validation-days", type=int, default=30, help="Walk-forward validation window days.")
+    run_ablation.add_argument("--test-days", type=int, default=30, help="Walk-forward test window days.")
+    run_ablation.add_argument("--step-days", type=int, default=30, help="Walk-forward step days.")
+    run_ablation.add_argument("--max-folds", type=int, default=0, help="Max walk-forward folds. 0 means all.")
+    run_ablation.add_argument(
+        "--min-confidence",
+        type=float,
+        default=None,
+        help="Approval threshold confidence override.",
+    )
+    run_ablation.add_argument(
+        "--min-edge-bps",
+        type=int,
+        default=None,
+        help="Approval threshold edge bps override.",
+    )
+    run_ablation.add_argument("--json", action="store_true", help="Print ablation summary payload as JSON.")
+
+    compare_alt_variants = subparsers.add_parser(
+        "compare-alt-data-variants",
+        help="Compare variant outcomes from an ablation run against a reference variant.",
+    )
+    compare_alt_variants.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    compare_alt_variants.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    compare_alt_variants.add_argument("--dataset-id", default=None, help="Historical dataset id.")
+    compare_alt_variants.add_argument("--run-id", default=None, help="Ablation run id. Defaults to latest.")
+    compare_alt_variants.add_argument(
+        "--split",
+        choices=("train", "validation", "test"),
+        default="test",
+        help="Split to compare.",
+    )
+    compare_alt_variants.add_argument(
+        "--reference-variant",
+        choices=(
+            "market_only_baseline",
+            "market_plus_research_baseline",
+            "market_plus_news",
+            "market_plus_reddit",
+            "market_plus_x",
+            "market_plus_alt_data_without_llm",
+            "market_plus_alt_data_with_llm_enrichment",
+        ),
+        default="market_only_baseline",
+        help="Reference variant used for deltas.",
+    )
+    compare_alt_variants.add_argument("--output", type=Path, default=None, help="Optional markdown output path.")
+    compare_alt_variants.add_argument("--json", action="store_true", help="Print comparison payload as JSON.")
+
+    run_walk_forward = subparsers.add_parser(
+        "run-walk-forward",
+        help="Run leakage-safe walk-forward strategy simulation with bankroll/slippage assumptions.",
+    )
+    run_walk_forward.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    run_walk_forward.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    run_walk_forward.add_argument("--dataset-id", default=None, help="Historical dataset id.")
+    run_walk_forward.add_argument("--labels-path", type=Path, default=None, help="Optional labels path override.")
+    run_walk_forward.add_argument(
+        "--baseline-name",
+        choices=(
+            "market_implied",
+            "fifty_fifty",
+            "category_prior",
+            "heuristic_prediction_agent",
+            "research_only",
+            "momentum_structure",
+        ),
+        default="heuristic_prediction_agent",
+        help="Baseline predictor used for strategy simulation.",
+    )
+    run_walk_forward.add_argument(
+        "--eval-split",
+        choices=("validation", "test"),
+        default="test",
+        help="Fold split used for strategy simulation.",
+    )
+    run_walk_forward.add_argument("--train-days", type=int, default=120, help="Walk-forward train window days.")
+    run_walk_forward.add_argument(
+        "--validation-days",
+        type=int,
+        default=30,
+        help="Walk-forward validation window days.",
+    )
+    run_walk_forward.add_argument("--test-days", type=int, default=30, help="Walk-forward test window days.")
+    run_walk_forward.add_argument("--step-days", type=int, default=30, help="Walk-forward step days.")
+    run_walk_forward.add_argument("--max-folds", type=int, default=0, help="Max walk-forward folds. 0 means all.")
+    run_walk_forward.add_argument(
+        "--min-confidence",
+        type=float,
+        default=None,
+        help="Approval threshold confidence override.",
+    )
+    run_walk_forward.add_argument(
+        "--min-edge-bps",
+        type=int,
+        default=None,
+        help="Approval threshold edge bps override.",
+    )
+    run_walk_forward.add_argument(
+        "--initial-bankroll-usd",
+        type=float,
+        default=10_000.0,
+        help="Initial bankroll used for each fold simulation.",
+    )
+    run_walk_forward.add_argument(
+        "--base-position-pct",
+        type=float,
+        default=0.02,
+        help="Base position sizing percentage.",
+    )
+    run_walk_forward.add_argument(
+        "--max-position-pct",
+        type=float,
+        default=0.05,
+        help="Maximum position sizing percentage cap.",
+    )
+    run_walk_forward.add_argument(
+        "--min-stake-usd",
+        type=float,
+        default=25.0,
+        help="Minimum stake required for approved trades.",
+    )
+    run_walk_forward.add_argument("--fee-bps", type=int, default=20, help="Fee assumption in basis points.")
+    run_walk_forward.add_argument(
+        "--slippage-bps",
+        type=int,
+        default=10,
+        help="Slippage assumption in basis points.",
+    )
+    run_walk_forward.add_argument("--json", action="store_true", help="Print walk-forward payload as JSON.")
+
+    strategy_report = subparsers.add_parser(
+        "generate-strategy-report",
+        help="Generate markdown report for a walk-forward strategy run.",
+    )
+    strategy_report.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    strategy_report.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    strategy_report.add_argument("--dataset-id", default=None, help="Historical dataset id.")
+    strategy_report.add_argument("--run-id", default=None, help="Walk-forward run id. Defaults to latest.")
+    strategy_report.add_argument("--output", type=Path, default=None, help="Optional markdown output path.")
+    strategy_report.add_argument("--json", action="store_true", help="Print report payload as JSON.")
+
+    build_feature_dataset = subparsers.add_parser(
+        "build-feature-dataset",
+        help="Build leakage-safe offline feature dataset at decision timestamps.",
+    )
+    build_feature_dataset.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    build_feature_dataset.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    build_feature_dataset.add_argument("--dataset-id", default=None, help="Historical dataset id.")
+    build_feature_dataset.add_argument(
+        "--corpus-id",
+        default=None,
+        help="Optional research corpus id used for research aggregate features.",
+    )
+    build_feature_dataset.add_argument("--json", action="store_true", help="Print feature build payload as JSON.")
+
+    inspect_feature_schema = subparsers.add_parser(
+        "inspect-feature-schema",
+        help="Inspect feature schema contract and current dataset artifact paths/counts.",
+    )
+    inspect_feature_schema.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    inspect_feature_schema.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    inspect_feature_schema.add_argument("--dataset-id", default=None, help="Historical dataset id.")
+    inspect_feature_schema.add_argument("--json", action="store_true", help="Print feature schema payload as JSON.")
+
+    verify_feature_parity = subparsers.add_parser(
+        "verify-feature-parity",
+        help="Verify feature rows/schema version parity for offline model contract safety.",
+    )
+    verify_feature_parity.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    verify_feature_parity.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    verify_feature_parity.add_argument("--dataset-id", default=None, help="Historical dataset id.")
+    verify_feature_parity.add_argument("--json", action="store_true", help="Print parity verification payload as JSON.")
+
+    build_alt_feature_dataset = subparsers.add_parser(
+        "build-alt-feature-dataset",
+        help="Build versioned offline alt-data feature dataset from linkage + news/reddit/x + enrichment artifacts.",
+    )
+    build_alt_feature_dataset.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    build_alt_feature_dataset.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    build_alt_feature_dataset.add_argument("--dataset-id", default=None, help="Historical dataset id.")
+    build_alt_feature_dataset.add_argument("--linkage-id", default=None, help="Optional linkage id override.")
+    build_alt_feature_dataset.add_argument("--news-corpus-id", default=None, help="Optional news corpus id override.")
+    build_alt_feature_dataset.add_argument("--reddit-corpus-id", default=None, help="Optional reddit corpus id override.")
+    build_alt_feature_dataset.add_argument("--x-corpus-id", default=None, help="Optional X corpus id override.")
+    build_alt_feature_dataset.add_argument("--enrichment-id", default=None, help="Optional enrichment id override.")
+    build_alt_feature_dataset.add_argument("--json", action="store_true", help="Print alt feature build payload as JSON.")
+
+    inspect_alt_feature_schema = subparsers.add_parser(
+        "inspect-alt-feature-schema",
+        help="Inspect alt-data feature schema contract and dataset artifact paths/counts.",
+    )
+    inspect_alt_feature_schema.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    inspect_alt_feature_schema.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    inspect_alt_feature_schema.add_argument("--dataset-id", default=None, help="Historical dataset id.")
+    inspect_alt_feature_schema.add_argument("--json", action="store_true", help="Print alt feature schema payload as JSON.")
+
+    verify_alt_feature_parity = subparsers.add_parser(
+        "verify-alt-feature-parity",
+        help="Verify alt-data feature rows/schema version parity for offline model contract safety.",
+    )
+    verify_alt_feature_parity.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    verify_alt_feature_parity.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    verify_alt_feature_parity.add_argument("--dataset-id", default=None, help="Historical dataset id.")
+    verify_alt_feature_parity.add_argument("--json", action="store_true", help="Print alt feature parity payload as JSON.")
+
+    train_models = subparsers.add_parser(
+        "train-baseline-models",
+        help="Train offline baseline models on leakage-safe feature dataset.",
+    )
+    train_models.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    train_models.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    train_models.add_argument("--dataset-id", default=None, help="Historical dataset id.")
+    train_models.add_argument(
+        "--feature-rows-path",
+        type=Path,
+        default=None,
+        help="Optional feature_rows.jsonl path override.",
+    )
+    train_models.add_argument(
+        "--split-mode",
+        choices=("holdout",),
+        default="holdout",
+        help="Temporal split mode for training.",
+    )
+    train_models.add_argument("--train-ratio", type=float, default=0.6, help="Holdout train ratio.")
+    train_models.add_argument("--validation-ratio", type=float, default=0.2, help="Holdout validation ratio.")
+    train_models.add_argument("--window-days", type=int, default=30, help="Window size used for window metrics.")
+    train_models.add_argument(
+        "--no-xgboost",
+        dest="include_xgboost",
+        action="store_false",
+        help="Disable xgboost candidate training for this run.",
+    )
+    train_models.set_defaults(include_xgboost=True)
+    train_models.add_argument("--json", action="store_true", help="Print training summary payload as JSON.")
+
+    calibrate_model = subparsers.add_parser(
+        "calibrate-model",
+        help="Fit probability calibration (platt/isotonic) on an offline training run.",
+    )
+    calibrate_model.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    calibrate_model.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    calibrate_model.add_argument("--dataset-id", default=None, help="Historical dataset id.")
+    calibrate_model.add_argument("--run-id", default=None, help="Training run id. Defaults to latest.")
+    calibrate_model.add_argument("--model-name", default=None, help="Model name. Defaults to best model in run.")
+    calibrate_model.add_argument(
+        "--method",
+        choices=("platt", "isotonic"),
+        default="platt",
+        help="Calibration method.",
+    )
+    calibrate_model.add_argument(
+        "--fit-split",
+        choices=("train", "validation", "test"),
+        default="validation",
+        help="Split used to fit the calibrator.",
+    )
+    calibrate_model.add_argument(
+        "--eval-split",
+        choices=("train", "validation", "test"),
+        default="test",
+        help="Split used to evaluate raw vs calibrated probabilities.",
+    )
+    calibrate_model.add_argument("--json", action="store_true", help="Print calibration payload as JSON.")
+
+    compare_models = subparsers.add_parser(
+        "compare-models",
+        help="Compare trained offline models on a selected split.",
+    )
+    compare_models.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    compare_models.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    compare_models.add_argument("--dataset-id", default=None, help="Historical dataset id.")
+    compare_models.add_argument("--run-id", default=None, help="Training run id. Defaults to latest.")
+    compare_models.add_argument(
+        "--split",
+        choices=("train", "validation", "test"),
+        default="test",
+        help="Split used to rank model performance.",
+    )
+    compare_models.add_argument("--json", action="store_true", help="Print comparison payload as JSON.")
+
+    generate_model_card = subparsers.add_parser(
+        "generate-model-card",
+        help="Generate a model card markdown artifact for an offline training run.",
+    )
+    generate_model_card.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    generate_model_card.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    generate_model_card.add_argument("--dataset-id", default=None, help="Historical dataset id.")
+    generate_model_card.add_argument("--run-id", default=None, help="Training run id. Defaults to latest.")
+    generate_model_card.add_argument("--model-name", default=None, help="Model name. Defaults to best model in run.")
+    generate_model_card.add_argument(
+        "--calibration-run-id",
+        default=None,
+        help="Optional calibration run id to include in card.",
+    )
+    generate_model_card.add_argument("--owner", default="strategy-research", help="Model owner in card metadata.")
+    generate_model_card.add_argument(
+        "--decision",
+        choices=("approved", "rejected", "needs_more_evidence"),
+        default="needs_more_evidence",
+        help="Model promotion decision status to render in card.",
+    )
+    generate_model_card.add_argument("--output", type=Path, default=None, help="Optional markdown output path.")
+    generate_model_card.add_argument("--json", action="store_true", help="Print model-card payload as JSON.")
 
     portfolio_state = subparsers.add_parser(
         "paper-portfolio-state",

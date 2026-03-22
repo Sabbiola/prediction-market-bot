@@ -58,8 +58,52 @@ In CI devono risultare verdi anche i job dedicati UI:
 11. Il tab `Reports` espone shortcut replay/evaluation consistenti con i comandi CLI documentati.
 12. Il control plane UI e deployabile separatamente in staging (`prediction-market-ui`) con health/readiness verdi.
 13. La acceptance suite include il path UI: login -> overview read -> review approve -> sandbox tx reconcile view.
+14. Promotion gate v2 verificato:
+    - `evaluate-model-promotion` produce evidence completa e criteri espliciti.
+    - `model-promotion-status` mostra decisione gate coerente con runtime mode.
+15. Rollback safety verificata:
+    - `rollback-model-v2` forza fallback euristico senza cambiare guardrail review/risk.
+    - `clear-model-v2-rollback` ripristina il gate normale.
+16. Drift monitoring operativo:
+    - `drift-status` espone segnali su feature shift, regime shift, research coverage, confidence collapse.
+    - segnali warning/critical sono leggibili e azionabili lato operatore.
+17. Alt-data + LLM promoted path (sandbox-only) verificato:
+    - attivazione controllata solo in `SANDBOX_CHAIN` dopo gate `model_v2_allowed`
+    - UI espone `active_source_set`, `enrichment_coverage`, `disagreement_vs_baseline`
+    - failure capability sorgenti (credential/capability missing) e visibile in `validate-startup`
+    - fallback graceful a baseline `model_v2` e auditabile quando path alt/LLM non disponibile
 
 Se anche un solo punto fallisce: **release bloccata**.
+
+## Dress Rehearsal Finale: SANDBOX_CHAIN + Model v2 Promoted
+
+Prima del go/no-go finale eseguire un rehearsal completo e ripetibile in `SANDBOX_CHAIN` con `model_v2` attivo.
+
+Sequenza minima obbligatoria:
+
+1. Promozione controllata (`promote-model-v2`) con rationale operatore e versione artifact esplicita.
+2. Verifica gate (`model-promotion-status`) con decisione:
+   - `reason=model_v2_allowed`
+   - `effective_engine=model_v2`
+3. `validate-startup` in configurazione rehearsal.
+4. Primo `run-once` con provider live astratti attivi (market + research) e review item in `PENDING_REVIEW`.
+5. `review-approve` con rationale operatore.
+6. Secondo `run-once` con submit sandbox tx attivato.
+7. `tx-status` + `tx-reconcile` con stato transazione riconciliabile.
+8. Verifica open positions / settlement lane (`paper-portfolio-state`, `run-settlement-lane`).
+9. `replay-run` + `generate-report` per evidenza auditabile.
+10. UI control-plane:
+    - `Overview` e `Prediction` mostrano `active_model_version`
+    - visibilita su approval-rate summary, disagreement buckets, drift alert
+    - se path enriched attivo: visibilita su source set, enrichment coverage, disagreement vs baseline.
+
+Output evidence da allegare al change record:
+
+- output JSON di `model-promotion-status`
+- artifact review decision + operator rationale
+- artifact tx intent/attempt/receipt/reconcile
+- report markdown/json della run rehearsal
+- screenshot/export UI con model visibility
 
 ## Messaggi Operatore
 

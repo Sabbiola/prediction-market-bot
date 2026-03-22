@@ -1,5 +1,23 @@
 """Infrastructure adapters (dry-run and mocks)."""
 
+from .alt_data import (
+    AltDataAdapterError,
+    AltDataAdapterRegistry,
+    AltDataCapabilityError,
+    AltDataCredentialError,
+    AltDataSourceRegistration,
+    CapabilityValidationIssue,
+    ConfiguredAltDataSourceAdapter,
+    GoogleNewsRssAdapter,
+    NewsArticleRecord,
+    NewsFetchBatch,
+    NewsQuery,
+    NewsQueryKind,
+    NewsSourceFetchError,
+    SourceCapabilities,
+    SourceOperation,
+    build_credential_resolver_from_mapping,
+)
 from .http_client import HttpClientError, HttpErrorMetadata, HttpJsonResponse, StructuredHttpClient
 from .live_market_data import LiveMarketBatch, PolymarketReadOnlyMarketDataAdapter
 from .research import (
@@ -40,6 +58,22 @@ from .operational_backup import (
 from .sandbox_chain import SandboxChainExecutor
 
 __all__ = [
+    "AltDataAdapterError",
+    "AltDataAdapterRegistry",
+    "AltDataCapabilityError",
+    "AltDataCredentialError",
+    "AltDataSourceRegistration",
+    "CapabilityValidationIssue",
+    "ConfiguredAltDataSourceAdapter",
+    "GoogleNewsRssAdapter",
+    "NewsArticleRecord",
+    "NewsFetchBatch",
+    "NewsQuery",
+    "NewsQueryKind",
+    "NewsSourceFetchError",
+    "SourceCapabilities",
+    "SourceOperation",
+    "build_credential_resolver_from_mapping",
     "JsonlPersistence",
     "OperationalRepositories",
     "PostgresOperationalRepositories",

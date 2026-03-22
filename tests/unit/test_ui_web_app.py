@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from prediction_market_bot.ui.app import create_web_app
@@ -55,8 +56,20 @@ def test_web_app_bootstrap_and_base_template_render(temp_config_paths: tuple[Pat
         assert "review_queue_depth" in overview_payload
         assert "live_source_failures_total" in overview_payload
         assert "stale_data_events_total" in overview_payload
+        assert "model_visibility" in overview_payload
+        assert "drift_alert" in overview_payload
         assert "incident_banners" in overview_payload
         assert "incidents_feed" in overview_payload
+
+        prediction_payload = client.get("/api/tabs/prediction").json()
+        assert "model_visibility" in prediction_payload
+        assert "calibration_summary" in prediction_payload
+        assert "shadow_history" in prediction_payload
+        assert "approval_rate_summary" in prediction_payload
+        assert "disagreement_buckets" in prediction_payload
+        assert "enrichment_coverage" in prediction_payload
+        assert "disagreement_vs_baseline" in prediction_payload
+        assert "drift_alert" in prediction_payload
 
         system_payload = client.get("/api/tabs/system").json()
         assert "startup_validation" in system_payload
@@ -124,3 +137,44 @@ def test_shell_stays_up_if_one_panel_fails(temp_config_paths: tuple[Path, Path])
         response = client.get("/")
         assert response.status_code == 200
         assert "panel_temporarily_unavailable" in response.text
+
+
+def test_prediction_tab_includes_alt_promoted_comparison_summary(temp_config_paths: tuple[Path, Path]) -> None:
+    app_cfg, agents_cfg = temp_config_paths
+    app = create_web_app(config_path=app_cfg, agents_config_path=agents_cfg)
+
+    run_id = "ui-alt-promoted-run"
+    app.state.read_models._context.persistence.write_artifact(
+        run_id,
+        "prediction_results",
+        {
+            "market_id": "m-ui-alt",
+            "selected_side": "YES",
+            "market_yes_prob": 0.48,
+            "fair_yes_prob": 0.55,
+            "edge": 0.07,
+            "confidence": 0.81,
+            "rationale": ["prediction_engine=alt_llm_promoted"],
+        },
+    )
+    app.state.read_models._context.persistence.write_artifact(
+        run_id,
+        "prediction_alt_comparisons",
+        {
+            "market_id": "m-ui-alt",
+            "comparison_kind": "alt_promoted_vs_model_v2_baseline",
+            "disagreement_bucket": "moderate_drift",
+            "enrichment_coverage": 0.75,
+            "approvals": {
+                "model_v2": True,
+                "alt_llm_promoted": False,
+            },
+        },
+    )
+
+    with TestClient(app) as client:
+        payload = client.get(f"/api/tabs/prediction?run_id={run_id}").json()
+        assert payload["available"] is True
+        assert payload["enrichment_coverage"] == pytest.approx(0.75, abs=1e-8)
+        labels = {item["label"] for item in payload["disagreement_vs_baseline"]}
+        assert "moderate_drift" in labels

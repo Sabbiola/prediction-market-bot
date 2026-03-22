@@ -7,6 +7,7 @@ from typing import Literal
 
 from prediction_market_bot.app.secrets import build_secret_provider, resolve_operational_db_dsn
 from prediction_market_bot.app.settings import AppSettings
+from prediction_market_bot.infrastructure.alt_data import AltDataAdapterRegistry
 from prediction_market_bot.infrastructure.operational_migrations import (
     MigrationDialect,
     OperationalMigrationError,
@@ -14,6 +15,8 @@ from prediction_market_bot.infrastructure.operational_migrations import (
 )
 from prediction_market_bot.infrastructure.persistence import JsonlPersistence
 from prediction_market_bot.infrastructure.operational_sqlite import OperationalRepositories
+from prediction_market_bot.services.model_promotion import resolve_runtime_model_gate_decision
+from prediction_market_bot.services.operator_control import load_operator_state, operator_state_path
 
 StartupSeverity = Literal["error", "warning", "info"]
 
@@ -99,7 +102,9 @@ def validate_startup(
                 "operational_repository_connectivity_skipped_due_to_db_or_schema_mismatch",
             )
         )
+    checks.append(_check_model_promotion_gate(settings=settings, operational=operational))
     checks.append(_check_persistence_read_write(persistence))
+    checks.extend(_check_alt_data_configuration(settings))
     checks.extend(_check_sandbox_chain_config(settings))
     return StartupValidationReport(checks=tuple(checks))
 
@@ -244,6 +249,48 @@ def _check_persistence_read_write(persistence: JsonlPersistence) -> StartupCheck
         return StartupCheck("jsonl_persistence", False, "error", f"jsonl_persistence_failed: {exc}")
 
 
+def _check_model_promotion_gate(*, settings: AppSettings, operational: OperationalRepositories) -> StartupCheck:
+    try:
+        state = load_operator_state(
+            operator_state_path(settings.storage.artifacts_dir),
+            repository=operational.operator_control_state,
+        )
+    except Exception as exc:
+        return StartupCheck(
+            "model_promotion_gate",
+            False,
+            "warning",
+            f"model_promotion_state_unavailable: {exc}",
+        )
+    decision = resolve_runtime_model_gate_decision(settings=settings, state=state)
+    if decision.allowed:
+        return StartupCheck(
+            "model_promotion_gate",
+            True,
+            "info",
+            (
+                "model_gate_ok "
+                f"requested={decision.requested_engine} effective={decision.effective_engine} "
+                f"reason={decision.reason}"
+            ),
+        )
+
+    if decision.effective_engine == "heuristic":
+        severity: StartupSeverity = "warning"
+    else:
+        severity = "error"
+    return StartupCheck(
+        "model_promotion_gate",
+        False,
+        severity,
+        (
+            "model_gate_blocked "
+            f"requested={decision.requested_engine} effective={decision.effective_engine} reason={decision.reason} "
+            f"model_version={decision.model_version or 'unset'} promoted_version={decision.promoted_version or 'unset'}"
+        ),
+    )
+
+
 def _check_sandbox_chain_config(settings: AppSettings) -> tuple[StartupCheck, ...]:
     checks: list[StartupCheck] = []
     sandbox = settings.sandbox_chain
@@ -324,3 +371,38 @@ def _check_sandbox_chain_config(settings: AppSettings) -> tuple[StartupCheck, ..
         checks.append(StartupCheck("sandbox_chain_submit_tx", True, "info", "sandbox_chain_submit_tx_disabled"))
 
     return tuple(checks)
+
+
+def _check_alt_data_configuration(settings: AppSettings) -> tuple[StartupCheck, ...]:
+    if not settings.alt_data.enabled:
+        return (StartupCheck("alt_data_sources", True, "info", "alt_data_disabled"),)
+
+    try:
+        secrets = build_secret_provider(settings)
+    except Exception as exc:
+        return (
+            StartupCheck(
+                "alt_data_sources",
+                False,
+                "error",
+                f"alt_data_secret_provider_failed: {exc}",
+            ),
+        )
+
+    registry = AltDataAdapterRegistry.from_source_settings(
+        settings.alt_data.sources,
+        credential_resolver=lambda env_name: secrets.get(env_name),
+    )
+    issues = registry.validate_enabled_sources()
+    if not issues:
+        enabled = ",".join(registry.list_enabled_ids()) or "none"
+        return (StartupCheck("alt_data_sources", True, "info", f"alt_data_sources_ready enabled={enabled}"),)
+    details = " | ".join(issue.detail for issue in issues)
+    return (
+        StartupCheck(
+            "alt_data_sources",
+            False,
+            "error",
+            f"alt_data_sources_invalid: {details}",
+        ),
+    )

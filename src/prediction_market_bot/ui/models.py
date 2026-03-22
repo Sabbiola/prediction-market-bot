@@ -134,6 +134,52 @@ class LastRunSummaryResponse(UiBaseModel):
     note: str
 
 
+class ModelVisibilityResponse(UiBaseModel):
+    runtime_mode: str
+    requested_engine: str
+    effective_engine: str
+    gate_required: bool
+    gate_reason: str
+    active_model_version: str
+    model_name: str
+    feature_schema_version: str
+    calibration_version: str
+    calibration_method: str
+    active_source_set: tuple[str, ...] = ()
+    promoted_model_version: str
+    promoted_at: str
+    rollback_active: bool
+    rollback_reason: str
+
+
+class DriftSignalResponse(UiBaseModel):
+    name: str
+    status: str
+    detail: str
+    current_value: float | None = None
+    reference_value: float | None = None
+    threshold: float | None = None
+
+
+class DriftAlertResponse(UiBaseModel):
+    overall_status: str
+    current_run_id: str
+    created_at_utc: str
+    warnings: tuple[str, ...]
+    signals: tuple[DriftSignalResponse, ...]
+
+
+class ShadowComparisonHistoryRowResponse(UiBaseModel):
+    run_id: str
+    total_rows: int
+    rows_with_model_v2: int
+    rows_with_parity_warnings: int
+    approval_rate_heuristic: float | None
+    approval_rate_model_v2: float | None
+    approval_rate_delta_model_minus_heuristic: float | None
+    disagreement_buckets: tuple[ChartPointResponse, ...]
+
+
 class OverviewTabResponse(UiBaseModel):
     generated_at: str
     run_selector: RunSelectorResponse
@@ -151,6 +197,8 @@ class OverviewTabResponse(UiBaseModel):
     tx_failed_count: int
     stale_data_events_total: int
     stale_data_blocked_trades_total: int
+    model_visibility: ModelVisibilityResponse
+    drift_alert: DriftAlertResponse | None = None
     counters_chart: tuple[ChartPointResponse, ...]
     incident_banners: tuple[IncidentBannerResponse, ...] = ()
     incidents_feed: tuple[IncidentEventResponse, ...] = ()
@@ -264,6 +312,15 @@ class PredictionTabResponse(UiBaseModel):
     predictions_count: int
     avg_confidence: float
     avg_edge_bps: float
+    model_visibility: ModelVisibilityResponse
+    calibration_summary: tuple[ChartPointResponse, ...] = ()
+    shadow_comparison: ShadowComparisonHistoryRowResponse | None = None
+    shadow_history: tuple[ShadowComparisonHistoryRowResponse, ...] = ()
+    approval_rate_summary: tuple[ChartPointResponse, ...] = ()
+    disagreement_buckets: tuple[ChartPointResponse, ...] = ()
+    enrichment_coverage: float | None = None
+    disagreement_vs_baseline: tuple[ChartPointResponse, ...] = ()
+    drift_alert: DriftAlertResponse | None = None
     side_distribution: tuple[ChartPointResponse, ...]
     rows: tuple[PredictionRowResponse, ...]
 
