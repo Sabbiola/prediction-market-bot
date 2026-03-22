@@ -8,7 +8,6 @@ from prediction_market_bot.infrastructure.alt_data import (
     RedditEvidenceRecord,
     RedditFetchPage,
     RedditQuery,
-    RedditQueryKind,
 )
 from prediction_market_bot.infrastructure.alt_data.adapters.reddit_oauth_adapter import RedditSourceFetchError
 from prediction_market_bot.strategy_research.reddit_corpus import RedditCorpusService

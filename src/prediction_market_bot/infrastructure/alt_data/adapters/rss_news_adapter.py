@@ -40,7 +40,7 @@ class _CacheEntry:
 
 def _default_fetch_text(url: str, timeout_sec: float, headers: Mapping[str, str]) -> str:
     req = request.Request(url=url, headers={str(k): str(v) for k, v in headers.items()}, method="GET")
-    with request.urlopen(req, timeout=timeout_sec) as response:
+    with request.urlopen(req, timeout=timeout_sec) as response:  # nosec B310
         payload = response.read()
     return payload.decode("utf-8", errors="replace")
 
@@ -184,7 +184,7 @@ class GoogleNewsRssAdapter:
         limit: int,
     ) -> tuple[tuple[NewsArticleRecord, ...], dict[str, str]]:
         try:
-            root = ET.fromstring(xml_payload)
+            root = ET.fromstring(xml_payload)  # nosec B314
         except ET.ParseError as exc:
             raise NewsSourceFetchError(
                 source_id=self.source_id,

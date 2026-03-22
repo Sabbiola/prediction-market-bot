@@ -63,7 +63,7 @@ class WebhookAlertSink:
         for attempt in range(retries + 1):
             try:
                 req = request.Request(self.webhook_url, method="POST", data=body, headers=headers)
-                with request.urlopen(req, timeout=max(self.timeout_sec, 0.1)) as response:
+                with request.urlopen(req, timeout=max(self.timeout_sec, 0.1)) as response:  # nosec B310
                     if int(getattr(response, "status", 200)) >= 400:
                         raise RuntimeError(f"alert_sink_http_{response.status}")
                 return

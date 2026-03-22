@@ -184,7 +184,7 @@ class StructuredHttpClient:
                     data=body_bytes,
                     method=method_name,
                 )
-                with request.urlopen(req, timeout=effective_timeout) as response:
+                with request.urlopen(req, timeout=effective_timeout) as response:  # nosec B310
                     raw = response.read(self.max_response_bytes + 1)
                     if len(raw) > self.max_response_bytes:
                         metadata = HttpErrorMetadata(

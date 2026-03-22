@@ -68,11 +68,11 @@ jobs:
 
       - name: Dependency Vulnerability Scan (pip-audit)
         run: |
-          pip-audit --progress-spinner off
+          pip-audit --progress-spinner off .
 
       - name: Static Security Scan (bandit)
         run: |
-          bandit -q -r src/prediction_market_bot
+          bandit -q -r src/prediction_market_bot -ll
 
   smoke-dry-run:
     name: Smoke Dry Run

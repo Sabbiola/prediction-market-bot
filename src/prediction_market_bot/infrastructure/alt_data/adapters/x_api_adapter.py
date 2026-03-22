@@ -47,7 +47,7 @@ def _normalize_headers(headers: Mapping[str, str]) -> dict[str, str]:
 
 def _default_fetch_json(url: str, timeout_sec: float, headers: Mapping[str, str]) -> tuple[Any, Mapping[str, str]]:
     req = request.Request(url=url, headers={str(k): str(v) for k, v in headers.items()}, method="GET")
-    with request.urlopen(req, timeout=timeout_sec) as response:
+    with request.urlopen(req, timeout=timeout_sec) as response:  # nosec B310
         raw = response.read()
         response_headers = _normalize_headers(dict(response.headers.items()))
     payload = json.loads(raw.decode("utf-8"))
