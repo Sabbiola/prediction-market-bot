@@ -348,8 +348,8 @@ def beta_dress_rehearsal_command(
             category="operations",
             query=None,
             limit_per_source=settings.live_research.limit_per_source,
-            wikipedia_endpoint=settings.live_research.wikipedia.endpoint_url,
-            openalex_endpoint=settings.live_research.openalex.endpoint_url,
+            wikipedia_endpoint=settings.live_research.wikipedia_endpoint_url,
+            openalex_endpoint=settings.live_research.openalex_endpoint_url,
             timeout_sec=settings.http.timeout_sec,
             retries=settings.http.max_retries,
             retry_backoff_sec=settings.http.retry_backoff_sec,
@@ -493,10 +493,10 @@ def beta_dress_rehearsal_command(
     execution_records = persistence.read_artifact_records(resolved_run_id, "execution_results")
     filled_execution_count = 0
     for row in execution_records:
-        payload = row.get("payload")
-        if not isinstance(payload, dict):
+        execution_payload = row.get("payload")
+        if not isinstance(execution_payload, dict):
             continue
-        status = str(payload.get("status", "")).strip().upper()
+        status = str(execution_payload.get("status", "")).strip().upper()
         if status == "FILLED":
             filled_execution_count += 1
     sandbox_submitted_only_ok = (
@@ -634,7 +634,18 @@ def beta_dress_rehearsal_command(
                         report_payload = _parse_json_object(reports.text) or {}
                         rows = review_payload.get("rows")
                         review_rows_count = len(rows) if isinstance(rows, list) else 0
-                        attempts_count = int(tx_payload.get("attempts_count", 0))
+                        attempts_raw = tx_payload.get("attempts_count", 0)
+                        if isinstance(attempts_raw, bool):
+                            attempts_count = 0
+                        elif isinstance(attempts_raw, (int, float)):
+                            attempts_count = int(attempts_raw)
+                        elif isinstance(attempts_raw, str):
+                            try:
+                                attempts_count = int(float(attempts_raw.strip() or "0"))
+                            except ValueError:
+                                attempts_count = 0
+                        else:
+                            attempts_count = 0
                         report_run_id = str(report_payload.get("run_id", "")).strip()
                         lifecycle_ok = all(code == 200 for code in statuses) and (
                             review_rows_count > 0 or attempts_count > 0
@@ -657,7 +668,7 @@ def beta_dress_rehearsal_command(
 
     ok = all(step.ok for step in steps)
     finished_at = datetime.now(UTC)
-    payload: dict[str, object] = {
+    result: dict[str, object] = {
         "ok": ok,
         "go_no_go": "GO" if ok else "NO_GO",
         "run_id": resolved_run_id,
@@ -669,14 +680,14 @@ def beta_dress_rehearsal_command(
         "report_output_path": str(report_path),
     }
     evidence_path = Path(settings.storage.artifacts_dir) / "rehearsals" / f"{resolved_run_id}.json"
-    write_json_file(evidence_path, payload)
-    payload["evidence_path"] = str(evidence_path)
+    write_json_file(evidence_path, result)
+    result["evidence_path"] = str(evidence_path)
 
     if as_json:
-        print(json.dumps(payload, indent=2))
+        print(json.dumps(result, indent=2))
     else:
         print(f"Sandbox-live dress rehearsal run_id={resolved_run_id}")
-        print(f"Go/No-Go: {payload['go_no_go']}")
+        print(f"Go/No-Go: {result['go_no_go']}")
         for step in steps:
             status = "OK" if step.ok else "FAIL"
             print(f"{step.step:02d}. [{status}] {step.title}")

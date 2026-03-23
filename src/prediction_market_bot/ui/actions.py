@@ -9,7 +9,8 @@ from prediction_market_bot.app.bootstrap import build_http_client
 from prediction_market_bot.app.secrets import build_secret_provider
 from prediction_market_bot.domain.enums import TradeReviewAction
 from prediction_market_bot.infrastructure.sandbox_chain import SandboxChainExecutor
-from prediction_market_bot.main import pause_command, resume_command, run_once_command
+from prediction_market_bot.cli.commands.ops_commands import pause_command, resume_command
+from prediction_market_bot.cli.commands.run_commands import run_once_command
 from prediction_market_bot.services import SandboxTransactionService, TradeReviewQueueService, validate_startup
 from prediction_market_bot.ui.models import OperatorActionResponse
 from prediction_market_bot.ui.read_models import UiRuntimeContext
