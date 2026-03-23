@@ -23,7 +23,9 @@ def test_ui_tabs_and_operator_actions_end_to_end(
         assert "System/Health" in page.text
         assert "Scanner" in page.text
         assert "Review Queue" in page.text
+        assert "Positions" in page.text
         assert "Reports" in page.text
+        assert "Open Reports / Replay" in page.text
 
         overview_before = client.get("/api/tabs/overview")
         assert overview_before.status_code == 200
@@ -92,8 +94,9 @@ def test_ui_tabs_and_operator_actions_end_to_end(
             "/api/tabs/risk",
             "/api/tabs/review-queue",
             "/api/tabs/execution",
-            "/api/tabs/settlement",
             "/api/tabs/sandbox-tx",
+            "/api/tabs/positions",
+            "/api/tabs/settlement",
             "/api/tabs/reports",
         )
         for path in tab_paths:
@@ -111,3 +114,5 @@ def test_ui_tabs_and_operator_actions_end_to_end(
         reports_payload = client.get(f"/api/tabs/reports?run_id={run_id}").json()
         assert "replay_shortcut" in reports_payload
         assert "eval_run_shortcut" in reports_payload
+        assert "run_overview_url" in reports_payload
+        assert "review_queue_url" in reports_payload

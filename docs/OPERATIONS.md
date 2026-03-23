@@ -22,8 +22,10 @@ Responsabilita previste:
 - esporre widget di monitoraggio live (`live_source_failures`, `review_queue_depth`, `pending_settlements`, `tx_*`, `open_positions`, `stale_data_*`)
 - esporre banner incident/status con raccomandazioni operatore
 - esporre feed incident/events da audit log lato server (nessun parsing log nel browser)
+- esporre incident feed strutturato (`when`, `what failed`, `affected`, `reason_code`, deep-link operativi)
 - rendere accessibili le azioni operatore gia presenti nel runtime (`pause/resume`, review actions, tx reconcile/resubmit-safe)
 - fornire una vista auditabile delle decisioni (`run_id`, rationale modello/operatore, stati tx)
+- rendere `Reports`/`Replay` first-class per debug storico e postmortem operativo
 - esporre shell tabbed con pannelli iniziali `Overview` e `System/Health`
 
 Non-responsabilita:
@@ -38,6 +40,132 @@ Vincoli operativi:
 - `SANDBOX_CHAIN` resta la lane transazionale reale di rehearsal
 - venue live order posting resta disabilitata
 - worker (`prediction-market-worker`) e UI (`prediction-market-ui`) sono processi separati: la UI non e prerequisito runtime
+
+## Workflow operatore: Overview -> System (cockpit)
+
+Sequenza raccomandata a inizio turno e durante triage:
+
+1. Aprire tab `Overview`:
+   - verificare in pochi secondi `system health`, `runtime/execution mode`, `active model version`
+   - controllare i banner `danger/warning` e i contatori backlog (`review`, `tx`, `settlement`)
+   - usare quick actions:
+     - `run-once` (ruoli `operator/admin`)
+     - `pause/resume` (ruolo `admin`)
+     - `Go To Pending Review` (tutti i ruoli)
+2. Aprire tab `System/Health`:
+   - validare `startup validation`, `healthcheck`, `provider/source health`, `db status`
+   - confermare backlog operativi (`review_queue_depth`, `tx_*`, `pending_settlements`)
+   - leggere `recent incidents / alerts` e dettaglio startup checks
+3. Se presenti urgenze (`critical` o banner `danger`):
+   - eseguire triage immediato (provider/DB/reconcile/review queue)
+   - usare `pause` solo se richiesto da incident handling e con ruolo adeguato
+
+Obiettivo operativo:
+
+- rendere evidente lo stato del sistema senza dover aprire tab secondari prima del triage iniziale
+- ridurre tempo decisionale per incident e backlog actionables
+
+## Workflow operatore: Incident Navigation e Historical Debug
+
+Quando compare un alert o uno stato degradato:
+
+1. Usare le tabelle incident in `Overview` o `System/Health`:
+   - `When`: timestamp evento
+   - `What failed`: summary + `reason_code`
+   - `Affected`: componente (`providers`, `review_queue`, `sandbox_tx`, `settlement`, `reports_replay`, ...) e target
+   - `Links`: deep-link a `Run`, `Review`, `Sandbox TX`, `Position`, `Settlement`, `Reports`
+2. Aprire `Reports` dal link incidente o da `Open Reports / Replay`:
+   - verificare `artifact counts`, `stage timings`, `failure categories`
+   - usare i link run-level per passare rapidamente a `Review Queue`, `Sandbox TX`, `Positions`, `Settlement`
+3. Eseguire replay/report CLI con shortcut del tab `Reports`:
+   - `replay-run` per ricostruzione deterministica run
+   - `generate-report` / `generate-eval-report` per evidenza auditabile
+
+Checklist rapida triage:
+
+- cosa e fallito?
+- quando?
+- cosa e impattato?
+- quale run/tx/review/position/settlement e coinvolto?
+
+## Workflow operatore: Engine tabs (Scanner / Research / Prediction / Risk)
+
+Dopo il triage iniziale su `Overview` e `System/Health`, usare i tab engine con lo stesso schema mentale:
+
+1. `Summary KPI`: capire rapidamente volume, qualità e blocchi principali dello stage.
+2. `Health/Status banner`: verificare warning/critical e raccomandazione operativa.
+3. `Primary list`: leggere i record principali (candidate/packet/prediction/risk decision).
+4. `Diagnostics`: usare metriche aggregate per capire trend e stabilità.
+5. `Anomalies/Explanations`: confermare cause di degrado prima di azioni operative.
+
+Checklist per tab:
+
+- `Scanner`:
+  - funnel `total -> eligible -> rejected -> candidates`
+  - motivi di rejection
+  - contesto liquidity/spread/time-to-resolution
+- `Research`:
+  - coverage evidenze
+  - freshness
+  - contradiction/disagreement
+  - source diversity e source failures
+- `Prediction`:
+  - fair probability vs market probability
+  - edge/confidence
+  - model/version attivo
+  - shadow disagreement, parity warnings, drift signals
+- `Risk`:
+  - stake proposal vs approved stake
+  - exposure context (portfolio/market)
+  - blocked reasons e guardrail triggered
+  - stato daily stop / circuit breaker
+
+## Workflow operatore: Review Queue (decisione human-in-the-loop)
+
+Schema operativo consigliato per ogni candidato:
+
+1. Triage comparativo tabella:
+   - confrontare rapidamente `market/title`, `side`, `fair probability`, `market probability`, `edge`, `confidence`, `stake`
+   - verificare `evidence coverage summary` e razionali prediction/risk sintetici
+2. Lettura dettaglio candidato:
+   - confermare razionali completi (`prediction`, `risk`, `model`)
+   - verificare stato lifecycle (`PENDING_REVIEW`, `APPROVED`, `REJECTED`, `EXPIRED`, `EXECUTED`)
+   - controllare deep-link operativi a `Prediction`, `Risk`, `Sandbox TX`, `Position`
+3. Decisione approvazione/rifiuto:
+   - compilare sempre rationale operatore
+   - usare conferma esplicita prima del submit (`review-approve` / `review-reject`)
+   - verificare feedback immediato `completed/blocked/failed`
+4. Verifica tracciabilita:
+   - controllare tabella `Recent Review Actions (Audit)`
+   - confermare `acting_user`, `acting_role`, `queue_id`, `message`
+
+Obiettivo:
+
+- ridurre tempo di decisione senza perdere contesto critico
+- mantenere audit trail completo per ogni decisione umana
+
+## Workflow operatore: Post-approval lifecycle (Execution -> TX -> Positions -> Settlement)
+
+Dopo `review-approve`, il workflow operativo atteso nel control-plane e:
+
+1. `Execution`:
+   - verificare path decisionale `SKIPPED / SUBMITTED / COMPLETED / FAILED`
+   - verificare `review_queue_id`, stato review collegato e link operativi
+2. `Sandbox TX`:
+   - seguire `intent_id`, `tx_hash`, `nonce`, receipt e `reconcile_state`
+   - usare `tx-reconcile` (operator/admin) per backlog reconcile
+   - usare `tx-resubmit-safe` solo quando consentito e con ruolo `admin`
+3. `Positions`:
+   - verificare posizioni aperte, esposizione, entry info e PnL simulato
+   - usare link diretti verso `Review Queue`, `Sandbox TX`, `Settlement`
+4. `Settlement`:
+   - monitorare richieste pending vs risolte
+   - verificare `realized_pnl`, retry/failure resolution e reason code
+
+Obiettivo operativo:
+
+- permettere tracciabilita end-to-end del candidato approvato fino alla chiusura settlement
+- ridurre lookup manuale tra tab durante incident/triage post-approval
 
 ## UI Auth e RBAC (staging)
 
@@ -61,6 +189,16 @@ Regole:
 - tutte le azioni mutanti richiedono sessione autenticata e ruolo valido
 - ogni azione UI mutante viene auditata con `acting_user` e `acting_role`
 - non esporre mai segreti o credenziali in template/log
+
+Affordance UI operative attese:
+
+- header UI con `user`, `role`, `session_expires_at` per visibilita immediata della sessione attiva
+- azioni non disponibili mostrate in stato `disabled` con motivo esplicito (non nascoste in modo silenzioso)
+- workflow role-aware:
+  - `viewer`: vede i controlli ma non puo eseguire azioni mutanti
+  - `operator`: abilita review decisions, `run-once`, `tx-reconcile`
+  - `admin`: abilita anche `pause/resume`, `admin-settings`, `tx-resubmit-safe`
+- feedback azione sempre visibile in pagina (`completed/blocked/failed`) senza dover aprire log esterni
 
 ## Secret resolution (staging)
 
@@ -149,16 +287,24 @@ Endpoint ad alto polling tipico:
 
 Mitigazioni lato server:
 
-- cache read-model short TTL (`observability.performance.ui_poll_cache_ttl_sec`)
-- hint di polling (`X-Poll-Suggested-Interval-Ms`)
+- cache read-model short TTL (`observability.performance.ui_poll_cache_ttl_sec`) a due livelli:
+  - panel cache (`UiReadModelService`)
+  - query cache (`UiReadQueryService`) per run selector, artifact payloads, incident scans e history lookups
+- hint di polling (`X-Poll-Suggested-Interval-Ms`) con tier endpoint:
+  - base interval per `overview/system/incidents` e pannelli operativi immediati
+  - interval aumentato per pannelli meno volatili o piu costosi (`prediction`, `research`, `reports`, ...)
 - timing header (`X-Request-Duration-Ms`)
 - `Cache-Control: private, max-age=<ttl>`
+- timing log strutturati:
+  - `ui_panel_timing` / `ui_panel_slow`
+  - `ui_read_query_timing` / `ui_read_query_slow`
 
 Raccomandazioni staging:
 
 - non scendere sotto 2s di polling per tab globali (overview/system/incidents)
+- rispettare `X-Poll-Suggested-Interval-Ms` lato client invece di usare un intervallo fisso unico per tutti i tab
 - usare refresh event-driven (azione operatore) per tab ad alta volatilita (review/tx)
-- se compaiono `ui_slow_request` nei log, aumentare intervallo polling e verificare query/repository hot path
+- se compaiono `ui_slow_request`, `ui_panel_slow` o `ui_read_query_slow`, aumentare intervallo polling e verificare hot path query/artifact
 
 ## RBAC CLI privilegiato (opzionale, consigliato in staging condiviso)
 
@@ -386,6 +532,7 @@ Endpoint UI principali:
 - `GET /api/tabs/risk`
 - `GET /api/tabs/review-queue`
 - `GET /api/tabs/execution`
+- `GET /api/tabs/positions`
 - `GET /api/tabs/settlement`
 - `GET /api/tabs/sandbox-tx`
 - `GET /api/tabs/reports`

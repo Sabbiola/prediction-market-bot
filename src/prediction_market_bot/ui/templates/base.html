@@ -6,197 +6,930 @@
   <title>{{ title }}</title>
   <style>
     :root {
-      --bg: #0f172a;
-      --surface: #111827;
-      --text: #e5e7eb;
-      --muted: #94a3b8;
-      --accent: #22c55e;
-      --warning: #f59e0b;
-      --danger: #ef4444;
+      --font-sans: "Manrope", "Source Sans 3", "Helvetica Neue", sans-serif;
+      --font-mono: "IBM Plex Mono", "SFMono-Regular", "Consolas", monospace;
+
+      --bg-0: #090d16;
+      --bg-1: #0e1525;
+      --bg-2: #131c2f;
+      --surface-0: rgba(16, 24, 39, 0.85);
+      --surface-1: rgba(20, 30, 49, 0.92);
+      --surface-2: rgba(27, 41, 66, 0.94);
+      --border-0: #27344f;
+      --border-1: #334669;
+
+      --text-strong: #edf2ff;
+      --text: #d9e2f4;
+      --text-muted: #9fb0ce;
+      --text-soft: #7f92b4;
+
+      --ok: #34d399;
+      --warn: #fbbf24;
+      --danger: #fb7185;
+      --info: #60a5fa;
+      --pending: #f59e0b;
+      --approved: #10b981;
+      --rejected: #ef4444;
+      --failed: #f43f5e;
+
+      --space-1: 0.25rem;
+      --space-2: 0.5rem;
+      --space-3: 0.75rem;
+      --space-4: 1rem;
+      --space-5: 1.25rem;
+      --space-6: 1.5rem;
+      --space-7: 2rem;
+
+      --radius-sm: 8px;
+      --radius-md: 12px;
+      --radius-lg: 16px;
+
+      --shadow-soft: 0 10px 28px rgba(0, 0, 0, 0.22);
+      --shadow-card: 0 16px 36px rgba(3, 8, 20, 0.35);
+      --focus-ring: #8dc8ff;
     }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html, body {
+      min-height: 100%;
+    }
+
     body {
       margin: 0;
-      font-family: "Segoe UI", Tahoma, sans-serif;
-      background: radial-gradient(circle at top, #1e293b 0%, var(--bg) 50%);
+      font-family: var(--font-sans);
       color: var(--text);
+      background:
+        radial-gradient(1200px 700px at -10% -20%, #16335f66 0%, transparent 60%),
+        radial-gradient(900px 500px at 110% 0%, #2f2a5d66 0%, transparent 55%),
+        linear-gradient(170deg, var(--bg-0), var(--bg-1) 50%, var(--bg-2));
+      line-height: 1.4;
     }
-    header {
-      padding: 1rem 1.5rem;
-      border-bottom: 1px solid #1f2937;
-      background: rgba(17, 24, 39, 0.9);
+
+    .app-shell {
+      min-height: 100vh;
+    }
+
+    .skip-link {
+      position: absolute;
+      top: -42px;
+      left: var(--space-3);
+      background: #1d4ed8;
+      color: #f3f7ff;
+      border-radius: var(--radius-sm);
+      padding: 0.45rem 0.7rem;
+      z-index: 99;
+      text-decoration: none;
+      font-size: 0.85rem;
+      font-weight: 700;
+    }
+
+    .skip-link:focus {
+      top: var(--space-3);
+    }
+
+    .app-header {
+      padding: var(--space-4) var(--space-6);
+      border-bottom: 1px solid var(--border-0);
+      background: linear-gradient(180deg, rgba(12, 18, 31, 0.92), rgba(12, 18, 31, 0.78));
       position: sticky;
       top: 0;
       backdrop-filter: blur(4px);
+      z-index: 20;
       display: flex;
       justify-content: space-between;
       align-items: center;
-      gap: 1rem;
+      gap: var(--space-4);
     }
+
+    .brand {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-1);
+    }
+
+    .brand-title {
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--text-strong);
+      letter-spacing: 0.01em;
+    }
+
+    .brand-subtitle {
+      font-size: 0.8rem;
+      color: var(--text-soft);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
     .header-auth {
       display: flex;
       align-items: center;
-      gap: 0.6rem;
+      gap: var(--space-2);
       font-size: 0.85rem;
-      color: var(--muted);
+      color: var(--text-muted);
+      flex-wrap: wrap;
+      justify-content: flex-end;
     }
-    .header-auth button {
-      border: 1px solid #334155;
-      background: #0b1220;
-      color: var(--text);
-      border-radius: 8px;
-      padding: 0.35rem 0.7rem;
-      cursor: pointer;
+
+    .meta-chip {
+      border: 1px solid var(--border-1);
+      background: var(--surface-0);
+      color: var(--text-muted);
+      border-radius: 999px;
+      padding: 0.3rem 0.65rem;
+      font-size: 0.75rem;
+      white-space: nowrap;
     }
-    main {
-      padding: 1.5rem;
-      max-width: 1080px;
+
+    .meta-chip strong {
+      color: var(--text-strong);
+    }
+
+    .meta-chip--role {
+      border-color: rgba(59, 130, 246, 0.42);
+      color: #bdd9ff;
+      background: rgba(29, 78, 216, 0.18);
+    }
+
+    .meta-chip--readonly {
+      border-color: rgba(245, 158, 11, 0.42);
+      color: #ffd992;
+      background: rgba(180, 83, 9, 0.18);
+    }
+
+    .app-main {
+      padding: var(--space-6);
+      max-width: 1280px;
       margin: 0 auto;
+      width: 100%;
     }
+
+    h1, h2, h3 {
+      margin: 0;
+      color: var(--text-strong);
+      line-height: 1.2;
+      letter-spacing: 0.01em;
+    }
+
+    h1 {
+      font-size: 1.55rem;
+      margin-bottom: var(--space-2);
+    }
+
+    p {
+      margin: 0;
+      color: var(--text);
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    .stack-sm > * + * {
+      margin-top: var(--space-2);
+    }
+
+    .stack-md > * + * {
+      margin-top: var(--space-4);
+    }
+
+    .stack-lg > * + * {
+      margin-top: var(--space-6);
+    }
+
+    .subtle {
+      color: var(--text-muted);
+      font-size: 0.92rem;
+    }
+
     .grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-      gap: 1rem;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: var(--space-4);
     }
+
+    .grid-tight {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: var(--space-3);
+    }
+
     .card {
-      background: linear-gradient(160deg, rgba(31, 41, 55, 0.92), rgba(15, 23, 42, 0.98));
-      border: 1px solid #1f2937;
-      border-radius: 10px;
-      padding: 0.9rem;
+      background: linear-gradient(165deg, var(--surface-1), var(--surface-2));
+      border: 1px solid var(--border-0);
+      border-radius: var(--radius-md);
+      padding: var(--space-4);
+      box-shadow: var(--shadow-card);
+      overflow-x: auto;
     }
+
+    .card--soft {
+      background: linear-gradient(160deg, rgba(23, 34, 53, 0.82), rgba(22, 34, 56, 0.88));
+    }
+
+    .card-title,
     .label {
-      color: var(--muted);
-      font-size: 0.8rem;
-      margin-bottom: 0.25rem;
+      color: var(--text-soft);
+      font-size: 0.75rem;
+      margin-bottom: var(--space-2);
       text-transform: uppercase;
-      letter-spacing: 0.04em;
-    }
-    .value {
-      font-size: 1.25rem;
+      letter-spacing: 0.07em;
       font-weight: 600;
     }
-    .ok { color: var(--accent); }
-    .warn { color: var(--warning); }
-    .danger { color: var(--danger); }
+
+    .value {
+      font-size: 1.3rem;
+      font-weight: 700;
+      color: var(--text-strong);
+      line-height: 1.1;
+    }
+
+    .value.ok,
+    .ok {
+      color: var(--ok);
+    }
+
+    .value.warn,
+    .warn {
+      color: var(--warn);
+    }
+
+    .value.danger,
+    .danger {
+      color: var(--danger);
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      border-radius: 999px;
+      font-size: 0.74rem;
+      padding: 0.2rem 0.62rem;
+      border: 1px solid transparent;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .pill--ok {
+      color: #75f0c1;
+      background: rgba(16, 185, 129, 0.14);
+      border-color: rgba(16, 185, 129, 0.45);
+    }
+
+    .pill--warn {
+      color: #ffd771;
+      background: rgba(245, 158, 11, 0.14);
+      border-color: rgba(245, 158, 11, 0.45);
+    }
+
+    .pill--danger {
+      color: #ff9cae;
+      background: rgba(244, 63, 94, 0.15);
+      border-color: rgba(244, 63, 94, 0.5);
+    }
+
+    .pill--info {
+      color: #8dc8ff;
+      background: rgba(59, 130, 246, 0.15);
+      border-color: rgba(59, 130, 246, 0.45);
+    }
+
+    .pill--pending {
+      color: #ffd98d;
+      background: rgba(245, 158, 11, 0.2);
+      border-color: rgba(245, 158, 11, 0.52);
+    }
+
+    .pill--approved {
+      color: #86f6cf;
+      background: rgba(16, 185, 129, 0.18);
+      border-color: rgba(16, 185, 129, 0.5);
+    }
+
+    .pill--rejected {
+      color: #ffb2be;
+      background: rgba(239, 68, 68, 0.2);
+      border-color: rgba(239, 68, 68, 0.5);
+    }
+
+    .pill--failed {
+      color: #ff9cad;
+      background: rgba(244, 63, 94, 0.22);
+      border-color: rgba(244, 63, 94, 0.58);
+    }
+
+    .alert {
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border-1);
+      padding: var(--space-3);
+      background: rgba(16, 24, 39, 0.78);
+    }
+
+    .alert__title {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      font-weight: 700;
+      margin-bottom: var(--space-2);
+      color: var(--text-strong);
+    }
+
+    .alert--danger {
+      border-color: rgba(244, 63, 94, 0.5);
+      background: rgba(78, 16, 31, 0.35);
+    }
+
+    .alert--warning {
+      border-color: rgba(245, 158, 11, 0.5);
+      background: rgba(71, 45, 8, 0.36);
+    }
+
+    .alert--info {
+      border-color: rgba(59, 130, 246, 0.45);
+      background: rgba(15, 35, 67, 0.36);
+    }
+
     .tabs {
       display: flex;
-      gap: 0.6rem;
-      margin-bottom: 1rem;
       flex-wrap: wrap;
+      gap: var(--space-2);
+      margin: var(--space-4) 0;
+      padding: var(--space-2);
+      border: 1px solid var(--border-0);
+      border-radius: var(--radius-md);
+      background: rgba(12, 19, 33, 0.72);
+      position: sticky;
+      top: 72px;
+      z-index: 15;
+      backdrop-filter: blur(4px);
+      box-shadow: var(--shadow-soft);
     }
+
     .tab-btn {
-      border: 1px solid #334155;
-      background: #0b1220;
-      color: var(--text);
-      border-radius: 8px;
-      padding: 0.45rem 0.8rem;
+      border: 1px solid var(--border-1);
+      background: rgba(20, 30, 49, 0.8);
+      color: var(--text-muted);
+      border-radius: 999px;
+      padding: 0.38rem 0.76rem;
       cursor: pointer;
+      font-weight: 600;
+      font-size: 0.82rem;
+      transition: all 0.14s ease-in-out;
     }
+
+    .tab-btn:hover {
+      color: var(--text-strong);
+      border-color: #5f7db2;
+      transform: translateY(-1px);
+    }
+
     .tab-btn.active {
-      background: #1d4ed8;
-      border-color: #1d4ed8;
+      background: linear-gradient(135deg, #1e3a8a, #2563eb);
+      border-color: #4f8df4;
+      color: #f3f7ff;
+      box-shadow: 0 10px 22px rgba(37, 99, 235, 0.35);
     }
-    .tab-panel { display: none; }
-    .tab-panel.active { display: block; }
+
+    .tab-btn--core {
+      border-color: rgba(79, 141, 244, 0.55);
+      color: #c9ddff;
+      background: rgba(22, 46, 87, 0.58);
+    }
+
+    .tab-panel {
+      display: none;
+    }
+
+    .tab-panel.active {
+      display: block;
+    }
+
+    .tab-panel[hidden] {
+      display: none;
+    }
+
     .actions {
       display: flex;
       flex-wrap: wrap;
-      gap: 0.6rem;
-      margin: 0.9rem 0 0;
+      gap: var(--space-2);
+      align-items: center;
     }
-    .actions button {
-      border: 1px solid #334155;
-      background: #0b1220;
+
+    .btn,
+    button,
+    .actions a {
+      border: 1px solid var(--border-1);
+      background: linear-gradient(165deg, rgba(21, 32, 52, 0.92), rgba(16, 25, 42, 0.96));
       color: var(--text);
-      border-radius: 8px;
-      padding: 0.45rem 0.8rem;
+      border-radius: var(--radius-sm);
+      padding: 0.45rem 0.78rem;
       cursor: pointer;
+      font-size: 0.85rem;
+      line-height: 1.1;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.35rem;
+      font-weight: 600;
+      transition: transform 0.14s ease, border-color 0.14s ease, color 0.14s ease;
     }
-    .actions input {
-      border: 1px solid #334155;
-      background: #0b1220;
-      color: var(--text);
-      border-radius: 8px;
-      padding: 0.45rem 0.7rem;
-      min-width: 220px;
+
+    button:hover,
+    .btn:hover,
+    .actions a:hover {
+      border-color: #6084c1;
+      color: var(--text-strong);
+      transform: translateY(-1px);
     }
+
+    button:focus-visible,
+    .btn:focus-visible,
+    .actions a:focus-visible,
+    .tab-btn:focus-visible,
+    a:focus-visible {
+      outline: 2px solid var(--focus-ring);
+      outline-offset: 2px;
+    }
+
+    .btn--primary {
+      background: linear-gradient(135deg, #1d4ed8, #2563eb);
+      border-color: #4f8df4;
+      color: #f3f7ff;
+    }
+
+    .btn--danger {
+      background: linear-gradient(135deg, #9f1239, #e11d48);
+      border-color: #fb7185;
+      color: #fff1f4;
+    }
+
+    .btn[disabled],
+    button[disabled] {
+      cursor: not-allowed;
+      opacity: 0.55;
+      transform: none;
+      pointer-events: none;
+    }
+
+    .btn-role {
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-soft);
+    }
+
+    input,
+    select,
+    textarea {
+      border: 1px solid var(--border-1);
+      background: rgba(8, 13, 24, 0.72);
+      color: var(--text-strong);
+      border-radius: var(--radius-sm);
+      padding: 0.45rem 0.62rem;
+      min-width: 160px;
+      font-size: 0.88rem;
+    }
+
+    .field {
+      display: grid;
+      gap: 0.35rem;
+      min-width: 200px;
+    }
+
+    .field-label {
+      font-size: 0.8rem;
+      color: var(--text-soft);
+      font-weight: 600;
+    }
+
+    .field-help {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+    }
+
+    .select-wide {
+      min-width: 320px;
+    }
+
+    .select-medium {
+      min-width: 240px;
+    }
+
+    input:focus,
+    select:focus,
+    textarea:focus {
+      outline: 2px solid rgba(59, 130, 246, 0.45);
+      outline-offset: 1px;
+      border-color: #4f8df4;
+    }
+
     .event-log {
-      margin-top: 0.8rem;
-      font-size: 0.9rem;
-      color: var(--muted);
+      margin-top: var(--space-3);
+      font-size: 0.85rem;
+      color: var(--text-muted);
       min-height: 1.2rem;
     }
+
+    .event-log--ok {
+      color: #34d399;
+    }
+
+    .event-log--warn {
+      color: #fbbf24;
+    }
+
+    .event-log--failed {
+      color: #f87171;
+    }
+
+    .table-wrap {
+      width: 100%;
+      overflow-x: auto;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border-0);
+      margin-top: var(--space-3);
+      background: rgba(10, 16, 29, 0.45);
+    }
+
     table {
       width: 100%;
       border-collapse: collapse;
-      margin-top: 1rem;
-      font-size: 0.92rem;
+      font-size: 0.84rem;
+      min-width: 680px;
     }
-    th, td {
+
+    th,
+    td {
       text-align: left;
-      padding: 0.55rem;
-      border-bottom: 1px solid #1f2937;
+      padding: 0.6rem 0.58rem;
+      border-bottom: 1px solid rgba(51, 70, 105, 0.5);
+      vertical-align: top;
     }
+
     th {
-      color: var(--muted);
-      font-weight: 500;
+      color: var(--text-soft);
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      font-size: 0.72rem;
+      background: rgba(17, 26, 44, 0.75);
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+
+    tr:hover td {
+      background: rgba(23, 35, 57, 0.32);
+    }
+
+    .row-focus td {
+      background: rgba(37, 99, 235, 0.22);
+    }
+
+    code {
+      font-family: var(--font-mono);
+      font-size: 0.79rem;
+      padding: 0.12rem 0.32rem;
+      border-radius: 6px;
+      background: rgba(15, 22, 36, 0.8);
+      border: 1px solid rgba(52, 71, 105, 0.6);
+      color: #c8d8f3;
+    }
+
+    a {
+      color: #90b8ff;
+    }
+
+    a:hover {
+      color: #b6d1ff;
+    }
+
+    .kicker {
+      margin-bottom: var(--space-3);
+    }
+
+    .engine-panel {
+      display: grid;
+      gap: var(--space-4);
+    }
+
+    .engine-section {
+      display: grid;
+      gap: var(--space-3);
+    }
+
+    .engine-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-3);
+      flex-wrap: wrap;
+      margin-bottom: var(--space-2);
+    }
+
+    .engine-heading h2 {
+      font-size: 1rem;
+      letter-spacing: 0.01em;
+      color: var(--text-strong);
+    }
+
+    .engine-heading .subtle {
+      font-size: 0.82rem;
+    }
+
+    .page-title {
+      margin-top: 0;
+    }
+
+    .mt-neg {
+      margin-top: -0.35rem;
+    }
+
+    .mt-2 {
+      margin-top: 0.6rem;
+    }
+
+    .mt-3 {
+      margin-top: 1rem;
+    }
+
+    .mt-4 {
+      margin-top: 1.25rem;
+    }
+
+    .mb-3 {
+      margin-bottom: 1rem;
+    }
+
+    .detail-line {
+      margin: 0.55rem 0 0;
+    }
+
+    .meta-line {
+      margin: 0.4rem 0 0;
+    }
+
+    .meta-line-strong {
+      margin: 0.6rem 0 0;
+    }
+
+    .empty-note {
+      margin: 0.8rem 0 0;
+      color: var(--text-muted);
+    }
+
+    .muted-note {
+      margin: 0.6rem 0 0;
+      color: var(--text-muted);
+    }
+
+    .banner-stack {
+      margin: 0.9rem 0 0.4rem;
+    }
+
+    .banner-card {
+      margin-top: 0.6rem;
+    }
+
+    .banner-card--danger {
+      border-color: rgba(239, 68, 68, 0.5);
+    }
+
+    .banner-card--warning {
+      border-color: rgba(245, 158, 11, 0.52);
+    }
+
+    .actions-vertical {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .actions-vertical .field {
+      width: 100%;
+    }
+
+    .form-reset {
+      margin: 0;
+    }
+
+    .auth-card {
+      max-width: 520px;
+      margin: 2rem auto;
+    }
+
+    .auth-stack {
+      display: grid;
+      gap: var(--space-3);
+    }
+
+    .role-guide {
+      border: 1px dashed rgba(99, 116, 156, 0.75);
+      border-radius: var(--radius-sm);
+      padding: 0.7rem 0.78rem;
+      background: rgba(13, 20, 33, 0.5);
+    }
+
+    .role-guide strong {
+      color: var(--text-strong);
+    }
+
+    @media (max-width: 1024px) {
+      .app-main {
+        padding: var(--space-5);
+      }
+
+      .tabs {
+        top: 66px;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .app-header {
+        padding: var(--space-3) var(--space-4);
+        flex-direction: column;
+        align-items: flex-start;
+      }
+
+      .tabs {
+        top: 98px;
+      }
+
+      .app-main {
+        padding: var(--space-4);
+      }
+
+      .grid,
+      .grid-tight {
+        grid-template-columns: 1fr;
+      }
+
+      table {
+        min-width: 620px;
+      }
+
+      .header-auth {
+        width: 100%;
+        justify-content: flex-start;
+      }
     }
   </style>
 </head>
 <body>
-  <header>
-    <div><strong>Prediction Market Bot</strong> | Operator Control Plane</div>
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+  <div class="app-shell">
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-title">Prediction Market Bot</div>
+      <div class="brand-subtitle">Operator Control Plane</div>
+    </div>
     <div class="header-auth">
       {% if auth_enabled and auth_user and auth_user.username %}
-      <span>user=<strong>{{ auth_user.username }}</strong> role=<strong>{{ auth_user.role }}</strong></span>
-      <form method="post" action="/logout" style="margin:0;">
-        <button type="submit">Logout</button>
+      <span class="meta-chip">user=<strong>{{ auth_user.username }}</strong></span>
+      <span class="meta-chip meta-chip--role">role=<strong>{{ auth_user.role }}</strong></span>
+      {% if auth_user.role == "viewer" %}
+      <span class="meta-chip meta-chip--readonly">access=observe_only</span>
+      {% endif %}
+      {% if auth_user.session_expires_at %}
+      <span class="meta-chip">session_expires=<strong>{{ auth_user.session_expires_at }}</strong></span>
+      {% endif %}
+      <form method="post" action="/logout" class="form-reset">
+        <button type="submit" class="btn">Logout</button>
       </form>
       {% elif auth_enabled %}
-      <span>not authenticated</span>
+      <span class="meta-chip">not authenticated</span>
       {% else %}
-      <span>auth=disabled</span>
+      <span class="meta-chip">auth=disabled</span>
       {% endif %}
     </div>
   </header>
-  <main>
+  <main id="main-content" class="app-main">
     {% block content %}{% endblock %}
   </main>
+  </div>
   <script>
-    const tabButtons = document.querySelectorAll("[data-tab-btn]");
-    const tabPanels = document.querySelectorAll("[data-tab-panel]");
-    const activate = (name) => {
-      tabButtons.forEach((btn) => btn.classList.toggle("active", btn.dataset.tabBtn === name));
-      tabPanels.forEach((panel) => panel.classList.toggle("active", panel.dataset.tabPanel === name));
+    const tabButtons = [...document.querySelectorAll("[data-tab-btn]")];
+    const tabPanels = [...document.querySelectorAll("[data-tab-panel]")];
+    const tabByName = new Map(tabButtons.map((btn) => [btn.dataset.tabBtn, btn]));
+    const panelByName = new Map(tabPanels.map((panel) => [panel.dataset.tabPanel, panel]));
+
+    tabButtons.forEach((btn, index) => {
+      const tabName = btn.dataset.tabBtn;
+      const panel = panelByName.get(tabName);
+      if (!tabName || !panel) return;
+      btn.setAttribute("role", "tab");
+      btn.id = `tab-${tabName}`;
+      btn.setAttribute("aria-controls", `panel-${tabName}`);
+      btn.setAttribute("aria-selected", "false");
+      btn.tabIndex = index === 0 ? 0 : -1;
+      panel.setAttribute("role", "tabpanel");
+      panel.id = `panel-${tabName}`;
+      panel.setAttribute("aria-labelledby", btn.id);
+      panel.hidden = true;
+    });
+
+    const activate = (name, opts = {}) => {
+      tabButtons.forEach((btn) => {
+        const active = btn.dataset.tabBtn === name;
+        btn.classList.toggle("active", active);
+        btn.setAttribute("aria-selected", active ? "true" : "false");
+        btn.tabIndex = active ? 0 : -1;
+      });
+      tabPanels.forEach((panel) => {
+        const active = panel.dataset.tabPanel === name;
+        panel.classList.toggle("active", active);
+        panel.hidden = !active;
+      });
+      if (opts.focus === true) {
+        const btn = tabByName.get(name);
+        if (btn) btn.focus();
+      }
     };
-    tabButtons.forEach((btn) => btn.addEventListener("click", () => activate(btn.dataset.tabBtn)));
-    const activeFromQuery = new URLSearchParams(window.location.search).get("active_tab");
-    if (tabButtons.length > 0) {
-      const exists = [...tabButtons].some((btn) => btn.dataset.tabBtn === activeFromQuery);
-      activate(exists ? activeFromQuery : tabButtons[0].dataset.tabBtn);
+
+    tabButtons.forEach((btn, index) => {
+      btn.addEventListener("click", () => activate(btn.dataset.tabBtn, {focus: false}));
+      btn.addEventListener("keydown", (event) => {
+        if (!["ArrowRight", "ArrowLeft", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        let targetIndex = index;
+        if (event.key === "ArrowRight") targetIndex = (index + 1) % tabButtons.length;
+        if (event.key === "ArrowLeft") targetIndex = (index - 1 + tabButtons.length) % tabButtons.length;
+        if (event.key === "Home") targetIndex = 0;
+        if (event.key === "End") targetIndex = tabButtons.length - 1;
+        const target = tabButtons[targetIndex];
+        if (!target) return;
+        activate(target.dataset.tabBtn, {focus: true});
+      });
+    });
+
+    const tabGroup = document.querySelector(".tabs");
+    if (tabGroup) {
+      tabGroup.setAttribute("role", "tablist");
+      tabGroup.setAttribute("aria-label", "Control plane tabs");
     }
 
-    const callAction = async (path, payload = {}, logId = "action-log") => {
+    const activeFromQuery = new URLSearchParams(window.location.search).get("active_tab");
+    if (tabButtons.length > 0) {
+      const exists = tabByName.has(activeFromQuery);
+      activate(exists ? activeFromQuery : tabButtons[0].dataset.tabBtn, {focus: false});
+    }
+
+    const setActionLog = (eventLog, message, state = "") => {
+      if (!eventLog) return;
+      eventLog.classList.remove("event-log--ok", "event-log--warn", "event-log--failed");
+      if (state === "ok") eventLog.classList.add("event-log--ok");
+      if (state === "warn") eventLog.classList.add("event-log--warn");
+      if (state === "failed") eventLog.classList.add("event-log--failed");
+      eventLog.textContent = message;
+    };
+
+    const callAction = async (path, payload = {}, logId = "action-log", options = {}) => {
       const eventLog = document.getElementById(logId);
-      if (eventLog) eventLog.textContent = "Processing action...";
+      setActionLog(eventLog, "Processing action...", "warn");
       try {
         const response = await fetch(path, {
           method: "POST",
           headers: {"Content-Type": "application/json"},
           body: JSON.stringify(payload),
         });
-        const data = await response.json();
-        if (eventLog) {
-          const target = data.queue_id || data.intent_id || data.run_id || "n/a";
-          eventLog.textContent = `${data.action}: ${data.status} (${data.message}) target=${target}`;
+        let data = {};
+        try {
+          data = await response.json();
+        } catch (_decodeError) {
+          data = {action: "unknown", status: "failed", message: "invalid_json_response"};
+        }
+        const target = data.queue_id || data.intent_id || data.run_id || "n/a";
+        const status = String(data.status || "unknown").toLowerCase();
+        let state = "ok";
+        if (!response.ok || status === "failed") state = "failed";
+        else if (status === "blocked") state = "warn";
+        setActionLog(eventLog, `${data.action}: ${data.status} (${data.message}) target=${target}`, state);
+        if (typeof options.onCompleted === "function") {
+          options.onCompleted(data, response);
         }
       } catch (_error) {
-        if (eventLog) eventLog.textContent = "Action failed: backend_unavailable";
+        setActionLog(eventLog, "Action failed: backend_unavailable", "failed");
       }
     };
 
     const runOnceBtn = document.getElementById("action-run-once");
     if (runOnceBtn) {
       runOnceBtn.addEventListener("click", () => {
+        if (runOnceBtn.disabled) return;
         const runId = (document.getElementById("run-id-input") || {}).value || "";
         callAction("/api/actions/run-once", {run_id: runId, force: false}, "action-log");
       });
@@ -204,42 +937,98 @@
     const pauseBtn = document.getElementById("action-pause");
     if (pauseBtn) {
       pauseBtn.addEventListener("click", () => {
+        if (pauseBtn.disabled) return;
         const reason = (document.getElementById("pause-reason-input") || {}).value || "ui_operator_pause";
         callAction("/api/actions/pause", {reason: reason}, "action-log");
       });
     }
     const resumeBtn = document.getElementById("action-resume");
     if (resumeBtn) {
-      resumeBtn.addEventListener("click", () => callAction("/api/actions/resume", {}, "action-log"));
+      resumeBtn.addEventListener("click", () => {
+        if (resumeBtn.disabled) return;
+        callAction("/api/actions/resume", {}, "action-log");
+      });
     }
 
     const reviewApproveBtn = document.getElementById("action-review-approve");
     if (reviewApproveBtn) {
       reviewApproveBtn.addEventListener("click", () => {
-        const queueId = (document.getElementById("review-queue-id") || {}).value || "";
-        const operatorId = (document.getElementById("review-operator-id") || {}).value || "";
-        const rationale = (document.getElementById("review-rationale") || {}).value || "";
-        const note = (document.getElementById("review-note") || {}).value || "";
+        if (reviewApproveBtn.disabled) return;
+        const reviewLog = document.getElementById("review-action-log");
+        const queueId = ((document.getElementById("review-queue-id") || {}).value || "").toString().trim();
+        const operatorId = ((document.getElementById("review-operator-id") || {}).value || "").toString().trim();
+        const rationale = ((document.getElementById("review-rationale") || {}).value || "").toString().trim();
+        const note = ((document.getElementById("review-note") || {}).value || "").toString().trim();
+        const runId = ((document.getElementById("review-run-id") || {}).value || "").toString().trim();
+        const confirmed = Boolean((document.getElementById("review-confirm") || {}).checked);
+        if (!queueId) {
+          setActionLog(reviewLog, "Missing queue_id for review action.", "warn");
+          return;
+        }
+        if (!rationale) {
+          setActionLog(reviewLog, "Rationale is required for approve/reject decisions.", "warn");
+          return;
+        }
+        if (!confirmed) {
+          setActionLog(reviewLog, "Please confirm the decision checkbox before submitting.", "warn");
+          return;
+        }
         if (!window.confirm(`Approve candidate ${queueId}?`)) return;
         callAction(
           "/api/actions/review-approve",
           {queue_id: queueId, operator_id: operatorId, rationale: rationale, note: note, confirm: true},
           "review-action-log",
+          {
+            onCompleted: (data) => {
+              if (String(data.status || "").toLowerCase() !== "completed") return;
+              const runToken = encodeURIComponent(runId);
+              const queueToken = encodeURIComponent(queueId);
+              window.setTimeout(() => {
+                window.location.href = `/?run_id=${runToken}&active_tab=review-queue&review_status=APPROVED&review_queue_id=${queueToken}`;
+              }, 350);
+            },
+          },
         );
       });
     }
     const reviewRejectBtn = document.getElementById("action-review-reject");
     if (reviewRejectBtn) {
       reviewRejectBtn.addEventListener("click", () => {
-        const queueId = (document.getElementById("review-queue-id") || {}).value || "";
-        const operatorId = (document.getElementById("review-operator-id") || {}).value || "";
-        const rationale = (document.getElementById("review-rationale") || {}).value || "";
-        const note = (document.getElementById("review-note") || {}).value || "";
+        if (reviewRejectBtn.disabled) return;
+        const reviewLog = document.getElementById("review-action-log");
+        const queueId = ((document.getElementById("review-queue-id") || {}).value || "").toString().trim();
+        const operatorId = ((document.getElementById("review-operator-id") || {}).value || "").toString().trim();
+        const rationale = ((document.getElementById("review-rationale") || {}).value || "").toString().trim();
+        const note = ((document.getElementById("review-note") || {}).value || "").toString().trim();
+        const runId = ((document.getElementById("review-run-id") || {}).value || "").toString().trim();
+        const confirmed = Boolean((document.getElementById("review-confirm") || {}).checked);
+        if (!queueId) {
+          setActionLog(reviewLog, "Missing queue_id for review action.", "warn");
+          return;
+        }
+        if (!rationale) {
+          setActionLog(reviewLog, "Rationale is required for approve/reject decisions.", "warn");
+          return;
+        }
+        if (!confirmed) {
+          setActionLog(reviewLog, "Please confirm the decision checkbox before submitting.", "warn");
+          return;
+        }
         if (!window.confirm(`Reject candidate ${queueId}?`)) return;
         callAction(
           "/api/actions/review-reject",
           {queue_id: queueId, operator_id: operatorId, rationale: rationale, note: note, confirm: true},
           "review-action-log",
+          {
+            onCompleted: (data) => {
+              if (String(data.status || "").toLowerCase() !== "completed") return;
+              const runToken = encodeURIComponent(runId);
+              const queueToken = encodeURIComponent(queueId);
+              window.setTimeout(() => {
+                window.location.href = `/?run_id=${runToken}&active_tab=review-queue&review_status=REJECTED&review_queue_id=${queueToken}`;
+              }, 350);
+            },
+          },
         );
       });
     }
@@ -247,6 +1036,7 @@
     const txReconcileBtn = document.getElementById("action-tx-reconcile");
     if (txReconcileBtn) {
       txReconcileBtn.addEventListener("click", () => {
+        if (txReconcileBtn.disabled) return;
         const runId = (document.getElementById("tx-run-id") || {}).value || "";
         const intentId = (document.getElementById("tx-intent-id") || {}).value || "";
         const limit = Number((document.getElementById("tx-limit") || {}).value || "100");
@@ -260,6 +1050,7 @@
     const txResubmitBtn = document.getElementById("action-tx-resubmit-safe");
     if (txResubmitBtn) {
       txResubmitBtn.addEventListener("click", () => {
+        if (txResubmitBtn.disabled) return;
         const intentId = (document.getElementById("tx-intent-id") || {}).value || "";
         if (!window.confirm(`Safe resubmit intent ${intentId}?`)) return;
         callAction(

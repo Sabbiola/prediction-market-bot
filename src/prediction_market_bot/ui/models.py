@@ -106,9 +106,24 @@ class IncidentBannerResponse(UiBaseModel):
 class IncidentEventResponse(UiBaseModel):
     timestamp: str
     run_id: str
+    linked_run_id: str = ""
     event_type: str
     severity: str
     summary: str
+    component: str = ""
+    affected_target: str = ""
+    reason_code: str = ""
+    queue_id: str = ""
+    intent_id: str = ""
+    request_id: str = ""
+    market_id: str = ""
+    source: str = ""
+    run_url: str = ""
+    review_queue_url: str = ""
+    sandbox_tx_url: str = ""
+    position_url: str = ""
+    settlement_url: str = ""
+    reports_url: str = ""
 
 
 class ReportShortcutResponse(UiBaseModel):
@@ -241,10 +256,20 @@ class ProviderStatusSummaryResponse(UiBaseModel):
 class SystemHealthTabResponse(UiBaseModel):
     generated_at: str
     run_selector: RunSelectorResponse
+    overall_status: str
     startup_validation: StartupValidationSummaryResponse
     healthcheck: HealthcheckSummaryResponse
     db_connectivity: DbConnectivitySummaryResponse
     provider_status: ProviderStatusSummaryResponse
+    review_queue_depth: int
+    tx_pending_count: int
+    tx_mined_count: int
+    tx_failed_count: int
+    pending_settlements_count: int
+    stale_data_events_total: int
+    stale_data_blocked_trades_total: int
+    incident_banners: tuple[IncidentBannerResponse, ...] = ()
+    incidents_feed: tuple[IncidentEventResponse, ...] = ()
 
 
 class ScannerCandidateRowResponse(UiBaseModel):
@@ -264,10 +289,18 @@ class ScannerTabResponse(UiBaseModel):
     run_selector: RunSelectorResponse
     available: bool
     note: str
+    panel_status: str
     total_markets: int
+    eligible_markets_count: int
+    rejected_markets_count: int
     candidates_count: int
     avg_scan_score: float
+    funnel_summary: tuple[ChartPointResponse, ...]
     top_reasons: tuple[ChartPointResponse, ...]
+    rejected_reasons: tuple[ChartPointResponse, ...]
+    market_context_summary: tuple[ChartPointResponse, ...]
+    diagnostics_summary: tuple[ChartPointResponse, ...]
+    anomalies: tuple[IncidentBannerResponse, ...] = ()
     candidates: tuple[ScannerCandidateRowResponse, ...]
 
 
@@ -286,11 +319,16 @@ class ResearchTabResponse(UiBaseModel):
     run_selector: RunSelectorResponse
     available: bool
     note: str
+    panel_status: str
     packets_count: int
     findings_count: int
     avg_evidence_strength: float
     avg_disagreement_score: float
+    source_failures_count: int
+    coverage_summary: tuple[ChartPointResponse, ...]
     source_type_distribution: tuple[ChartPointResponse, ...]
+    diagnostics_summary: tuple[ChartPointResponse, ...]
+    anomalies: tuple[IncidentBannerResponse, ...] = ()
     packets: tuple[ResearchPacketRowResponse, ...]
 
 
@@ -309,9 +347,12 @@ class PredictionTabResponse(UiBaseModel):
     run_selector: RunSelectorResponse
     available: bool
     note: str
+    panel_status: str
     predictions_count: int
     avg_confidence: float
     avg_edge_bps: float
+    avg_probability_gap: float
+    parity_warning_count: int
     model_visibility: ModelVisibilityResponse
     calibration_summary: tuple[ChartPointResponse, ...] = ()
     shadow_comparison: ShadowComparisonHistoryRowResponse | None = None
@@ -321,6 +362,8 @@ class PredictionTabResponse(UiBaseModel):
     enrichment_coverage: float | None = None
     disagreement_vs_baseline: tuple[ChartPointResponse, ...] = ()
     drift_alert: DriftAlertResponse | None = None
+    diagnostics_summary: tuple[ChartPointResponse, ...] = ()
+    anomalies: tuple[IncidentBannerResponse, ...] = ()
     side_distribution: tuple[ChartPointResponse, ...]
     rows: tuple[PredictionRowResponse, ...]
 
@@ -340,23 +383,40 @@ class RiskTabResponse(UiBaseModel):
     run_selector: RunSelectorResponse
     available: bool
     note: str
+    panel_status: str
     decisions_count: int
     approved_count: int
     blocked_count: int
     avg_stake_usd: float
+    proposed_stake_usd: float
+    approved_stake_usd: float
+    avg_portfolio_exposure_usd: float
+    avg_market_exposure_usd: float
+    daily_stop_triggered: bool
+    circuit_breaker_active: bool
+    guardrail_distribution: tuple[ChartPointResponse, ...]
     reason_code_distribution: tuple[ChartPointResponse, ...]
+    diagnostics_summary: tuple[ChartPointResponse, ...]
+    anomalies: tuple[IncidentBannerResponse, ...] = ()
     rows: tuple[RiskRowResponse, ...]
 
 
 class ExecutionRowResponse(UiBaseModel):
     market_id: str
     status: str
+    lifecycle_path: str = ""
     side: str
     stake_usd: float
     fill_price: float | None
     order_id: str
     execution_mode: str
     intent_rationale: str
+    review_queue_id: str = ""
+    review_status: str = ""
+    review_rationale: str = ""
+    review_queue_url: str = ""
+    sandbox_tx_url: str = ""
+    position_url: str = ""
     message: str
 
 
@@ -367,17 +427,52 @@ class ExecutionTabResponse(UiBaseModel):
     note: str
     intents_count: int
     executions_count: int
+    linked_review_decisions_count: int = 0
+    skipped_count: int = 0
+    submitted_count: int = 0
+    completed_count: int = 0
+    failed_count: int = 0
     status_distribution: tuple[ChartPointResponse, ...]
+    lifecycle_distribution: tuple[ChartPointResponse, ...] = ()
     rows: tuple[ExecutionRowResponse, ...]
 
 
 class SettlementRowResponse(UiBaseModel):
+    request_id: str = ""
     market_id: str
+    state: str = ""
+    resolution_status: str = ""
     outcome_classification: str
     resolved_yes: str
     pnl_usd: float
     execution_side: str
     resolution_reason: str
+    retry_count: int = 0
+    review_queue_id: str = ""
+    tx_intent_id: str = ""
+    review_queue_url: str = ""
+    sandbox_tx_url: str = ""
+    position_url: str = ""
+    updated_at: str = ""
+
+
+class SettlementPendingRowResponse(UiBaseModel):
+    request_id: str
+    market_id: str
+    state: str
+    resolution_status: str
+    resolution_reason: str
+    execution_side: str
+    stake_usd: float
+    fill_price: float | None = None
+    order_id: str = ""
+    retry_count: int = 0
+    review_queue_id: str = ""
+    tx_intent_id: str = ""
+    review_queue_url: str = ""
+    sandbox_tx_url: str = ""
+    position_url: str = ""
+    updated_at: str = ""
 
 
 class SettlementTabResponse(UiBaseModel):
@@ -388,21 +483,32 @@ class SettlementTabResponse(UiBaseModel):
     pending_requests_count: int
     resolution_checks_count: int
     settled_count: int
+    resolved_settlements_count: int = 0
+    realized_pnl_usd: float = 0.0
+    retry_count: int = 0
+    failure_count: int = 0
     outcome_distribution: tuple[ChartPointResponse, ...]
+    pending_rows: tuple[SettlementPendingRowResponse, ...] = ()
+    resolved_rows: tuple[SettlementRowResponse, ...] = ()
     rows: tuple[SettlementRowResponse, ...]
 
 
 class SandboxTxRowResponse(UiBaseModel):
     intent_id: str
+    review_queue_id: str = ""
     market_id: str
     side: str
     execution_mode: str
     confirmation_status: str
+    has_receipt: bool = False
+    reconcile_state: str = ""
     tx_hash: str
     nonce: int | None
     retry_count: int
     replacement_for_tx_hash: str
     replaced_by_tx_hash: str
+    review_queue_url: str = ""
+    position_url: str = ""
     message: str
 
 
@@ -413,6 +519,12 @@ class SandboxTxTabResponse(UiBaseModel):
     note: str
     attempts_count: int
     receipts_count: int
+    pending_count: int = 0
+    mined_count: int = 0
+    failed_count: int = 0
+    dropped_count: int = 0
+    replaced_count: int = 0
+    reconcile_backlog_count: int = 0
     confirmation_distribution: tuple[ChartPointResponse, ...]
     rows: tuple[SandboxTxRowResponse, ...]
     active_intent_id: str = ""
@@ -446,11 +558,57 @@ class ReportsTabResponse(UiBaseModel):
     failure_categories: tuple[ChartPointResponse, ...]
     report_markdown_path: str
     report_json_path: str
+    run_overview_url: str = ""
+    review_queue_url: str = ""
+    sandbox_tx_url: str = ""
+    positions_url: str = ""
+    settlement_url: str = ""
     replay_shortcut: ReportShortcutResponse
     generate_report_shortcut: ReportShortcutResponse
     eval_run_shortcut: ReportShortcutResponse
     eval_window_shortcut: ReportShortcutResponse
     incidents_feed: tuple[IncidentEventResponse, ...] = ()
+
+
+class PositionsRowResponse(UiBaseModel):
+    market_id: str
+    market_title: str = ""
+    market_status: str = ""
+    hours_to_resolution: float | None = None
+    side: str
+    shares: float
+    avg_entry_price: float
+    cost_basis_usd: float
+    mark_price: float
+    market_value_usd: float
+    unrealized_pnl_usd: float
+    exposure_pct: float
+    review_queue_id: str = ""
+    review_status: str = ""
+    tx_intent_id: str = ""
+    review_queue_url: str = ""
+    prediction_url: str = ""
+    risk_url: str = ""
+    sandbox_tx_url: str = ""
+    settlement_url: str = ""
+    updated_at: str = ""
+
+
+class PositionsTabResponse(UiBaseModel):
+    generated_at: str
+    run_selector: RunSelectorResponse
+    available: bool
+    note: str
+    active_market_id: str = ""
+    open_positions_count: int
+    linked_review_count: int = 0
+    linked_tx_count: int = 0
+    total_exposure_usd: float
+    unrealized_pnl_usd: float
+    realized_pnl_usd: float
+    total_pnl_usd: float
+    exposure_distribution: tuple[ChartPointResponse, ...]
+    rows: tuple[PositionsRowResponse, ...]
 
 
 class IncidentsFeedResponse(UiBaseModel):
@@ -512,11 +670,26 @@ class ReviewQueueRowResponse(UiBaseModel):
     queue_id: str
     run_id: str
     market_id: str
+    market_title: str = ""
     side: str
     status: str
+    lifecycle_state: str = ""
+    executed: bool = False
+    execution_status: str = ""
+    fair_yes_prob: float | None = None
+    market_yes_prob: float | None = None
     stake_usd: float
     confidence: float
     edge_bps: float
+    prediction_rationale_summary: str = ""
+    risk_rationale_summary: str = ""
+    evidence_coverage_summary: str = ""
+    findings_count: int = 0
+    source_coverage_ratio: float | None = None
+    prediction_url: str = ""
+    risk_url: str = ""
+    sandbox_tx_url: str = ""
+    position_url: str = ""
     expires_at: str = ""
     updated_at: str = ""
 
@@ -525,14 +698,29 @@ class ReviewQueueDetailResponse(UiBaseModel):
     queue_id: str
     run_id: str
     market_id: str
+    market_title: str = ""
     side: str
     status: str
+    lifecycle_state: str = ""
+    executed: bool = False
+    execution_status: str = ""
     stake_usd: float
     confidence: float
     edge_bps: float
+    fair_yes_prob: float | None = None
+    market_yes_prob: float | None = None
     created_at: str
     updated_at: str
     expires_at: str = ""
+    findings_count: int = 0
+    source_types: tuple[str, ...] = ()
+    evidence_strength: float | None = None
+    disagreement_score: float | None = None
+    source_coverage_ratio: float | None = None
+    freshness_hours: float | None = None
+    contradiction_score: float | None = None
+    source_diversity: float | None = None
+    evidence_coverage_summary: str = ""
     prediction_rationale: tuple[str, ...]
     risk_rationale: tuple[str, ...]
     model_rationale: tuple[str, ...]
@@ -540,6 +728,10 @@ class ReviewQueueDetailResponse(UiBaseModel):
     notes: tuple[str, ...]
     can_approve: bool
     can_reject: bool
+    prediction_url: str = ""
+    risk_url: str = ""
+    sandbox_tx_url: str = ""
+    position_url: str = ""
 
 
 class ReviewQueueTabResponse(UiBaseModel):
@@ -551,9 +743,11 @@ class ReviewQueueTabResponse(UiBaseModel):
     status_filters: tuple[str, ...]
     pending_count: int
     approved_count: int
+    executed_count: int
     rejected_count: int
     expired_count: int
     total_count: int
+    lifecycle_distribution: tuple[ChartPointResponse, ...] = ()
     rows: tuple[ReviewQueueRowResponse, ...]
     selected_queue_id: str = ""
     selected_item: ReviewQueueDetailResponse | None = None

@@ -24,6 +24,7 @@ from prediction_market_bot.ui.models import (
     OverviewTabResponse,
     PauseActionRequest,
     PredictionTabResponse,
+    PositionsTabResponse,
     ReadinessResponse,
     ReviewDecisionActionRequest,
     ReviewQueueTabResponse,
@@ -181,6 +182,16 @@ def execution_tab(
     _: AuthenticatedUser = Depends(require_viewer_role),
 ) -> ExecutionTabResponse:
     return service.execution_tab(run_id=run_id)
+
+
+@router.get("/api/tabs/positions", response_model=PositionsTabResponse)
+def positions_tab(
+    run_id: str | None = Query(default=None),
+    market_id: str | None = Query(default=None),
+    service: UiReadModelService = Depends(get_read_model_service),
+    _: AuthenticatedUser = Depends(require_viewer_role),
+) -> PositionsTabResponse:
+    return service.positions_tab(run_id=run_id, market_id=market_id)
 
 
 @router.get("/api/tabs/settlement", response_model=SettlementTabResponse)

@@ -76,8 +76,9 @@ def create_web_app(
         if _is_polling_path(path):
             ttl_sec = max(settings.performance.ui_poll_cache_ttl_sec, 0.0)
             response.headers["Cache-Control"] = f"private, max-age={int(ttl_sec)}"
+            base_poll_ms = int(round(settings.performance.ui_poll_min_interval_sec * 1000.0))
             response.headers["X-Poll-Suggested-Interval-Ms"] = str(
-                int(round(settings.performance.ui_poll_min_interval_sec * 1000.0))
+                _poll_suggested_interval_ms(path=path, base_interval_ms=base_poll_ms)
             )
         if settings.performance.slow_stage_threshold_ms > 0 and duration_ms >= settings.performance.slow_stage_threshold_ms:
             logger.warning(
@@ -113,3 +114,18 @@ def _cookie_samesite(value: str) -> Literal["lax", "strict", "none"]:
 
 def _is_polling_path(path: str) -> bool:
     return path == "/api/incidents" or path.startswith("/api/tabs/")
+
+
+def _poll_suggested_interval_ms(*, path: str, base_interval_ms: int) -> int:
+    if path in {
+        "/api/tabs/scanner",
+        "/api/tabs/research",
+        "/api/tabs/prediction",
+        "/api/tabs/risk",
+        "/api/tabs/positions",
+        "/api/tabs/settlement",
+    }:
+        return max(base_interval_ms * 2, base_interval_ms)
+    if path == "/api/tabs/reports":
+        return max(base_interval_ms * 3, base_interval_ms)
+    return max(base_interval_ms, 100)

@@ -26,7 +26,7 @@ def login_page(
     user = auth.current_user(request)
     if user is not None:
         return RedirectResponse(url="/", status_code=303)
-    next_path = request.query_params.get("next") or "/"
+    next_path = _safe_next_path(request.query_params.get("next"))
     return templates.TemplateResponse(
         request=request,
         name="login.html",
@@ -35,6 +35,7 @@ def login_page(
             "auth_enabled": True,
             "auth_user": {},
             "error": "",
+            "username": "",
             "next_path": next_path,
         },
     )
@@ -50,6 +51,8 @@ def login_submit(
 ) -> Response:
     if not auth.enabled:
         return RedirectResponse(url="/", status_code=303)
+    safe_next = _safe_next_path(next_path)
+    attempted_username = username.strip()
     user = auth.authenticate_credentials(username=username, password=password)
     if user is None:
         templates = getattr(request.app.state, "templates", None)
@@ -62,13 +65,14 @@ def login_submit(
                 "title": "Operator Login",
                 "auth_enabled": True,
                 "auth_user": {},
-                "error": "invalid_credentials",
-                "next_path": next_path or "/",
+                "error": "Invalid username or password. Check credentials and try again.",
+                "username": attempted_username,
+                "next_path": safe_next,
             },
             status_code=401,
         )
     auth.login(request, user)
-    target = next_path.strip() or "/"
+    target = safe_next
     return RedirectResponse(url=target, status_code=303)
 
 
@@ -98,6 +102,7 @@ def home(
     review_status = request.query_params.get("review_status")
     review_queue_id = request.query_params.get("review_queue_id")
     tx_intent_id = request.query_params.get("tx_intent_id")
+    position_market_id = request.query_params.get("position_market_id")
     active_tab = request.query_params.get("active_tab") or "overview"
 
     run_selector, run_selector_error = _safe_panel(lambda: service.run_selector(run_id=run_id).model_dump(mode="json"))
@@ -108,6 +113,9 @@ def home(
     prediction, prediction_error = _safe_panel(lambda: service.prediction_tab(run_id=run_id).model_dump(mode="json"))
     risk, risk_error = _safe_panel(lambda: service.risk_tab(run_id=run_id).model_dump(mode="json"))
     execution, execution_error = _safe_panel(lambda: service.execution_tab(run_id=run_id).model_dump(mode="json"))
+    positions, positions_error = _safe_panel(
+        lambda: service.positions_tab(run_id=run_id, market_id=position_market_id).model_dump(mode="json")
+    )
     settlement, settlement_error = _safe_panel(lambda: service.settlement_tab(run_id=run_id).model_dump(mode="json"))
     review_queue, review_queue_error = _safe_panel(
         lambda: service.review_queue_tab(
@@ -137,6 +145,7 @@ def home(
             "review_status": review_status or "PENDING_REVIEW",
             "review_queue_id": review_queue_id or "",
             "tx_intent_id": tx_intent_id or "",
+            "position_market_id": position_market_id or "",
             "run_selector": run_selector,
             "run_selector_error": run_selector_error,
             "overview": overview,
@@ -153,6 +162,8 @@ def home(
             "risk_error": risk_error,
             "execution": execution,
             "execution_error": execution_error,
+            "positions": positions,
+            "positions_error": positions_error,
             "settlement": settlement,
             "settlement_error": settlement_error,
             "review_queue": review_queue,
@@ -170,3 +181,14 @@ def _safe_panel(loader: Callable[[], dict[str, Any]]) -> tuple[dict[str, Any], s
         return loader(), ""
     except Exception:
         return {}, "panel_temporarily_unavailable"
+
+
+def _safe_next_path(next_path: str | None) -> str:
+    if next_path is None:
+        return "/"
+    value = next_path.strip()
+    if not value.startswith("/"):
+        return "/"
+    if value.startswith("//"):
+        return "/"
+    return value or "/"

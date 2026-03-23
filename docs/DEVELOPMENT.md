@@ -30,6 +30,63 @@ Regole:
 - evitare dipendenze circolari tra command module
 - mantenere command names/flag backward-compatible
 
+## UI Control Plane: aggiungere un nuovo tab/pannello
+
+Read/query layering corrente:
+
+- `src/prediction_market_bot/ui/read_models/queries.py`:
+  accesso read-only a persistence/event log/operational repositories
+- `src/prediction_market_bot/ui/read_models/<panel>.py`:
+  aggregazione per-tab e shaping verso response model
+- `src/prediction_market_bot/ui/models.py`:
+  contratto tipizzato del payload UI
+- `src/prediction_market_bot/ui/read_models/service.py`:
+  facade sottile usata da route API/pages
+
+Procedura consigliata:
+
+1. Aggiungere/estendere i model in `ui/models.py` (response row + tab response).
+2. Implementare la logica per-tab in un modulo dedicato `ui/read_models/<panel>.py`.
+3. Mettere query/read access solo in `queries.py` (o helper query condivisi), non nei route handler.
+4. Esporre il metodo nel facade `UiReadModelService` (`service.py`).
+5. Aggiungere endpoint in `ui/routes/api.py` e, se serve, wiring in `ui/routes/pages.py` + template.
+6. Aggiornare test unit/integration UI per payload shape e comportamento endpoint.
+
+Regole:
+
+- evitare logica business (prediction/risk/execution policy) nel layer UI
+- mantenere route handler sottili (solo auth/rbac + delega servizio)
+- preservare compatibilita payload/template esistenti se non e un cambiamento esplicito
+
+### UI styling conventions (server-rendered)
+
+Per modifiche visuali al control-plane:
+
+- centralizzare stile condiviso in `src/prediction_market_bot/ui/templates/base.html`
+  - tokens (`:root`) per colori/spacing/typography
+  - componenti riusabili (`card`, `pill`, `alert`, `btn`, `tabs`, `actions`, form controls, tabelle)
+- evitare `style="..."` inline nei template pagina; preferire classi condivise
+- usare pill semantiche per stati:
+  - `pending` -> `pill--pending`
+  - `approved/ok` -> `pill--approved`
+  - `rejected/failed/critical` -> `pill--failed`
+  - warning/intermediate -> `pill--warn`
+- mantenere la logica di shaping fuori dal template:
+  - il template presenta dati gia pronti (view-model)
+  - no nuova business logic in Jinja
+- preservare ID e affordance delle azioni (`action-run-once`, `action-pause`, ecc.) per non rompere test/integrazioni
+- per azioni RBAC-gated preferire controlli sempre visibili ma `disabled` con testo esplicativo
+  - evitare affordance nascoste senza spiegazione del motivo
+- per pannelli lifecycle (review/execution/sandbox-tx/positions/settlement), mantenere deep-link query params coerenti:
+  - `review_queue_id`
+  - `tx_intent_id`
+  - `position_market_id`
+- accessibilita minima obbligatoria nei template:
+  - focus visibile su tab/btn/link/inputs (`:focus-visible`)
+  - etichette esplicite (`label`) per form controls principali
+  - regioni feedback azione con `role=\"status\"` e `aria-live`
+  - tab keyboard-friendly (ArrowLeft/ArrowRight/Home/End) e semantica `tablist/tab/tabpanel`
+
 ## Live Research adapters
 
 Struttura ingestion live research:

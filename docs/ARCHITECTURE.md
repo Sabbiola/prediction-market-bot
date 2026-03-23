@@ -41,7 +41,24 @@ prediction-market-bot/
       ui/
         app.py
         server.py
-        read_models.py
+        read_models/
+          __init__.py
+          context.py
+          queries.py
+          shared.py
+          overview.py
+          system.py
+          scanner.py
+          research.py
+          prediction.py
+          risk.py
+          review_queue.py
+          execution.py
+          positions.py
+          settlement.py
+          sandbox_tx.py
+          reports.py
+          service.py
         routes/
         templates/
       cli/
@@ -107,7 +124,12 @@ prediction-market-bot/
   - evento `slow_stage_detected` (guardrail soglia)
   - eventi adapter live con durata (`live_market_fetch_end`, `research_ingestion_*`)
   - timing replay/evaluation in osservabilita history (`analysis_timings_ms` + log timing dedicati)
-- la UI espone hint operativi per polling (`X-Request-Duration-Ms`, `X-Poll-Suggested-Interval-Ms`) e usa cache short-TTL lato read-model per endpoint ad alta frequenza.
+- la UI espone hint operativi per polling (`X-Request-Duration-Ms`, `X-Poll-Suggested-Interval-Ms`) con intervalli suggeriti per classe endpoint (core vs panel secondari).
+- il layer read-model usa cache short-TTL sia a livello panel (`UiReadModelService`) sia a livello query (`UiReadQueryService`) per ridurre scansioni JSONL/query ripetute.
+- observability UI dedicata:
+  - `ui_slow_request` per richieste HTTP lente
+  - `ui_panel_slow` / `ui_panel_timing` per costi panel read-model
+  - `ui_read_query_slow` / `ui_read_query_timing` per hot query path (artifact/events/run history)
 
 ### Operational DB migrations
 
@@ -242,17 +264,30 @@ Implementazione foundation (stato attuale):
   - `GET /api/tabs/research`
   - `GET /api/tabs/prediction`
   - `GET /api/tabs/risk`
+  - `GET /api/tabs/review-queue`
   - `GET /api/tabs/execution`
+  - `GET /api/tabs/positions`
   - `GET /api/tabs/settlement`
   - `GET /api/tabs/sandbox-tx`
   - `GET /api/tabs/reports`
   - `GET /api/tabs/system`
+  - `GET /api/incidents`
+  - legacy alias compat: `GET /api/overview`
 - operator actions:
   - `POST /api/actions/run-once`
   - `POST /api/actions/pause`
   - `POST /api/actions/resume`
+  - `POST /api/actions/review-approve`
+  - `POST /api/actions/review-reject`
+  - `POST /api/actions/tx-reconcile`
+  - `POST /api/actions/tx-resubmit-safe`
+  - `POST /api/actions/admin-settings`
 - shell HTML server-rendered tramite template, con route `GET /`
-- layer read-model dedicato per aggregare dati runtime senza logica business nei controller
+- layer read-model modulare:
+  - `queries.py` per accesso read-only a persistence/operational DB
+  - moduli panel (`overview/system/scanner/...`) per aggregazione per-tab
+  - shaping in view-model tipizzati (`ui/models.py`)
+  - `service.py` come facade sottile usata dai route handler
 
 ### 9.8 Strategy Research Offline Data Lake
 Responsabile di:

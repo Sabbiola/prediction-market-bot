@@ -72,6 +72,15 @@ In CI devono risultare verdi anche i job dedicati UI:
     - UI espone `active_source_set`, `enrichment_coverage`, `disagreement_vs_baseline`
     - failure capability sorgenti (credential/capability missing) e visibile in `validate-startup`
     - fallback graceful a baseline `model_v2` e auditabile quando path alt/LLM non disponibile
+18. Review Queue UI workflow verificato:
+    - ogni candidato mostra contesto decisionale minimo (`market/title`, fair vs market prob, edge, confidence, stake, rationale, evidence coverage)
+    - lifecycle include visibilita `PENDING_REVIEW/APPROVED/REJECTED/EXPIRED/EXECUTED`
+    - approvazione/rifiuto richiede rationale + conferma esplicita e produce feedback + audit log leggibile
+    - deep-link operativi disponibili verso tab `Prediction`, `Risk`, `Sandbox TX`, `Position`
+19. Incident & historical-debug workflow verificato:
+    - `Overview`/`System` mostrano incident feed strutturato (`when`, `what failed`, `affected`, `reason_code`, deep-link)
+    - da un incidente e possibile navigare rapidamente a `Run`, `Review`, `Sandbox TX`, `Position`, `Settlement`, `Reports`
+    - tab `Reports` espone navigator run-level + shortcut replay/report utilizzabili per triage storico
 
 Se anche un solo punto fallisce: **release bloccata**.
 

@@ -89,6 +89,60 @@ def test_ui_review_and_sandbox_tx_actions_preserve_audit_trail(
     )
     run_id = f"{deterministic_run_id}-ui-review-tx"
     queue_id = _seed_review_candidate(review_queue, run_id, market_id="ui-review-market-1")
+    persistence.write_artifact(
+        run_id,
+        "market_snapshots",
+        {
+            "market": {
+                "market_id": "ui-review-market-1",
+                "venue": "polymarket",
+                "title": "Will operator UI review path work?",
+                "category": "test",
+                "status": "OPEN",
+            },
+            "liquidity_usd": 60_000.0,
+            "volume_24h_usd": 32_000.0,
+            "spread_bps": 90,
+            "hours_to_resolution": 36.0,
+            "last_price_move_bps": 12,
+        },
+    )
+    persistence.write_artifact(
+        run_id,
+        "prediction_results",
+        {
+            "market_id": "ui-review-market-1",
+            "selected_side": "YES",
+            "market_yes_prob": 0.42,
+            "fair_yes_prob": 0.63,
+            "selected_market_price": 0.42,
+            "selected_fair_price": 0.63,
+            "edge": 0.21,
+            "confidence": 0.87,
+            "rationale": ["ui_review_prediction_rationale"],
+        },
+    )
+    persistence.write_artifact(
+        run_id,
+        "research_packets",
+        {
+            "market_id": "ui-review-market-1",
+            "findings": [
+                {"source_type": "NEWS", "source_name": "news-a", "summary": "x", "sentiment": 0.2, "credibility": 0.8},
+                {"source_type": "RSS", "source_name": "rss-b", "summary": "y", "sentiment": 0.1, "credibility": 0.7},
+            ],
+            "weighted_sentiment": 0.15,
+            "evidence_strength": 0.78,
+            "disagreement_score": 0.12,
+            "narrative_summary": "seeded research context",
+            "feature_bundle": {
+                "source_coverage_ratio": 0.67,
+                "freshness_hours": 6.0,
+                "contradiction_score": 0.12,
+                "source_diversity": 0.5,
+            },
+        },
+    )
 
     intent = TxIntent(
         market_id="ui-sandbox-market-1",
@@ -122,6 +176,61 @@ def test_ui_review_and_sandbox_tx_actions_preserve_audit_trail(
         message="seed_pending_for_ui",
     )
     operational.transaction_attempts.append_attempt(run_id, status_seed)
+    operational.open_positions.replace_snapshot(
+        {
+            "as_of": "2026-03-23T00:00:00+00:00",
+            "position_count": 1,
+            "open_position_count": 1,
+            "settled_position_count": 0,
+            "realized_pnl_usd": 0.0,
+            "unrealized_pnl_usd": 12.69,
+            "total_pnl_usd": 12.69,
+            "total_exposure_usd": 122.69,
+            "positions": [
+                {
+                    "market_id": "ui-review-market-1",
+                    "side": "YES",
+                    "shares": 211.53846,
+                    "avg_entry_price": 0.52,
+                    "cost_basis_usd": 110.0,
+                    "mark_price": 0.58,
+                    "market_value_usd": 122.69,
+                    "unrealized_pnl_usd": 12.69,
+                }
+            ],
+        }
+    )
+    persistence.write_artifact(
+        run_id,
+        "pending_settlement_requests",
+        {
+            "request_id": f"{run_id}:ui-review-market-1:YES:ui-filled-order-1",
+            "run_id": run_id,
+            "market_id": "ui-review-market-1",
+            "execution_mode": "PAPER",
+            "execution_status": "FILLED",
+            "side": "YES",
+            "stake_usd": 110.0,
+            "fill_price": 0.52,
+            "order_id": "ui-filled-order-1",
+            "state": "PENDING",
+            "resolution_status": "PENDING",
+            "resolution_reason": "awaiting_resolution",
+            "resolved_yes": None,
+            "updated_at": "2026-03-23T00:00:00+00:00",
+        },
+    )
+    persistence.write_artifact(
+        run_id,
+        "resolution_checks",
+        {
+            "market_id": "ui-review-market-1",
+            "status": "PENDING",
+            "resolved_yes": None,
+            "reason": "awaiting_market_resolution",
+            "checked_at": "2026-03-23T00:00:00+00:00",
+        },
+    )
 
     app = create_web_app(config_path=app_cfg, agents_config_path=agents_cfg)
 
@@ -131,6 +240,16 @@ def test_ui_review_and_sandbox_tx_actions_preserve_audit_trail(
         review_payload = review_tab.json()
         assert review_payload["rows"]
         assert review_payload["selected_item"]["model_rationale"]
+        assert "lifecycle_distribution" in review_payload
+        assert "executed_count" in review_payload
+        first_row = review_payload["rows"][0]
+        assert first_row["market_title"] == "Will operator UI review path work?"
+        assert first_row["fair_yes_prob"] == 0.63
+        assert first_row["market_yes_prob"] == 0.42
+        assert first_row["prediction_url"]
+        assert first_row["risk_url"]
+        assert first_row["sandbox_tx_url"]
+        assert first_row["position_url"]
 
         approve = client.post(
             "/api/actions/review-approve",
@@ -146,6 +265,22 @@ def test_ui_review_and_sandbox_tx_actions_preserve_audit_trail(
         approve_payload = approve.json()
         assert approve_payload["status"] == "completed"
         assert approve_payload["accepted"] is True
+        persistence.write_artifact(
+            run_id,
+            "execution_results",
+            {
+                "market_id": "ui-review-market-1",
+                "execution_mode": "PAPER",
+                "status": "FILLED",
+                "side": "YES",
+                "stake_usd": 110.0,
+                "fill_price": 0.52,
+                "order_id": "ui-filled-order-1",
+                "run_id": run_id,
+                "review_queue_id": queue_id,
+                "message": "seed_execution_for_review_lifecycle",
+            },
+        )
 
         blocked_review = client.post(
             "/api/actions/review-reject",
@@ -166,13 +301,42 @@ def test_ui_review_and_sandbox_tx_actions_preserve_audit_trail(
         assert approved_tab.status_code == 200
         approved_payload = approved_tab.json()
         assert approved_payload["selected_item"]["status"] == "APPROVED"
+        assert approved_payload["selected_item"]["lifecycle_state"] == "EXECUTED"
+        assert approved_payload["selected_item"]["execution_status"] == "FILLED"
         assert approved_payload["selected_item"]["operator_rationale"] == "Approved from UI after manual checks."
+        assert approved_payload["executed_count"] >= 1
+
+        execution_tab = client.get(f"/api/tabs/execution?run_id={run_id}")
+        assert execution_tab.status_code == 200
+        execution_payload = execution_tab.json()
+        assert execution_payload["linked_review_decisions_count"] >= 1
+        assert execution_payload["rows"]
+        assert execution_payload["rows"][0]["lifecycle_path"]
+        assert execution_payload["rows"][0]["review_queue_url"]
+        assert execution_payload["rows"][0]["position_url"]
 
         sandbox_tab = client.get(f"/api/tabs/sandbox-tx?run_id={run_id}&intent_id={_intent_id(intent)}")
         assert sandbox_tab.status_code == 200
         sandbox_payload = sandbox_tab.json()
         assert sandbox_payload["selected_intent"]["intent_id"] == _intent_id(intent)
         assert sandbox_payload["attempt_timeline"]
+        assert sandbox_payload["rows"][0]["reconcile_state"]
+        assert "has_receipt" in sandbox_payload["rows"][0]
+
+        positions_tab = client.get(f"/api/tabs/positions?run_id={run_id}&market_id=ui-review-market-1")
+        assert positions_tab.status_code == 200
+        positions_payload = positions_tab.json()
+        assert positions_payload["open_positions_count"] >= 1
+        assert positions_payload["rows"]
+        assert positions_payload["rows"][0]["review_queue_url"]
+        assert positions_payload["rows"][0]["settlement_url"]
+
+        settlement_tab = client.get(f"/api/tabs/settlement?run_id={run_id}")
+        assert settlement_tab.status_code == 200
+        settlement_payload = settlement_tab.json()
+        assert "pending_rows" in settlement_payload
+        assert "resolved_rows" in settlement_payload
+        assert "realized_pnl_usd" in settlement_payload
 
         reconcile = client.post(
             "/api/actions/tx-reconcile",
