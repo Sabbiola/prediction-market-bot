@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="card auth-card" aria-labelledby="login-title">
+  <div class="auth-stack">
+    <header>
+      <h1 id="login-title" class="page-title">Operator Login</h1>
+      <p class="subtle">Sign in to access role-based controls for review, execution, and system operations.</p>
+      {% if next_path and next_path != "/" %}
+      <p class="muted-note">You will be redirected to <code>{{ next_path }}</code> after login.</p>
+      {% endif %}
+    </header>
+
+    {% if error %}
+    <div class="alert alert--warning" role="alert" aria-live="assertive">
+      <div class="alert__title">
+        <span class="pill pill--warn">Login failed</span>
+      </div>
+      <p>{{ error }}</p>
+    </div>
+    {% endif %}
+
+    <form method="post" action="/login" class="actions actions-vertical" aria-describedby="login-help">
+      <input type="hidden" name="next_path" value="{{ next_path or '/' }}">
+      <div class="field">
+        <label class="field-label" for="login-username">Username</label>
+        <input id="login-username" type="text" name="username" autocomplete="username" required value="{{ username or '' }}" autofocus>
+      </div>
+      <div class="field">
+        <label class="field-label" for="login-password">Password</label>
+        <input id="login-password" type="password" name="password" autocomplete="current-password" required>
+      </div>
+      <button type="submit" class="btn btn--primary">Sign in</button>
+      <p id="login-help" class="field-help">Session timeout and role permissions are enforced server-side.</p>
+    </form>
+
+    <aside class="role-guide" aria-label="Role access summary">
+      <p><strong>Viewer:</strong> observe all tabs, no write actions.</p>
+      <p class="meta-line"><strong>Operator:</strong> viewer access plus review and tx reconcile actions.</p>
+      <p class="meta-line"><strong>Admin:</strong> operator access plus pause/resume and admin settings.</p>
+    </aside>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,290 @@
+version: 2
+project:
+  name: prediction-market-bot
+  mode: dry-run
+  venue: polymarket
+  timezone: UTC
+  architecture: multi-agent
+  source_of_truth:
+    agent_catalog: config/agents.yaml
+    runtime_settings: config/app.yaml
+    contracts: src/prediction_market_bot/domain/models.py
+
+standards:
+  code_language: en
+  docs_language: it
+  runtime_trains_models: false
+  allow_direct_http_in_agents: false
+  allow_business_logic_in_ui: false
+
+thresholds:
+  min_confidence: 0.62
+  min_edge_bps: 300
+  max_spread_bps: 300
+  min_liquidity_usd: 10000
+  min_volume_24h_usd: 5000
+  min_hours_to_resolution: 6
+
+risk:
+  bankroll_usd: 10000
+  fractional_kelly: 0.25
+  max_position_pct: 0.02
+  max_event_bucket_pct: 0.08
+  max_category_bucket_pct: 0.10
+  max_portfolio_exposure_pct: 0.10
+  max_per_market_exposure_pct: 0.02
+  max_daily_loss_pct: 0.05
+  daily_stop_loss_pct: 0.05
+  max_snapshot_age_sec: 900
+  global_circuit_breaker: false
+  manual_pause: false
+  min_bet_usd: 25
+  hard_blocks:
+    - confidence_below_threshold
+    - edge_below_threshold
+    - stake_below_min_bet
+    - venue_rejected
+    - daily_loss_limit
+
+observability:
+  required_fields:
+    - run_id
+    - market_id
+    - agent_name
+    - started_at
+    - finished_at
+    - duration_ms
+    - outcome
+    - reason_codes
+  metrics:
+    - pipeline_runs_total
+    - pipeline_failures_total
+    - trades_approved_total
+    - orders_submitted_total
+    - settled_pnl_usd_total
+    - postmortems_total
+
+persistence:
+  artifacts:
+    - market_candidates
+    - research_packets
+    - prediction_results
+    - risk_decisions
+    - order_intents
+    - execution_results
+    - settled_trades
+    - postmortem_reports
+  retention:
+    runtime_days: 90
+    research_days: 180
+    postmortem_days: 365
+
+agents:
+  scanner:
+    enabled: true
+    owner: market-discovery
+    class_path: prediction_market_bot.agents.scanner.ScanAgent
+    schedule: "*/5 * * * *"
+    inputs:
+      - active_markets
+    outputs:
+      - market_candidates
+    responsibilities:
+      - filter_by_liquidity
+      - filter_by_volume
+      - filter_by_spread
+      - filter_by_time_to_resolution
+      - flag_price_anomalies
+    forbidden:
+      - place_orders
+      - size_risk
+      - call_llm_directly
+    metrics:
+      - candidates_count
+      - rejection_count
+      - avg_scan_score
+    failure_policy:
+      on_empty_feed: fail_closed
+      on_partial_feed: continue_with_warning
+
+  research:
+    enabled: true
+    owner: narrative-research
+    class_path: prediction_market_bot.agents.research.ResearchAgent
+    schedule: on_candidate
+    inputs:
+      - market_candidate
+    outputs:
+      - research_packet
+    sources:
+      - twitter
+      - reddit
+      - rss
+      - official
+    responsibilities:
+      - collect_findings
+      - score_credibility
+      - compute_weighted_sentiment
+      - detect_disagreement
+      - produce_narrative_summary
+    forbidden:
+      - override_risk_policy
+      - place_orders
+    metrics:
+      - findings_count
+      - evidence_strength
+      - disagreement_score
+    failure_policy:
+      on_source_timeout: continue_with_partial_sources
+      on_no_findings: emit_empty_packet
+
+  prediction:
+    enabled: true
+    owner: probabilistic-modeling
+    class_path: prediction_market_bot.agents.prediction.PredictionAgent
+    schedule: on_research_packet
+    inputs:
+      - market_candidate
+      - research_packet
+    outputs:
+      - prediction_result
+    model_family: xgboost_plus_llm
+    components:
+      market_weight: 0.45
+      narrative_weight: 0.45
+      structure_weight: 0.10
+    model_inference:
+      engine: heuristic
+      model_artifact_path: ""
+      calibration_artifact_path: ""
+      feature_schema_version: v1
+      strict_feature_parity: true
+      fallback_to_heuristic: true
+      forced_heuristic_reason: ""
+      alt_shadow:
+        enabled: false
+        model_artifact_path: ""
+        calibration_artifact_path: ""
+        feature_schema_version: alt-v1
+        strict_feature_parity: true
+        promoted_enabled: false
+        promoted_runtime_modes:
+          - SANDBOX_CHAIN
+        required_source_coverage:
+          - news
+          - reddit
+          - x
+        require_llm_enrichment: true
+    responsibilities:
+      - estimate_fair_probability
+      - compute_edge
+      - compute_confidence
+      - explain_prediction
+    forbidden:
+      - size_bankroll
+      - submit_orders
+    metrics:
+      - fair_yes_prob
+      - edge_bps
+      - confidence
+    failure_policy:
+      on_missing_research: continue_with_lower_confidence
+      on_model_failure: fail_closed
+
+  risk:
+    enabled: true
+    owner: risk-portfolio
+    class_path: prediction_market_bot.agents.risk.RiskAgent
+    schedule: on_prediction_result
+    inputs:
+      - prediction_result
+      - bankroll_state
+      - exposure_state
+    outputs:
+      - risk_decision
+    responsibilities:
+      - apply_fractional_kelly
+      - enforce_position_caps
+      - enforce_loss_limits
+      - return_reason_codes
+    forbidden:
+      - rewrite_probabilities
+      - bypass_thresholds
+    metrics:
+      - approved
+      - stake_usd
+      - kelly_fraction
+    failure_policy:
+      on_missing_bankroll_state: fail_closed
+
+  execution:
+    enabled: true
+    owner: venue-execution
+    class_path: prediction_market_bot.agents.execution.ExecutionAgent
+    schedule: on_risk_decision
+    inputs:
+      - risk_decision
+      - prediction_result
+    outputs:
+      - execution_result
+    venue_adapter: polymarket
+    responsibilities:
+      - build_order_intent
+      - submit_order
+      - normalize_exchange_response
+    forbidden:
+      - change_stake_size
+      - ignore_risk_block
+    metrics:
+      - submitted
+      - filled
+      - rejected
+    failure_policy:
+      on_rejection: emit_rejected_execution_result
+      on_timeout: emit_pending_or_failed
+
+  settlement:
+    enabled: true
+    owner: lifecycle-management
+    class_path: prediction_market_bot.agents.settlement.SettlementAgent
+    schedule: "*/10 * * * *"
+    inputs:
+      - open_positions
+      - market_resolution_state
+    outputs:
+      - settled_trade
+    responsibilities:
+      - detect_resolution
+      - compute_pnl
+      - finalize_trade_record
+    forbidden:
+      - open_new_positions
+    metrics:
+      - settled_count
+      - settled_pnl
+    failure_policy:
+      on_ambiguous_resolution: hold_for_manual_review
+
+  postmortem:
+    enabled: true
+    owner: learning-memory
+    class_path: prediction_market_bot.agents.postmortem.PostmortemAgent
+    schedule: on_loss
+    inputs:
+      - settled_trade
+      - prediction_result
+      - research_packet
+    outputs:
+      - postmortem_report
+    responsibilities:
+      - classify_root_causes
+      - create_action_items
+      - tag_repeat_failures
+    forbidden:
+      - mutate_live_models
+      - silently_change_thresholds
+    metrics:
+      - root_causes_count
+      - action_items_count
+    failure_policy:
+      on_missing_context: emit_partial_postmortem

@@ -1,0 +1,170 @@
+app:
+  name: prediction-market-bot
+  env: staging
+  timezone: UTC
+  mode: dry-run
+
+runtime:
+  mode: SANDBOX_CHAIN
+  market_data_provider: LIVE
+  research_provider: LIVE
+  provider_failure_policy: FAIL_FAST
+
+execution:
+  mode: SANDBOX_CHAIN
+  enable_rehearsal_lane: false
+  blocking_trade_review: true
+  review_auto_approve: false
+  review_candidate_expiry_seconds: 0
+  settlement_same_run: false
+
+live_market_data:
+  enabled: true
+  endpoint_url: https://gamma-api.polymarket.com/markets
+  limit: 50
+  max_staleness_sec: 900
+  timeout_sec: 8.0
+  max_retries: 2
+  retry_backoff_sec: 0.5
+  retry_jitter_sec: 0.25
+  cache_ttl_sec: 0
+  headers: {}
+  api_key_env: ""
+  api_key_header: Authorization
+  api_key_prefix: "Bearer "
+  require_api_key: false
+
+live_research:
+  enabled: true
+  limit_per_source: 5
+  wikipedia:
+    endpoint_url: https://en.wikipedia.org/w/api.php
+    timeout_sec: 8.0
+    max_retries: 2
+    retry_backoff_sec: 0.5
+    retry_jitter_sec: 0.25
+    cache_ttl_sec: 600
+    headers: {}
+    api_key_env: ""
+    api_key_header: Authorization
+    api_key_prefix: "Bearer "
+    require_api_key: false
+  openalex:
+    endpoint_url: https://api.openalex.org/works
+    timeout_sec: 8.0
+    max_retries: 2
+    retry_backoff_sec: 0.5
+    retry_jitter_sec: 0.25
+    cache_ttl_sec: 600
+    headers: {}
+    api_key_env: OPENALEX_API_KEY
+    api_key_header: Authorization
+    api_key_prefix: "Bearer "
+    require_api_key: false
+
+sandbox_chain:
+  enabled: true
+  submit_tx: true
+  rpc_url: https://sandbox-rpc.example
+  chain_id: 80002
+  contract_address: "0x0000000000000000000000000000000000000000"
+  from_address: ""
+  private_key_env: SANDBOX_CHAIN_PRIVATE_KEY
+  allow_unlocked_send: false
+  gas_limit: 250000
+  confirmations_required: 1
+  dropped_after_sec: 180
+  request_timeout_sec: 8.0
+
+ui_auth:
+  enabled: true
+  session_secret_env: PM_BOT_UI_SESSION_SECRET
+  session_timeout_sec: 1800
+  cookie_name: pm_bot_ui_session
+  cookie_secure: true
+  cookie_samesite: lax
+  require_password_hashes: true
+  max_failed_attempts: 5
+  lockout_seconds: 300
+  users:
+    - username: viewer
+      role: viewer
+      password_hash_env: PM_BOT_UI_VIEWER_PASSWORD_HASH
+    - username: operator
+      role: operator
+      password_hash_env: PM_BOT_UI_OPERATOR_PASSWORD_HASH
+    - username: admin
+      role: admin
+      password_hash_env: PM_BOT_UI_ADMIN_PASSWORD_HASH
+
+storage:
+  operational_db:
+    driver: postgres
+    dsn: ""
+    dsn_env: OPERATIONAL_DB_DSN
+    backup_dir: data/backups/operational-db
+    auto_migrate_on_boot: true
+    require_up_to_date: true
+  audit_log:
+    driver: file_jsonl
+    path: data/audit/events.jsonl
+  research_store:
+    driver: file_jsonl
+    path: data/research/findings.jsonl
+  artifacts_dir: data/artifacts
+
+http:
+  user_agent: prediction-market-bot/0.1
+  contact: ""
+  timeout_sec: 8.0
+  max_retries: 2
+  retry_backoff_sec: 0.5
+  retry_jitter_sec: 0.25
+  cache_ttl_sec: 600
+  openalex_api_key_env: OPENALEX_API_KEY
+  enforce_allowed_hosts: true
+  allowed_hosts:
+    - gamma-api.polymarket.com
+    - en.wikipedia.org
+    - api.openalex.org
+    - news.google.com
+    - api.x.com
+    - oauth.reddit.com
+    - www.reddit.com
+    - localhost
+    - 127.0.0.1
+  max_response_bytes: 1048576
+
+observability:
+  log_level: INFO
+  json_logs: true
+  metrics:
+    enabled: true
+    exporter: prometheus_textfile
+    path: data/metrics/metrics.prom
+  healthcheck:
+    enabled: true
+    path: /health
+
+feature_flags:
+  enable_postmortem: true
+  enable_settlement: false
+  enable_manual_review_queue: true
+  blocking_trade_review: true
+  use_live_market_data: true
+  use_live_research: true
+  allow_live_execution: false
+
+security:
+  secrets_from_env: true
+  redact_secrets_in_logs: true
+  require_explicit_live_flag: true
+  secrets:
+    backend: env
+    command_template: ""
+    command_timeout_sec: 5.0
+    env_fallback: true
+  cli_auth:
+    enabled: false
+    actor_user_env: PM_BOT_ACTOR_USER
+    actor_role_env: PM_BOT_ACTOR_ROLE

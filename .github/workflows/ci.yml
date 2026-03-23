@@ -1,0 +1,231 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Quality Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          make install
+
+      - name: Lint
+        run: make lint
+
+      - name: Typecheck
+        run: make typecheck
+
+      - name: Tests
+        run: make test
+
+  security-scans:
+    name: Dependency and Security Scans
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: quality
+    if: ${{ always() && needs.quality.result != 'cancelled' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Dependencies + Security Tools
+        run: |
+          python -m pip install --upgrade pip
+          make install
+          python -m pip install pip-audit bandit
+
+      - name: Dependency Vulnerability Scan (pip-audit)
+        run: |
+          pip-audit --progress-spinner off .
+
+      - name: Static Security Scan (bandit)
+        run: |
+          bandit -q -r src/prediction_market_bot -ll
+
+  smoke-dry-run:
+    name: Smoke Dry Run
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: quality
+    if: ${{ always() && needs.quality.result != 'cancelled' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          make install
+
+      - name: Run Smoke Dry-Run
+        run: make ci-smoke RUN_ID=ci-smoke-${{ github.run_id }}
+
+      - name: Verify Reports Exist
+        run: |
+          test -d data/artifacts/reports
+          ls -lah data/artifacts/reports
+
+      - name: Upload Run Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dry-run-reports-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            data/artifacts/reports/**
+            data/artifacts/pipeline_summaries.jsonl
+            data/audit/events.jsonl
+
+  smoke-beta-live:
+    name: Smoke Beta-Live (Mocked Providers + Sandbox Tx)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: quality
+    if: ${{ always() && needs.quality.result != 'cancelled' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          make install
+
+      - name: Validate Startup
+        run: |
+          python -m prediction_market_bot.main validate-startup --config config/app.yaml --agents-config config/agents.yaml --json
+
+      - name: Run Beta-Live Smoke Integration Tests
+        run: |
+          pytest -q tests/integration/test_runtime_mode_selection_integration.py tests/integration/test_sandbox_tx_cli_integration.py tests/integration/test_local_sandbox_chain_integration.py
+
+  ui-control-plane:
+    name: UI Control Plane (Routes + Rendering)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: quality
+    if: ${{ always() && needs.quality.result != 'cancelled' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          make install
+
+      - name: Run UI Unit/Integration Checks
+        run: |
+          pytest -q tests/unit/test_ui_web_app.py tests/unit/test_ui_read_models.py tests/integration/test_ui_tabs_actions_integration.py tests/integration/test_ui_review_tx_actions_integration.py tests/integration/test_ui_auth_rbac_integration.py
+
+      - name: Verify UI health/readiness on live process
+        run: |
+          python -m prediction_market_bot.ui.server --config config/app.yaml --agents-config config/agents.yaml --host 127.0.0.1 --port 18080 &
+          UI_PID=$!
+          trap 'kill $UI_PID' EXIT
+          sleep 3
+          python - <<'PY'
+          import json
+          import urllib.request
+          for path in ("/health", "/ready"):
+              with urllib.request.urlopen(f"http://127.0.0.1:18080{path}", timeout=10) as res:
+                  body = json.loads(res.read().decode("utf-8"))
+                  if res.status != 200:
+                      raise SystemExit(f"[ui-ci] {path} returned non-200 status={res.status}")
+                  if path == "/ready" and not bool(body.get("ready", False)):
+                      raise SystemExit("[ui-ci] /ready indicates not ready")
+          PY
+
+  beta-live-acceptance:
+    name: Beta-Live Acceptance Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: quality
+    if: ${{ always() && needs.quality.result != 'cancelled' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          make install
+
+      - name: Run Beta-Live Acceptance Suite
+        run: make ci-beta-acceptance
+
+      - name: Verify UI acceptance path explicitly
+        run: |
+          pytest -q -m acceptance tests/acceptance/test_beta_live_acceptance.py -k "ui_control_plane_path"
+
+      - name: Verify dress rehearsal gate path explicitly
+        run: |
+          pytest -q -m acceptance tests/acceptance/test_beta_live_acceptance.py -k "beta_dress_rehearsal_command_emits_go_no_go_payload"
+
+      - name: Upload Acceptance Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: beta-live-acceptance-artifacts-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            data/artifacts/**
+            data/audit/events.jsonl
