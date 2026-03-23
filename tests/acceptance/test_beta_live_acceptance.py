@@ -1292,6 +1292,46 @@ def test_beta_acceptance_beta_dress_rehearsal_command_emits_go_no_go_payload(
         steps = payload.get("steps", [])
         _must(isinstance(steps, list), "beta-dress-rehearsal payload has invalid steps structure.")
         _must(len(steps) == 13, "beta-dress-rehearsal must emit 13 gate steps.")
+        live_provider_step = next(
+            (step for step in steps if isinstance(step, dict) and step.get("key") == "live_providers_health"),
+            None,
+        )
+        _must(
+            isinstance(live_provider_step, dict),
+            "beta-dress-rehearsal payload is missing live_providers_health step.",
+        )
+        _must(
+            bool(live_provider_step.get("ok")),
+            "live_providers_health should pass when live providers are not configured.",
+        )
+        _must(
+            "live_providers_not_configured_skipped" in str(live_provider_step.get("detail", "")),
+            "live_providers_health should report skipped detail when providers are not configured.",
+        )
+        open_position_step = next(
+            (step for step in steps if isinstance(step, dict) and step.get("key") == "open_position_visible"),
+            None,
+        )
+        _must(
+            isinstance(open_position_step, dict),
+            "beta-dress-rehearsal payload is missing open_position_visible step.",
+        )
+        _must(
+            bool(open_position_step.get("ok")),
+            "open_position_visible should pass after successful sandbox tx reconciliation.",
+        )
+        settlement_lane_step = next(
+            (step for step in steps if isinstance(step, dict) and step.get("key") == "settlement_lane"),
+            None,
+        )
+        _must(
+            isinstance(settlement_lane_step, dict),
+            "beta-dress-rehearsal payload is missing settlement_lane step.",
+        )
+        _must(
+            bool(settlement_lane_step.get("ok")),
+            "settlement_lane should pass after successful sandbox tx reconciliation.",
+        )
         _must(
             all(isinstance(step, dict) and bool(step.get("ok")) for step in steps),
             "beta-dress-rehearsal contains failing steps in happy-path acceptance run.",

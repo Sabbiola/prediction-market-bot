@@ -1,19 +1,48 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
 from prediction_market_bot.app.bootstrap import build_operational_repositories, build_persistence
 from prediction_market_bot.app.config import load_settings
 from prediction_market_bot.app.logging import configure_logging
-from prediction_market_bot.services import AlertEvent, build_alerting_service, collect_runtime_metrics
+from prediction_market_bot.app.settings import AppSettings
+from prediction_market_bot.infrastructure import OperationalRepositories
+from prediction_market_bot.services import (
+    AlertEvent,
+    StartupCheck,
+    StartupValidationReport,
+    build_alerting_service,
+    collect_runtime_metrics,
+)
 
 from prediction_market_bot.cli.common import (
     maybe_write_runtime_metrics,
     print_startup_report,
     run_startup_validation,
 )
+
+
+def _build_operational_for_startup_validation(settings: AppSettings) -> tuple[OperationalRepositories, str]:
+    try:
+        return build_operational_repositories(settings), ""
+    except ValueError as exc:
+        storage = settings.storage
+        fallback_db_path = storage.operational_db_path.strip() or str(
+            Path(storage.artifacts_dir) / ".startup-validation-fallback.db"
+        )
+        fallback_storage = replace(
+            storage,
+            operational_db_driver="sqlite",
+            operational_db_path=fallback_db_path,
+            operational_db_dsn="",
+            operational_db_dsn_env="",
+        )
+        fallback_settings = replace(settings, storage=fallback_storage)
+        fallback_operational = build_operational_repositories(fallback_settings)
+        return fallback_operational, str(exc)
 
 
 def validate_startup_command(
@@ -25,8 +54,23 @@ def validate_startup_command(
     settings = load_settings(config_path, agents_config_path)
     configure_logging(settings.logging)
     persistence = build_persistence(settings)
-    operational = build_operational_repositories(settings)
+    operational, bootstrap_error = _build_operational_for_startup_validation(settings)
     report = run_startup_validation(settings=settings, persistence=persistence, operational=operational)
+    if bootstrap_error:
+        report = StartupValidationReport(
+            checks=(
+                *report.checks,
+                StartupCheck(
+                    name="operational_bootstrap_guard",
+                    ok=False,
+                    severity="warning",
+                    detail=(
+                        "operational_repo_bootstrap_failed_for_validation "
+                        f"fallback=sqlite reason={bootstrap_error}"
+                    ),
+                ),
+            )
+        )
     alerting = build_alerting_service(settings)
     if not report.ok:
         failing = [check.to_dict() for check in report.checks if not check.ok]
