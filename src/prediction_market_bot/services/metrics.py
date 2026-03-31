@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -25,8 +26,12 @@ class RuntimeMetricsSnapshot:
     tx_failed_count: int
     stale_data_events_total: int
     stale_data_blocked_trades_total: int
+    pipeline_runs_total: int = 0
+    pipeline_failures_total: int = 0
+    pipeline_last_run_duration_ms: float = 0.0
+    pipeline_stage_last_duration_ms: dict[str, float] = dataclasses.field(default_factory=dict)
 
-    def to_dict(self) -> dict[str, int]:
+    def to_dict(self) -> dict[str, int | float | dict[str, float]]:
         return {
             "live_source_failures_total": self.live_source_failures_total,
             "review_queue_depth": self.review_queue_depth,
@@ -37,6 +42,10 @@ class RuntimeMetricsSnapshot:
             "tx_failed_count": self.tx_failed_count,
             "stale_data_events_total": self.stale_data_events_total,
             "stale_data_blocked_trades_total": self.stale_data_blocked_trades_total,
+            "pipeline_runs_total": self.pipeline_runs_total,
+            "pipeline_failures_total": self.pipeline_failures_total,
+            "pipeline_last_run_duration_ms": self.pipeline_last_run_duration_ms,
+            "pipeline_stage_last_duration_ms": dict(self.pipeline_stage_last_duration_ms),
         }
 
 
@@ -88,6 +97,9 @@ def collect_runtime_metrics(
         if row.get("confirmation_status") in {TxConfirmationStatus.FAILED.value, TxConfirmationStatus.DROPPED.value}
     )
     stale_data_events_total, stale_data_blocked_trades_total = _collect_stale_data_counters(persistence)
+    pipeline_runs_total, pipeline_failures_total, pipeline_last_run_duration_ms, pipeline_stage_last_duration_ms = (
+        _collect_pipeline_counters(persistence)
+    )
 
     return RuntimeMetricsSnapshot(
         live_source_failures_total=live_source_failures_total,
@@ -99,12 +111,15 @@ def collect_runtime_metrics(
         tx_failed_count=tx_failed_count,
         stale_data_events_total=stale_data_events_total,
         stale_data_blocked_trades_total=stale_data_blocked_trades_total,
+        pipeline_runs_total=pipeline_runs_total,
+        pipeline_failures_total=pipeline_failures_total,
+        pipeline_last_run_duration_ms=pipeline_last_run_duration_ms,
+        pipeline_stage_last_duration_ms=pipeline_stage_last_duration_ms,
     )
 
 
-def write_prometheus_textfile(path: str | Path, snapshot: RuntimeMetricsSnapshot) -> Path:
-    destination = Path(path)
-    destination.parent.mkdir(parents=True, exist_ok=True)
+def format_prometheus_text(snapshot: RuntimeMetricsSnapshot) -> str:
+    """Return Prometheus text exposition format as a string."""
     lines = [
         "# HELP pm_bot_live_source_failures_total Total live source failure artifacts recorded.",
         "# TYPE pm_bot_live_source_failures_total gauge",
@@ -133,10 +148,64 @@ def write_prometheus_textfile(path: str | Path, snapshot: RuntimeMetricsSnapshot
         "# HELP pm_bot_stale_data_blocked_total Risk decisions blocked due to stale market data.",
         "# TYPE pm_bot_stale_data_blocked_total gauge",
         f"pm_bot_stale_data_blocked_total {snapshot.stale_data_blocked_trades_total}",
-        "",
+        "# HELP pm_bot_pipeline_runs_total Total completed pipeline runs.",
+        "# TYPE pm_bot_pipeline_runs_total gauge",
+        f"pm_bot_pipeline_runs_total {snapshot.pipeline_runs_total}",
+        "# HELP pm_bot_pipeline_failures_total Total failed pipeline runs.",
+        "# TYPE pm_bot_pipeline_failures_total gauge",
+        f"pm_bot_pipeline_failures_total {snapshot.pipeline_failures_total}",
+        "# HELP pm_bot_pipeline_last_run_duration_ms Duration of last pipeline run in milliseconds.",
+        "# TYPE pm_bot_pipeline_last_run_duration_ms gauge",
+        f"pm_bot_pipeline_last_run_duration_ms {snapshot.pipeline_last_run_duration_ms}",
     ]
-    destination.write_text("\n".join(lines), encoding="utf-8")
+    if snapshot.pipeline_stage_last_duration_ms:
+        lines.append(
+            "# HELP pm_bot_pipeline_stage_last_duration_ms Last duration per pipeline stage in milliseconds."
+        )
+        lines.append("# TYPE pm_bot_pipeline_stage_last_duration_ms gauge")
+        for stage, duration in sorted(snapshot.pipeline_stage_last_duration_ms.items()):
+            lines.append(f'pm_bot_pipeline_stage_last_duration_ms{{stage="{stage}"}} {duration}')
+    lines.append("")
+    return "\n".join(lines)
+
+
+def write_prometheus_textfile(path: str | Path, snapshot: RuntimeMetricsSnapshot) -> Path:
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(format_prometheus_text(snapshot), encoding="utf-8")
     return destination
+
+
+def _collect_pipeline_counters(
+    persistence: JsonlPersistence,
+) -> tuple[int, int, float, dict[str, float]]:
+    """Return (total_runs, failures, last_duration_ms, last_stage_durations) from pipeline_summaries."""
+    rows = persistence.read_all_artifact_records("pipeline_summaries")
+    total = 0
+    failures = 0
+    last_duration_ms = 0.0
+    last_stage_durations: dict[str, float] = {}
+    latest_timestamp: datetime | None = None
+
+    for row in rows:
+        payload = row.get("payload")
+        if not isinstance(payload, Mapping):
+            continue
+        total += 1
+        status = _to_text(payload.get("status"))
+        if status == "failed":
+            failures += 1
+        timestamp = _parse_timestamp(row.get("timestamp"))
+        if latest_timestamp is None or (timestamp is not None and timestamp > latest_timestamp):
+            latest_timestamp = timestamp
+            stage_timings = payload.get("stage_timings_ms")
+            if isinstance(stage_timings, Mapping):
+                last_stage_durations = {
+                    str(k): float(v) for k, v in stage_timings.items() if isinstance(v, (int, float))
+                }
+                last_duration_ms = float(stage_timings.get("total", 0.0)) if "total" in stage_timings else 0.0
+
+    return total, failures, last_duration_ms, last_stage_durations
 
 
 def _collect_stale_data_counters(persistence: JsonlPersistence) -> tuple[int, int]:

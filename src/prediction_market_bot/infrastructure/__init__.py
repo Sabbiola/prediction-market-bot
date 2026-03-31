@@ -18,7 +18,14 @@ from .alt_data import (
     SourceOperation,
     build_credential_resolver_from_mapping,
 )
-from .http_client import HttpClientError, HttpErrorMetadata, HttpJsonResponse, StructuredHttpClient
+from .http_client import (
+    HttpClientError,
+    HttpErrorMetadata,
+    HttpJsonResponse,
+    PermanentHttpError,
+    RetryableHttpError,
+    StructuredHttpClient,
+)
 from .live_market_data import LiveMarketBatch, PolymarketReadOnlyMarketDataAdapter
 from .research import (
     LiveResearchIngestionPipeline,
@@ -102,6 +109,8 @@ __all__ = [
     "HttpJsonResponse",
     "HttpErrorMetadata",
     "HttpClientError",
+    "RetryableHttpError",
+    "PermanentHttpError",
     "LiveMarketBatch",
     "PolymarketReadOnlyMarketDataAdapter",
     "LiveResearchIngestionPipeline",

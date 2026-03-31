@@ -340,6 +340,11 @@ class UiReadModelService:
         self._poll_cache[cache_key] = (now + self._poll_cache_ttl_sec, payload)
         return payload, "miss"
 
+    def prometheus_metrics_text(self) -> str:
+        snapshot = self._collect_runtime_metrics_snapshot()
+        from prediction_market_bot.services.metrics import format_prometheus_text
+        return format_prometheus_text(snapshot)
+
     def _collect_runtime_metrics_snapshot(self) -> RuntimeMetricsSnapshot:
         import prediction_market_bot.ui.read_models as read_models_module
 

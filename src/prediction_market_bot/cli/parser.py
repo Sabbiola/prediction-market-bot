@@ -264,6 +264,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     beta_dress.add_argument("--json", action="store_true", help="Print full rehearsal payload as JSON.")
 
+    live_ready = subparsers.add_parser(
+        "live-readiness-check",
+        help="Read-only diagnostic: validate all prerequisites for switching to LIVE mode.",
+    )
+    live_ready.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
+    live_ready.add_argument(
+        "--agents-config",
+        default="config/agents.yaml",
+        type=Path,
+        help="Path to agent catalog config YAML.",
+    )
+    live_ready.add_argument("--json", action="store_true", help="Print result as JSON.")
+
     scheduler = subparsers.add_parser("run-scheduler", help="Run dry-run scheduler loop from terminal/CI.")
     scheduler.add_argument("--config", default="config/app.yaml", type=Path, help="Path to app config YAML.")
     scheduler.add_argument(

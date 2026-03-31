@@ -17,7 +17,6 @@ from prediction_market_bot.cli.commands.model_promotion_commands import (
     rollback_model_v2_command,
 )
 from prediction_market_bot.cli.commands.ops_commands import pause_command, resume_command, status_command
-from prediction_market_bot.cli.commands.rehearsal_commands import beta_dress_rehearsal_command
 from prediction_market_bot.cli.commands.report_commands import (
     generate_report_command,
     generate_shadow_report_command,
@@ -133,7 +132,6 @@ __all__ = [
     "build_labels_command",
     "calibrate_model_command",
     "compare_alt_data_variants_command",
-    "beta_dress_rehearsal_command",
     "run_benchmarks_command",
     "compare_benchmarks_command",
     "compare_models_command",

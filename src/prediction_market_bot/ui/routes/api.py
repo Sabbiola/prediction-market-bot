@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import json
+
 from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi.responses import PlainTextResponse, StreamingResponse
 
 from prediction_market_bot.ui.actions import UiOperatorActionService
 from prediction_market_bot.ui.auth import AuthenticatedUser, UiAuthService
@@ -121,6 +125,17 @@ def ready(
     return payload
 
 
+@router.get("/metrics", response_class=PlainTextResponse)
+def prometheus_metrics(
+    service: UiReadModelService = Depends(get_read_model_service),
+) -> PlainTextResponse:
+    text = service.prometheus_metrics_text()
+    return PlainTextResponse(
+        content=text,
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
+
+
 @router.get("/api/tabs/overview", response_model=OverviewTabResponse)
 def overview_tab(
     run_id: str | None = Query(default=None),
@@ -230,6 +245,63 @@ def incidents_feed(
     _: AuthenticatedUser = Depends(require_viewer_role),
 ) -> IncidentsFeedResponse:
     return service.incidents_feed(run_id=run_id, limit=limit)
+
+
+@router.get("/api/incidents/stream")
+async def incidents_stream(
+    run_id: str | None = Query(default=None),
+    service: UiReadModelService = Depends(get_read_model_service),
+    _: AuthenticatedUser = Depends(require_viewer_role),
+) -> StreamingResponse:
+    """SSE stream of incident events. Polls internal state and pushes new events."""
+
+    async def event_generator():
+        last_count = 0
+        while True:
+            try:
+                feed = service.incidents_feed(run_id=run_id, limit=50)
+                current_count = len(feed.rows)
+                if current_count != last_count:
+                    # Send the full current feed as an SSE event
+                    data = json.dumps({
+                        "generated_at": feed.generated_at,
+                        "run_id": feed.run_id,
+                        "count": current_count,
+                        "rows": [
+                            {
+                                "timestamp": row.timestamp,
+                                "event_type": row.event_type,
+                                "severity": row.severity,
+                                "summary": row.summary,
+                                "component": row.component,
+                                "affected_target": row.affected_target,
+                                "reason_code": row.reason_code,
+                                "run_url": row.run_url,
+                                "review_queue_url": row.review_queue_url,
+                                "sandbox_tx_url": row.sandbox_tx_url,
+                            }
+                            for row in feed.rows
+                        ],
+                    }, default=str)
+                    yield f"event: incidents\ndata: {data}\n\n"
+                    last_count = current_count
+                else:
+                    # Send keepalive comment
+                    yield ": keepalive\n\n"
+            except Exception:
+                yield f"event: error\ndata: {{\"message\": \"internal_error\"}}\n\n"
+                break
+            await asyncio.sleep(2.0)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/api/tabs/review-queue", response_model=ReviewQueueTabResponse)

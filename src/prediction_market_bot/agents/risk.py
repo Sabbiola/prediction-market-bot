@@ -15,10 +15,12 @@ class RiskAgent:
         risk_settings: RiskSettings,
         prediction_settings: PredictionSettings,
         *,
+        execution_mode: str = "",
         now_fn: Callable[[], datetime] | None = None,
     ) -> None:
         self.risk = risk_settings
         self.prediction = prediction_settings
+        self._execution_mode = execution_mode
         self.now_fn = now_fn or (lambda: datetime.now(UTC))
         self._global_circuit_breaker = bool(risk_settings.global_circuit_breaker)
         self._manual_pause = bool(risk_settings.manual_pause)
@@ -83,16 +85,17 @@ class RiskAgent:
         fractional_kelly = max(raw_kelly * self.risk.fractional_kelly, 0.0)
         proposed_fraction = max(fractional_kelly, 0.0)
 
-        cap_position = max(self.risk.max_position_pct, 0.0)
+        cap_position = max(self.risk.effective_max_position_pct(self._execution_mode), 0.0)
         cap_event = max(self.risk.max_event_bucket_pct, 0.0)
         cap_category = max(self.risk.max_category_bucket_pct, 0.0)
-        cap_portfolio = max(self.risk.max_portfolio_exposure_pct, 0.0)
+        cap_portfolio = max(self.risk.effective_max_portfolio_exposure_pct(self._execution_mode), 0.0)
         cap_per_market = max(self.risk.max_per_market_exposure_pct, 0.0)
         applied_cap = min(cap_position, cap_event, cap_category, cap_portfolio, cap_per_market)
         if applied_cap <= 0.0:
             block_reasons.append("exposure_cap_reached applied_cap=0")
         bankroll_fraction = min(proposed_fraction, applied_cap)
-        stake_usd = bankroll_fraction * self.risk.bankroll_usd
+        effective_bankroll = self.risk.effective_bankroll_usd(self._execution_mode)
+        stake_usd = bankroll_fraction * effective_bankroll
 
         if stake_usd < self.risk.min_bet_usd:
             block_reasons.append(f"stake_below_min_bet stake_usd={stake_usd:.2f} min_bet_usd={self.risk.min_bet_usd:.2f}")
@@ -119,8 +122,8 @@ class RiskAgent:
         else:
             rationale.append("portfolio_guardrails=skipped_missing_portfolio")
 
-        portfolio_cap_usd = max(self.risk.max_portfolio_exposure_pct, 0.0) * self.risk.bankroll_usd
-        market_cap_usd = max(self.risk.max_per_market_exposure_pct, 0.0) * self.risk.bankroll_usd
+        portfolio_cap_usd = max(self.risk.effective_max_portfolio_exposure_pct(self._execution_mode), 0.0) * effective_bankroll
+        market_cap_usd = max(self.risk.max_per_market_exposure_pct, 0.0) * effective_bankroll
         if portfolio_exposure_usd + stake_usd > portfolio_cap_usd + 1e-9:
             block_reasons.append(
                 "portfolio_exposure_cap_reached "
@@ -132,7 +135,7 @@ class RiskAgent:
                 f"market={prediction.market_id} current={market_exposure_usd:.2f} proposed={stake_usd:.2f} cap={market_cap_usd:.2f}"
             )
 
-        daily_stop_limit_usd = max(self.risk.daily_stop_loss_pct, 0.0) * self.risk.bankroll_usd
+        daily_stop_limit_usd = max(self.risk.daily_stop_loss_pct, 0.0) * effective_bankroll
         if daily_stop_limit_usd > 0.0 and realized_pnl_usd <= (-daily_stop_limit_usd):
             block_reasons.append(
                 "daily_stop_triggered "

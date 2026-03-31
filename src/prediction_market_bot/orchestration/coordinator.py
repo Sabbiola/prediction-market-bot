@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import perf_counter
@@ -74,6 +75,7 @@ class PipelineSummary:
     stage_timings_ms: dict[str, float]
     counters: dict[str, int]
     records: tuple[PipelineRecord, ...]
+    trace_id: str = ""
 
 
 class PipelineCoordinator:
@@ -125,6 +127,7 @@ class PipelineCoordinator:
         self.review_blocking_gate = review_blocking_gate
         self.settlement_same_run = settlement_same_run
         self.slow_stage_threshold_ms = max(float(slow_stage_threshold_ms), 0.0)
+        self._current_trace_id: str = ""
 
     def run_dry(self, *, run_id: str | None = None) -> PipelineSummary:
         markets = tuple(self.market_data.list_active_markets())
@@ -132,6 +135,8 @@ class PipelineCoordinator:
 
     def run_once(self, markets: Sequence[MarketSnapshot], *, run_id: str | None = None) -> PipelineSummary:
         effective_run_id = run_id or self._build_run_id()
+        trace_id = str(uuid.uuid4())
+        self._current_trace_id = trace_id
         started_at = datetime.now(UTC)
         run_started_perf = perf_counter()
         stage_timings_ms: dict[str, float] = {}
@@ -153,6 +158,7 @@ class PipelineCoordinator:
             {
                 "run_id": effective_run_id,
                 "correlation_id": effective_run_id,
+                "trace_id": trace_id,
                 "status": "running",
                 "started_at": started_at.isoformat(),
                 "total_markets": len(markets),
@@ -552,6 +558,7 @@ class PipelineCoordinator:
             failed_summary_payload = {
                 "run_id": effective_run_id,
                 "correlation_id": effective_run_id,
+                "trace_id": trace_id,
                 "status": "failed",
                 "failed_stage": current_stage,
                 "error": str(exc),
@@ -601,6 +608,7 @@ class PipelineCoordinator:
                 {
                     "run_id": effective_run_id,
                     "correlation_id": effective_run_id,
+                    "trace_id": trace_id,
                     "failed_stage": current_stage,
                     "error": str(exc),
                 },
@@ -638,6 +646,7 @@ class PipelineCoordinator:
             stage_timings_ms=rounded_timings,
             counters=dict(counters),
             records=tuple(records),
+            trace_id=trace_id,
         )
         self._persist_artifact(
             effective_run_id,
@@ -645,6 +654,7 @@ class PipelineCoordinator:
             {
                 "run_id": summary.run_id,
                 "correlation_id": summary.correlation_id,
+                "trace_id": summary.trace_id,
                 "status": "success",
                 "started_at": summary.started_at.isoformat(),
                 "finished_at": summary.finished_at.isoformat(),
@@ -664,6 +674,7 @@ class PipelineCoordinator:
             {
                 "run_id": summary.run_id,
                 "correlation_id": summary.correlation_id,
+                "trace_id": summary.trace_id,
                 "status": "success",
                 "started_at": summary.started_at.isoformat(),
                 "finished_at": summary.finished_at.isoformat(),
@@ -711,6 +722,8 @@ class PipelineCoordinator:
         run_id = event_payload.get("run_id")
         if isinstance(run_id, str) and run_id and "correlation_id" not in event_payload:
             event_payload["correlation_id"] = run_id
+        if self._current_trace_id and "trace_id" not in event_payload:
+            event_payload["trace_id"] = self._current_trace_id
         logger.info(event, extra={"event": event, **event_payload})
         if self.persistence and isinstance(run_id, str):
             self.persistence.write_run_event(run_id, event, event_payload)

@@ -1,0 +1,55 @@
+# Version control
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+.eggs
+dist
+build
+
+# Virtual environments
+.venv
+venv
+env
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Testing
+.pytest_cache
+.mypy_cache
+.coverage
+htmlcov
+coverage.xml
+
+# CI/CD
+.github
+
+# Local data & logs (mounted as volumes in production)
+data/runtime.db
+data/runtime.db-wal
+data/runtime.db-shm
+data/logs/
+data/*.jsonl
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Documentation build artifacts
+docs/_build
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Claude / dev tools
+.claude

@@ -4,6 +4,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from prediction_market_bot.app.settings import PredictionSettings
+from prediction_market_bot.agents.prediction_heuristic import (
+    clamp_01,
+    clamp_probability,
+    disagreement_bucket,
+    edge_for_side,
+    prediction_approved,
+    prediction_from_fair_probability,
+    run_heuristic,
+)
 from prediction_market_bot.agents.prediction_model_runtime import (
     PredictionModelArtifactError,
     PredictionModelArtifactLoader,
@@ -15,7 +24,6 @@ from prediction_market_bot.agents.prediction_runtime_features import (
     build_alt_shadow_prediction_features,
     build_runtime_prediction_features,
 )
-from prediction_market_bot.domain.enums import OutcomeSide
 from prediction_market_bot.domain.models import MarketCandidate, PredictionResult, ResearchPacket
 
 
@@ -49,7 +57,7 @@ class PredictionAgent:
             return self._run_model_v2_alt_promoted_or_fallback(candidate, research, runtime_features=runtime_features)
         if self._use_model_v2():
             return self._run_model_v2_or_fallback(candidate, research, runtime_features=runtime_features)
-        return self._run_heuristic(candidate, research)
+        return run_heuristic(self.settings, candidate, research)
 
     def _load_runtime_model(self) -> None:
         if not self._requires_runtime_model():
@@ -219,8 +227,8 @@ class PredictionAgent:
             if alt_status == "available" and coverage_warnings:
                 alt_status = "coverage_missing"
 
-        baseline_approved = self._prediction_approved(baseline_prediction)
-        alt_approved = self._prediction_approved(alt_prediction)
+        baseline_approved = prediction_approved(baseline_prediction, min_confidence=self.settings.min_confidence, min_edge_bps=float(self.settings.min_edge_bps))
+        alt_approved = prediction_approved(alt_prediction, min_confidence=self.settings.min_confidence, min_edge_bps=float(self.settings.min_edge_bps))
         fair_yes_delta = (
             (alt_prediction.fair_yes_prob - baseline_prediction.fair_yes_prob)
             if alt_prediction is not None
@@ -236,7 +244,7 @@ class PredictionAgent:
             if alt_prediction is not None
             else None
         )
-        disagreement_bucket = self._disagreement_bucket(
+        bucket = disagreement_bucket(
             fair_yes_delta=fair_yes_delta,
             selected_side_changed=(
                 bool(alt_prediction is not None and alt_prediction.selected_side != baseline_prediction.selected_side)
@@ -275,7 +283,7 @@ class PredictionAgent:
                     bool(alt_approved is not None and baseline_approved is not None and alt_approved != baseline_approved)
                 ),
             },
-            "disagreement_bucket": disagreement_bucket,
+            "disagreement_bucket": bucket,
             "enrichment_coverage": alt_features.values.get("f_alt_enrichment_coverage", 0.0),
             "active_source_set": list(self.settings.alt_shadow_required_source_coverage),
         }
@@ -301,7 +309,7 @@ class PredictionAgent:
     ) -> PredictionResult:
         if not self.settings.fallback_to_heuristic:
             raise PredictionModelArtifactError(reason)
-        base = self._run_heuristic(candidate, research)
+        base = run_heuristic(self.settings, candidate, research)
         return base.model_copy(
             update={
                 "rationale": tuple((*base.rationale, f"prediction_engine_fallback=heuristic reason={reason}")),
@@ -360,10 +368,10 @@ class PredictionAgent:
             raise PredictionModelArtifactError(f"feature_parity_check_failed {'; '.join(parity_tuple)}")
 
         raw_yes_prob, calibrated_yes_prob = contract.predict_yes_probability(features.values)
-        fair_yes_prob = self._clamp_probability(calibrated_yes_prob)
+        fair_yes_prob = clamp_probability(calibrated_yes_prob)
         confidence = self._model_confidence(
             fair_yes_prob=fair_yes_prob,
-            edge=self._edge_for_side(candidate=candidate, fair_yes_prob=fair_yes_prob),
+            edge=edge_for_side(candidate=candidate, fair_yes_prob=fair_yes_prob),
             candidate=candidate,
             features=features.values,
         )
@@ -381,7 +389,7 @@ class PredictionAgent:
             f"calibrated_yes_prob={fair_yes_prob:.4f}",
             f"confidence={confidence:.4f}",
         )
-        prediction = self._prediction_from_fair_probability(
+        prediction = prediction_from_fair_probability(
             candidate=candidate,
             fair_yes_prob=fair_yes_prob,
             confidence=confidence,
@@ -396,7 +404,7 @@ class PredictionAgent:
         *,
         runtime_features: RuntimePredictionFeatures,
     ) -> PredictionResult:
-        primary = self._run_heuristic(candidate, research)
+        primary = run_heuristic(self.settings, candidate, research)
         parity_warnings: list[str] = []
         model_result: PredictionResult | None = None
         alt_shadow_result: PredictionResult | None = None
@@ -466,9 +474,9 @@ class PredictionAgent:
         parity_warnings.extend(model_path_warnings)
         parity_warnings.extend(alt_shadow_path_warnings)
 
-        heuristic_approved = self._prediction_approved(primary)
-        model_approved = self._prediction_approved(model_result) if model_result is not None else None
-        alt_shadow_approved = self._prediction_approved(alt_shadow_result) if alt_shadow_result is not None else None
+        heuristic_approved = prediction_approved(primary, min_confidence=self.settings.min_confidence, min_edge_bps=float(self.settings.min_edge_bps))
+        model_approved = prediction_approved(model_result, min_confidence=self.settings.min_confidence, min_edge_bps=float(self.settings.min_edge_bps)) if model_result is not None else None
+        alt_shadow_approved = prediction_approved(alt_shadow_result, min_confidence=self.settings.min_confidence, min_edge_bps=float(self.settings.min_edge_bps)) if alt_shadow_result is not None else None
         fair_yes_delta = (model_result.fair_yes_prob - primary.fair_yes_prob) if model_result is not None else None
         edge_delta = (model_result.edge - primary.edge) if model_result is not None else None
         confidence_delta = (model_result.confidence - primary.confidence) if model_result is not None else None
@@ -483,14 +491,14 @@ class PredictionAgent:
             if alt_shadow_result is not None
             else None
         )
-        disagreement_bucket = self._disagreement_bucket(
+        shadow_bucket = disagreement_bucket(
             fair_yes_delta=fair_yes_delta,
             selected_side_changed=(
                 bool(model_result is not None and model_result.selected_side != primary.selected_side)
             ),
         )
         if self.settings.alt_shadow_enabled:
-            alt_disagreement_bucket = self._disagreement_bucket(
+            alt_disagreement_bucket = disagreement_bucket(
                 fair_yes_delta=alt_fair_yes_delta,
                 selected_side_changed=(
                     bool(alt_shadow_result is not None and alt_shadow_result.selected_side != primary.selected_side)
@@ -545,7 +553,7 @@ class PredictionAgent:
                 "model_v2": model_approved,
                 "alt_llm_shadow": alt_shadow_approved,
             },
-            "disagreement_bucket": disagreement_bucket,
+            "disagreement_bucket": shadow_bucket,
             "alt_llm_disagreement_bucket": alt_disagreement_bucket,
         }
         appended_rationale = (
@@ -553,7 +561,7 @@ class PredictionAgent:
             "prediction_engine=shadow_primary_heuristic",
             f"shadow_model_status={model_status}",
             f"shadow_alt_llm_status={alt_shadow_status}",
-            f"shadow_disagreement_bucket={disagreement_bucket}",
+            f"shadow_disagreement_bucket={shadow_bucket}",
             f"shadow_alt_llm_disagreement_bucket={alt_disagreement_bucket}",
             f"shadow_fair_yes_prob_delta={fair_yes_delta if fair_yes_delta is not None else 'n/a'}",
             f"shadow_alt_llm_fair_yes_prob_delta={alt_fair_yes_delta if alt_fair_yes_delta is not None else 'n/a'}",
@@ -568,62 +576,6 @@ class PredictionAgent:
             for warning in parity_warnings:
                 appended_rationale = (*appended_rationale, f"shadow_parity_warning={warning}")
         return primary.model_copy(update={"rationale": tuple(appended_rationale)})
-
-    def _run_heuristic(self, candidate: MarketCandidate, research: ResearchPacket) -> PredictionResult:
-        market_yes_prob = candidate.market.yes_price
-        research_yes_prob, research_reliability = self._research_yes_probability(research)
-        structure_yes_prob = self._structure_yes_probability(candidate)
-
-        market_weight, research_weight, structure_weight = self._normalized_weights()
-        fair_yes_prob = self._clamp_probability(
-            (market_yes_prob * market_weight)
-            + (research_yes_prob * research_weight)
-            + (structure_yes_prob * structure_weight)
-        )
-
-        if fair_yes_prob >= 0.5:
-            selected_side = OutcomeSide.YES
-            selected_market_price = candidate.market.yes_price
-            selected_fair_price = fair_yes_prob
-        else:
-            selected_side = OutcomeSide.NO
-            selected_market_price = candidate.market.no_price
-            selected_fair_price = 1.0 - fair_yes_prob
-
-        edge = selected_fair_price - selected_market_price
-        confidence = self._confidence(
-            edge=edge,
-            research_reliability=research_reliability,
-            scan_score=candidate.scan_score,
-        )
-
-        rationale_parts = [
-            f"market_yes_prob={market_yes_prob:.4f}",
-            f"research_yes_prob={research_yes_prob:.4f}",
-            f"structure_yes_prob={structure_yes_prob:.4f}",
-            f"weights=({market_weight:.3f},{research_weight:.3f},{structure_weight:.3f})",
-            f"research_reliability={research_reliability:.4f}",
-            f"selected_side={selected_side.value}",
-            f"selected_market_price={selected_market_price:.4f}",
-            f"selected_fair_price={selected_fair_price:.4f}",
-            f"edge={edge:.4f}",
-            f"confidence={confidence:.4f}",
-        ]
-        if self.settings.forced_heuristic_reason.strip():
-            rationale_parts.append(f"forced_heuristic_reason={self.settings.forced_heuristic_reason.strip()}")
-        rationale = tuple(rationale_parts)
-
-        return PredictionResult(
-            market_id=candidate.market.market_id,
-            selected_side=selected_side,
-            market_yes_prob=round(market_yes_prob, 4),
-            fair_yes_prob=round(fair_yes_prob, 4),
-            selected_market_price=round(selected_market_price, 4),
-            selected_fair_price=round(selected_fair_price, 4),
-            edge=round(edge, 4),
-            confidence=round(confidence, 4),
-            rationale=rationale,
-        )
 
     def _use_model_v2(self) -> bool:
         mode = self.settings.engine.strip().lower()
@@ -648,119 +600,15 @@ class PredictionAgent:
         candidate: MarketCandidate,
         features: dict[str, float],
     ) -> float:
-        model_certainty = self._clamp_01(abs(fair_yes_prob - 0.5) * 2.0)
-        edge_strength = self._clamp_01(abs(edge) / 0.25)
-        disagreement = self._clamp_01(features.get("f_research_disagreement", 0.0))
-        effective_cred = self._clamp_01(features.get("f_research_effective_credibility", 0.0))
-        research_reliability = self._clamp_01(effective_cred * (1.0 - disagreement))
+        model_certainty = clamp_01(abs(fair_yes_prob - 0.5) * 2.0)
+        edge_strength = clamp_01(abs(edge) / 0.25)
+        disagreement = clamp_01(features.get("f_research_disagreement", 0.0))
+        effective_cred = clamp_01(features.get("f_research_effective_credibility", 0.0))
+        research_reliability = clamp_01(effective_cred * (1.0 - disagreement))
         value = (
             (model_certainty * 0.40)
             + (edge_strength * 0.25)
             + (research_reliability * 0.20)
-            + (self._clamp_01(candidate.scan_score) * 0.15)
+            + (clamp_01(candidate.scan_score) * 0.15)
         )
-        return self._clamp_01(value)
-
-    def _normalized_weights(self) -> tuple[float, float, float]:
-        raw = (
-            max(self.settings.market_weight, 0.0),
-            max(self.settings.narrative_weight, 0.0),
-            max(self.settings.structure_weight, 0.0),
-        )
-        total = raw[0] + raw[1] + raw[2]
-        if total <= 0.0:
-            return (1.0, 0.0, 0.0)
-        return (raw[0] / total, raw[1] / total, raw[2] / total)
-
-    def _research_yes_probability(self, research: ResearchPacket) -> tuple[float, float]:
-        research_reliability = self._clamp_01(research.evidence_strength * (1.0 - research.disagreement_score))
-        # Sentiment contribution is dampened by reliability to keep the dry-run stable.
-        shift = research.weighted_sentiment * (0.45 * research_reliability)
-        research_yes_prob = self._clamp_probability(0.5 + shift)
-        return research_yes_prob, research_reliability
-
-    @staticmethod
-    def _structure_yes_probability(candidate: MarketCandidate) -> float:
-        return PredictionAgent._clamp_probability(0.5 + ((candidate.scan_score - 0.5) * 0.20))
-
-    @staticmethod
-    def _confidence(*, edge: float, research_reliability: float, scan_score: float) -> float:
-        edge_strength = PredictionAgent._clamp_01(abs(edge) / 0.25)
-        value = (research_reliability * 0.45) + (edge_strength * 0.35) + (scan_score * 0.20)
-        return PredictionAgent._clamp_01(value)
-
-    @staticmethod
-    def _clamp_probability(value: float) -> float:
-        return min(max(value, 0.01), 0.99)
-
-    @staticmethod
-    def _clamp_01(value: float) -> float:
-        return min(max(value, 0.0), 1.0)
-
-    @staticmethod
-    def _prediction_from_fair_probability(
-        *,
-        candidate: MarketCandidate,
-        fair_yes_prob: float,
-        confidence: float,
-        rationale: tuple[str, ...],
-    ) -> PredictionResult:
-        if fair_yes_prob >= 0.5:
-            selected_side = OutcomeSide.YES
-            selected_market_price = candidate.market.yes_price
-            selected_fair_price = fair_yes_prob
-        else:
-            selected_side = OutcomeSide.NO
-            selected_market_price = candidate.market.no_price
-            selected_fair_price = 1.0 - fair_yes_prob
-        edge = selected_fair_price - selected_market_price
-        return PredictionResult(
-            market_id=candidate.market.market_id,
-            selected_side=selected_side,
-            market_yes_prob=round(candidate.market.yes_price, 4),
-            fair_yes_prob=round(fair_yes_prob, 4),
-            selected_market_price=round(selected_market_price, 4),
-            selected_fair_price=round(selected_fair_price, 4),
-            edge=round(edge, 4),
-            confidence=round(confidence, 4),
-            rationale=rationale + (
-                f"selected_side={selected_side.value}",
-                f"selected_market_price={selected_market_price:.4f}",
-                f"selected_fair_price={selected_fair_price:.4f}",
-                f"edge={edge:.4f}",
-            ),
-        )
-
-    @staticmethod
-    def _edge_for_side(*, candidate: MarketCandidate, fair_yes_prob: float) -> float:
-        if fair_yes_prob >= 0.5:
-            return fair_yes_prob - candidate.market.yes_price
-        return (1.0 - fair_yes_prob) - candidate.market.no_price
-
-    def _prediction_approved(self, prediction: PredictionResult | None) -> bool | None:
-        if prediction is None:
-            return None
-        edge_bps = prediction.edge * 10_000.0
-        return bool(
-            prediction.confidence >= self.settings.min_confidence
-            and edge_bps >= float(self.settings.min_edge_bps)
-        )
-
-    @staticmethod
-    def _disagreement_bucket(*, fair_yes_delta: float | None, selected_side_changed: bool) -> str:
-        if fair_yes_delta is None:
-            return "model_missing"
-        abs_delta = abs(float(fair_yes_delta))
-        if selected_side_changed:
-            if abs_delta >= 0.20:
-                return "flip_large"
-            return "flip_small"
-        if abs_delta < 0.02:
-            return "aligned"
-        if abs_delta < 0.05:
-            return "minor_drift"
-        if abs_delta < 0.10:
-            return "moderate_drift"
-        if abs_delta < 0.20:
-            return "major_drift"
-        return "extreme_drift"
+        return clamp_01(value)

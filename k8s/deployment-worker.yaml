@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pm-bot-worker
+  namespace: prediction-market
+  labels:
+    app.kubernetes.io/name: pm-bot-worker
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: prediction-market-bot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pm-bot-worker
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pm-bot-worker
+        app.kubernetes.io/component: worker
+        app.kubernetes.io/part-of: prediction-market-bot
+    spec:
+      containers:
+        - name: worker
+          image: prediction-market-bot:latest
+          command:
+            - python
+            - -m
+            - prediction_market_bot.main
+            - run-scheduler
+            - --config
+            - config/app.yaml
+            - --agents-config
+            - config/agents.yaml
+            - --interval-sec
+            - "60"
+          envFrom:
+            - secretRef:
+                name: pm-bot-secrets
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -m
+                - prediction_market_bot.main
+                - healthcheck
+                - --config
+                - config/app.yaml
+                - --agents-config
+                - config/agents.yaml
+                - --json
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: pm-bot-data

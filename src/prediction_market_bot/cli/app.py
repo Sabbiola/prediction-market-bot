@@ -21,7 +21,7 @@ from prediction_market_bot.cli.commands.model_promotion_commands import (
     rollback_model_v2_command,
 )
 from prediction_market_bot.cli.commands.ops_commands import pause_command, resume_command, status_command
-from prediction_market_bot.cli.commands.rehearsal_commands import beta_dress_rehearsal_command
+from prediction_market_bot.cli.commands.rehearsal_commands import beta_dress_rehearsal_command, live_readiness_check_command
 from prediction_market_bot.cli.commands.report_commands import (
     generate_report_command,
     generate_shadow_report_command,
@@ -183,6 +183,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             ui_password=args.ui_password,
             report_output_path=args.report_output,
             skip_scheduler_probe=args.skip_scheduler_probe,
+            as_json=args.json,
+        )
+    if args.command == "live-readiness-check":
+        return live_readiness_check_command(
+            config_path=args.config,
+            agents_config_path=args.agents_config,
             as_json=args.json,
         )
     if args.command == "run-scheduler":

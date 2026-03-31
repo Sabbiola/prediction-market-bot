@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: pm-bot-ui
+  namespace: prediction-market
+  labels:
+    app.kubernetes.io/name: pm-bot-ui
+    app.kubernetes.io/component: ui
+    app.kubernetes.io/part-of: prediction-market-bot
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: "/metrics"
+    prometheus.io/port: "8080"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: pm-bot-ui
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP

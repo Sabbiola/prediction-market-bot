@@ -537,7 +537,7 @@ def test_strategy_research_cli_research_corpus_backfill_inspect_verify(
     _set_strategy_research_endpoints(app_cfg)
     _seed_market_dataset(app_cfg)
     monkeypatch.setattr(
-        "prediction_market_bot.cli.commands.strategy_research_commands.build_live_research_sources",
+        "prediction_market_bot.cli.commands.strategy_corpus_commands.build_live_research_sources",
         lambda **_: (_FakeResearchSource(),),
     )
 

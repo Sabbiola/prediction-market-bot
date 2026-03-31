@@ -29,7 +29,7 @@ from .settlement_requests import SettlementRequestQueueService
 from .trade_review import TradeReviewQueueService
 from .transactions import SandboxTransactionService, TxStatusSnapshot
 from .startup import StartupCheck, StartupValidationReport, validate_startup
-from .metrics import RuntimeMetricsSnapshot, collect_runtime_metrics, write_prometheus_textfile
+from .metrics import RuntimeMetricsSnapshot, collect_runtime_metrics, format_prometheus_text, write_prometheus_textfile
 from .research_features import (
     ResearchEvidencePoint,
     ResearchFeatureBundle,

@@ -6,7 +6,7 @@ import socket
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, NoReturn
 from urllib import error, parse, request
 
 
@@ -48,6 +48,25 @@ class HttpClientError(RuntimeError):
     def __init__(self, metadata: HttpErrorMetadata) -> None:
         super().__init__(f"{metadata.source}_http_error: {metadata.error_type} ({metadata.message})")
         self.metadata = metadata
+
+
+class RetryableHttpError(HttpClientError):
+    """Error that is transient and may succeed on retry (5xx, timeout, network)."""
+
+    pass
+
+
+class PermanentHttpError(HttpClientError):
+    """Error that will not succeed on retry (4xx client errors, malformed payload)."""
+
+    pass
+
+
+def _raise_http_error(metadata: HttpErrorMetadata) -> "NoReturn":
+    """Raise the appropriate HttpClientError subclass based on metadata.retryable."""
+    if metadata.retryable:
+        raise RetryableHttpError(metadata)
+    raise PermanentHttpError(metadata)
 
 
 @dataclass(slots=True, frozen=True)
@@ -100,6 +119,10 @@ class StructuredHttpClient:
         self.sleep_fn = sleep_fn or time.sleep
         self.random_fn = random_fn or random.random
         self._cache: dict[str, _CacheEntry] = {}
+        self._circuit_breaker_threshold = 5  # consecutive failures before opening
+        self._circuit_breaker_reset_sec = 60.0
+        self._host_failures: dict[str, int] = {}
+        self._host_open_until: dict[str, datetime] = {}
 
     def fetch_json(
         self,
@@ -156,9 +179,16 @@ class StructuredHttpClient:
                 message="required_api_key_missing",
                 timestamp=self.now_fn().isoformat(),
             )
-            raise HttpClientError(metadata)
+            _raise_http_error(metadata)
 
         self._enforce_outbound_policy(
+            source=source,
+            method=method_name,
+            url=final_url,
+            max_retries=retries,
+            timeout_sec=effective_timeout,
+        )
+        self._check_circuit_breaker(
             source=source,
             method=method_name,
             url=final_url,
@@ -202,13 +232,14 @@ class StructuredHttpClient:
                             message=f"response exceeded {self.max_response_bytes} bytes",
                             timestamp=self.now_fn().isoformat(),
                         )
-                        raise HttpClientError(metadata)
+                        _raise_http_error(metadata)
                     payload = json.loads(raw.decode("utf-8"))
                 if cache_allowed and ttl > 0:
                     self._cache[cache_key] = _CacheEntry(
                         expires_at=self.now_fn() + timedelta(seconds=ttl),
                         payload=payload,
                     )
+                self._record_success(final_url)
                 return HttpJsonResponse(
                     payload=payload,
                     retries_used=retries_used,
@@ -233,7 +264,10 @@ class StructuredHttpClient:
                     exc=exc,
                 )
                 if attempt >= retries or not metadata.retryable:
-                    raise HttpClientError(metadata) from exc
+                    self._record_failure(final_url)
+                    if metadata.retryable:
+                        raise RetryableHttpError(metadata) from exc
+                    raise PermanentHttpError(metadata) from exc
                 retries_used += 1
                 delay = backoff * (attempt + 1)
                 if jitter > 0:
@@ -256,7 +290,57 @@ class StructuredHttpClient:
             message="unexpected_retry_loop_exit",
             timestamp=self.now_fn().isoformat(),
         )
-        raise HttpClientError(metadata)
+        self._record_failure(final_url)
+        _raise_http_error(metadata)
+
+    def _check_circuit_breaker(
+        self,
+        *,
+        source: str,
+        method: str,
+        url: str,
+        max_retries: int,
+        timeout_sec: float,
+    ) -> None:
+        host = parse.urlparse(url).hostname or ""
+        now = self.now_fn()
+        open_until = self._host_open_until.get(host)
+        if open_until is not None:
+            if now < open_until:
+                raise PermanentHttpError(
+                    HttpErrorMetadata(
+                        source=source,
+                        method=method,
+                        url=url,
+                        attempt=0,
+                        max_retries=max_retries,
+                        timeout_sec=timeout_sec,
+                        status_code=None,
+                        retryable=False,
+                        classification="circuit_breaker_open",
+                        reason_code="host_circuit_breaker_open",
+                        error_type="CircuitBreakerOpen",
+                        message=f"circuit_breaker_open host={host} until={open_until.isoformat()}",
+                        timestamp=now.isoformat(),
+                    )
+                )
+            else:
+                # Reset: allow a probe request
+                del self._host_open_until[host]
+                self._host_failures[host] = 0
+
+    def _record_success(self, url: str) -> None:
+        host = parse.urlparse(url).hostname or ""
+        self._host_failures.pop(host, None)
+
+    def _record_failure(self, url: str) -> None:
+        host = parse.urlparse(url).hostname or ""
+        count = self._host_failures.get(host, 0) + 1
+        self._host_failures[host] = count
+        if count >= self._circuit_breaker_threshold:
+            self._host_open_until[host] = self.now_fn() + timedelta(
+                seconds=self._circuit_breaker_reset_sec
+            )
 
     def _build_url(
         self,
@@ -394,7 +478,7 @@ class StructuredHttpClient:
         scheme = parsed.scheme.strip().lower()
         host = (parsed.hostname or "").strip().lower()
         if scheme not in {"http", "https"}:
-            raise HttpClientError(
+            raise PermanentHttpError(
                 HttpErrorMetadata(
                     source=source,
                     method=method,
@@ -412,7 +496,7 @@ class StructuredHttpClient:
                 )
             )
         if self.enforce_allowed_hosts and not self._host_allowed(host):
-            raise HttpClientError(
+            raise PermanentHttpError(
                 HttpErrorMetadata(
                     source=source,
                     method=method,

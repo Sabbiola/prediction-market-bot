@@ -395,6 +395,12 @@ security:
     command_template: ""
     command_timeout_sec: 5.0
     env_fallback: true
+    # Vault backend settings (used when backend: vault)
+    vault_addr_env: VAULT_ADDR           # env var holding the Vault server URL
+    vault_token_env: VAULT_TOKEN         # env var holding the Vault auth token
+    vault_mount: secret                  # KV v2 mount path
+    vault_path_prefix: prediction-market-bot  # key prefix under the mount
+    vault_timeout_sec: 5.0               # HTTP timeout for Vault API calls
   cli_auth:
     enabled: false
     actor_user_env: PM_BOT_ACTOR_USER

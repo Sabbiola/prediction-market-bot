@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Generator
 
 import pytest
 import yaml
+
+from prediction_market_bot.infrastructure.operational_sqlite import close_pool_for_path
 
 
 @pytest.fixture
@@ -12,7 +15,7 @@ def deterministic_run_id() -> str:
 
 
 @pytest.fixture
-def temp_config_paths(tmp_path: Path) -> tuple[Path, Path]:
+def temp_config_paths(tmp_path: Path) -> Generator[tuple[Path, Path], None, None]:
     app_src = Path("config/app.yaml")
     agents_src = Path("config/agents.yaml")
 
@@ -43,4 +46,6 @@ def temp_config_paths(tmp_path: Path) -> tuple[Path, Path]:
     agents_dst = tmp_path / "agents.yaml"
     app_dst.write_text(yaml.safe_dump(app_cfg, sort_keys=False), encoding="utf-8")
     agents_dst.write_text(yaml.safe_dump(agents_cfg, sort_keys=False), encoding="utf-8")
-    return app_dst, agents_dst
+    yield app_dst, agents_dst
+    # Release pooled SQLite connections so tmp_path cleanup can delete the DB file (Windows).
+    close_pool_for_path(runtime_db)

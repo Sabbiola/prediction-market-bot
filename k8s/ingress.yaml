@@ -1,0 +1,28 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: pm-bot-ingress
+  namespace: prediction-market
+  labels:
+    app.kubernetes.io/name: pm-bot-ui
+    app.kubernetes.io/component: ui
+    app.kubernetes.io/part-of: prediction-market-bot
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  # Uncomment the tls section below to enable TLS
+  # tls:
+  #   - hosts:
+  #       - pm-bot.example.com
+  #     secretName: pm-bot-tls
+  rules:
+    - host: pm-bot.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: pm-bot-ui
+                port:
+                  number: 80

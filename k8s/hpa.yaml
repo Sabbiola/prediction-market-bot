@@ -1,0 +1,23 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: pm-bot-ui-hpa
+  namespace: prediction-market
+  labels:
+    app.kubernetes.io/name: pm-bot-ui
+    app.kubernetes.io/component: ui
+    app.kubernetes.io/part-of: prediction-market-bot
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: pm-bot-ui
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

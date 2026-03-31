@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from prediction_market_bot.domain.enums import (
@@ -256,6 +257,40 @@ class RiskSettings:
     global_circuit_breaker: bool = False
     manual_pause: bool = False
     min_bet_usd: float = 25.0
+    # Conservative caps for the initial live period (first N days)
+    live_initial_period_days: int = 30
+    live_initial_max_position_pct: float = 0.01
+    live_initial_max_portfolio_exposure_pct: float = 0.05
+    live_initial_bankroll_usd: float = 2_000.0
+    live_initial_started_at: str = ""
+
+    def effective_bankroll_usd(self, execution_mode: str) -> float:
+        if self._in_initial_live_period(execution_mode):
+            return self.live_initial_bankroll_usd
+        return self.bankroll_usd
+
+    def effective_max_position_pct(self, execution_mode: str) -> float:
+        if self._in_initial_live_period(execution_mode):
+            return self.live_initial_max_position_pct
+        return self.max_position_pct
+
+    def effective_max_portfolio_exposure_pct(self, execution_mode: str) -> float:
+        if self._in_initial_live_period(execution_mode):
+            return self.live_initial_max_portfolio_exposure_pct
+        return self.max_portfolio_exposure_pct
+
+    def _in_initial_live_period(self, execution_mode: str) -> bool:
+        mode = execution_mode.strip().upper()
+        if mode not in ("LIVE", "SANDBOX_CHAIN"):
+            return False
+        if not self.live_initial_started_at:
+            return True  # Not started yet → use conservative caps
+        try:
+            from datetime import UTC, datetime as _dt
+            started = _dt.fromisoformat(self.live_initial_started_at)
+            return (_dt.now(UTC) - started).days < self.live_initial_period_days
+        except (ValueError, TypeError):
+            return True  # Parse error → be conservative
 
 
 @dataclass(slots=True, frozen=True)
@@ -481,6 +516,11 @@ class SecretsSettings:
     command_template: str = ""
     command_timeout_sec: float = 5.0
     env_fallback: bool = True
+    vault_addr_env: str = "VAULT_ADDR"
+    vault_token_env: str = "VAULT_TOKEN"
+    vault_mount: str = "secret"
+    vault_path_prefix: str = "prediction-market-bot"
+    vault_timeout_sec: float = 5.0
 
 
 @dataclass(slots=True, frozen=True)
@@ -491,12 +531,21 @@ class CliAuthSettings:
 
 
 @dataclass(slots=True, frozen=True)
+class RateLimitSettings:
+    enabled: bool = True
+    requests_per_second: float = 10.0
+    burst: int = 30
+
+
+@dataclass(slots=True, frozen=True)
 class SecuritySettings:
     secrets_from_env: bool = True
     redact_secrets_in_logs: bool = True
     require_explicit_live_flag: bool = True
+    secure_headers_enabled: bool = True
     secrets: SecretsSettings = field(default_factory=SecretsSettings)
     cli_auth: CliAuthSettings = field(default_factory=CliAuthSettings)
+    rate_limit: RateLimitSettings = field(default_factory=RateLimitSettings)
 
 
 @dataclass(slots=True, frozen=True)
@@ -588,6 +637,7 @@ class AppSettings:
         security_section = _as_dict(app_config.get("security"))
         secrets_section = _as_dict(security_section.get("secrets"))
         cli_auth_section = _as_dict(security_section.get("cli_auth"))
+        rate_limit_section = _as_dict(security_section.get("rate_limit"))
 
         thresholds = _as_dict(agents_config.get("thresholds"))
         risk_section = _as_dict(agents_config.get("risk"))
@@ -1189,6 +1239,11 @@ class AppSettings:
                 enabled=_as_bool(cli_auth_section.get("enabled"), False),
                 actor_user_env=_as_str(cli_auth_section.get("actor_user_env"), "PM_BOT_ACTOR_USER"),
                 actor_role_env=_as_str(cli_auth_section.get("actor_role_env"), "PM_BOT_ACTOR_ROLE"),
+            ),
+            rate_limit=RateLimitSettings(
+                enabled=_as_bool(rate_limit_section.get("enabled"), True),
+                requests_per_second=max(float(rate_limit_section.get("requests_per_second", 10.0)), 0.1),
+                burst=max(int(rate_limit_section.get("burst", 30)), 1),
             ),
         )
 

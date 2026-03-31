@@ -698,3 +698,240 @@ def beta_dress_rehearsal_command(
         print(f"Evidence output: {evidence_path}")
 
     return 0 if ok else 1
+
+
+# ---------------------------------------------------------------------------
+# live-readiness-check  (read-only diagnostic)
+# ---------------------------------------------------------------------------
+
+
+def live_readiness_check_command(
+    config_path: Path,
+    agents_config_path: Path,
+    *,
+    as_json: bool,
+) -> int:
+    """Validate all prerequisites for switching from SANDBOX_CHAIN to LIVE mode.
+
+    This is a **read-only** diagnostic — it never mutates state.
+    """
+    from collections.abc import Mapping
+    from pathlib import Path as _Path
+
+    settings = load_settings(config_path, agents_config_path)
+    configure_logging(settings.logging)
+    persistence = build_persistence(settings)
+
+    checks: list[RehearsalStepResult] = []
+    step_counter = 0
+
+    def _append(*, key: str, title: str, ok: bool, detail: str, recovery_hint: str) -> None:
+        nonlocal step_counter
+        step_counter += 1
+        checks.append(
+            RehearsalStepResult(
+                step=step_counter,
+                key=key,
+                title=title,
+                ok=ok,
+                detail=detail,
+                recovery_hint=recovery_hint,
+            )
+        )
+
+    # 1) Model v2 active
+    engine = str(getattr(settings.prediction, "engine", "")).strip().lower()
+    model_ok = engine == "model_v2"
+    _append(
+        key="model_v2_active",
+        title="Model v2 is active prediction engine",
+        ok=model_ok,
+        detail=f"engine={engine or 'unknown'}",
+        recovery_hint="Set prediction.engine=model_v2 in config and verify model artifacts are present.",
+    )
+
+    # 2) Sandbox stability — ≥30 successful runs in last 30 days
+    now = datetime.now(UTC)
+    thirty_days_ago = now.timestamp() - 30 * 86400
+    pipeline_rows = persistence.read_all_artifact_records("pipeline_summaries")
+    recent_total = 0
+    recent_failures = 0
+    for row in pipeline_rows:
+        payload = row.get("payload")
+        if not isinstance(payload, Mapping):
+            continue
+        ts_raw = row.get("timestamp", "")
+        try:
+            ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00")).timestamp()
+        except (ValueError, TypeError):
+            ts = 0.0
+        if ts >= thirty_days_ago:
+            recent_total += 1
+            if str(payload.get("status", "")).lower() == "failed":
+                recent_failures += 1
+    recent_successes = recent_total - recent_failures
+    stability_ok = recent_successes >= 30
+    _append(
+        key="sandbox_stability",
+        title="Sandbox stability (>=30 successful runs in 30d)",
+        ok=stability_ok,
+        detail=f"recent_runs={recent_total} successes={recent_successes} failures={recent_failures}",
+        recovery_hint="Run more sandbox pipeline cycles until 30+ successful runs accumulate.",
+    )
+
+    # 3) Zero critical incidents in last 14 runs
+    incident_rows = persistence.read_all_artifact_records("incident_events")
+    last_14_run_ids: list[str] = []
+    seen_runs: set[str] = set()
+    for row in reversed(pipeline_rows):
+        rid = str(row.get("payload", {}).get("run_id", row.get("run_id", ""))).strip()
+        if rid and rid not in seen_runs:
+            seen_runs.add(rid)
+            last_14_run_ids.append(rid)
+        if len(last_14_run_ids) >= 14:
+            break
+    last_14_set = set(last_14_run_ids)
+    critical_count = 0
+    for row in incident_rows:
+        payload = row.get("payload")
+        if not isinstance(payload, Mapping):
+            continue
+        rid = str(payload.get("run_id", row.get("run_id", ""))).strip()
+        severity = str(payload.get("severity", "")).strip().lower()
+        if rid in last_14_set and severity == "critical":
+            critical_count += 1
+    incidents_ok = critical_count == 0
+    _append(
+        key="zero_critical_incidents",
+        title="Zero critical incidents in last 14 runs",
+        ok=incidents_ok,
+        detail=f"critical_incidents={critical_count} checked_runs={len(last_14_run_ids)}",
+        recovery_hint="Investigate and resolve critical incidents before enabling live mode.",
+    )
+
+    # 4) Recent backup exists (last 7 days)
+    backup_dir = _Path(settings.storage.data_dir) / "backups"
+    backup_ok = False
+    backup_detail = "no_backup_dir"
+    if backup_dir.exists():
+        seven_days_ago = now.timestamp() - 7 * 86400
+        recent_backups = [
+            f for f in backup_dir.iterdir()
+            if f.suffix == ".db" and f.stat().st_mtime >= seven_days_ago
+        ]
+        backup_ok = len(recent_backups) > 0
+        backup_detail = f"recent_backups={len(recent_backups)} dir={backup_dir}"
+    _append(
+        key="backup_recent",
+        title="Backup created in last 7 days",
+        ok=backup_ok,
+        detail=backup_detail,
+        recovery_hint="Run create-backup to create a fresh backup before going live.",
+    )
+
+    # 5) Blocking trade review enforced
+    review_blocking = getattr(settings.execution, "blocking_trade_review", False)
+    review_no_auto = not getattr(settings.execution, "review_auto_approve", True)
+    review_ok = bool(review_blocking) and review_no_auto
+    _append(
+        key="review_gate_enforced",
+        title="Blocking trade review enabled, auto-approve off",
+        ok=review_ok,
+        detail=f"blocking_trade_review={review_blocking} review_auto_approve={not review_no_auto}",
+        recovery_hint="Set execution.blocking_trade_review=true and execution.review_auto_approve=false.",
+    )
+
+    # 6) Risk limits configured (non-zero)
+    risk = settings.risk
+    risk_checks = {
+        "bankroll_usd": risk.bankroll_usd > 0,
+        "max_position_pct": risk.max_position_pct > 0,
+        "max_portfolio_exposure_pct": risk.max_portfolio_exposure_pct > 0,
+        "daily_stop_loss_pct": risk.daily_stop_loss_pct > 0,
+        "min_bet_usd": risk.min_bet_usd > 0,
+    }
+    risk_failures = [k for k, v in risk_checks.items() if not v]
+    risk_ok = len(risk_failures) == 0
+    _append(
+        key="risk_limits_configured",
+        title="Risk limits are non-zero and configured",
+        ok=risk_ok,
+        detail=f"bankroll={risk.bankroll_usd} max_pos={risk.max_position_pct} failures={risk_failures or 'none'}",
+        recovery_hint=f"Set non-zero values for: {', '.join(risk_failures) or 'n/a'} in risk config.",
+    )
+
+    # 7) Not currently paused
+    from prediction_market_bot.services.operator_control import OperatorControlService
+    try:
+        operational = build_operational_repositories(settings)
+        control = OperatorControlService(operational.operator_control)
+        state = control.get_state()
+        paused = getattr(state, "paused", False)
+        not_paused_ok = not paused
+        pause_detail = f"paused={paused} reason={getattr(state, 'pause_reason', '')!r}"
+    except Exception as exc:
+        not_paused_ok = False
+        pause_detail = f"operator_control_error={exc}"
+    _append(
+        key="not_paused",
+        title="System not currently paused",
+        ok=not_paused_ok,
+        detail=pause_detail,
+        recovery_hint="Run resume command to clear pause state before enabling live mode.",
+    )
+
+    # 8) Recent dress rehearsal passed (last 7 days)
+    rehearsal_dir = _Path(settings.storage.artifacts_dir) / "rehearsals"
+    rehearsal_ok = False
+    rehearsal_detail = "no_rehearsal_dir"
+    if rehearsal_dir.exists():
+        seven_days_ago_ts = now.timestamp() - 7 * 86400
+        for f in sorted(rehearsal_dir.glob("*.json"), reverse=True):
+            if f.stat().st_mtime < seven_days_ago_ts:
+                continue
+            try:
+                data = json.loads(f.read_text())
+                if isinstance(data, dict) and data.get("go_no_go") == "GO":
+                    rehearsal_ok = True
+                    rehearsal_detail = f"passed_rehearsal={f.name} go_no_go=GO"
+                    break
+            except (json.JSONDecodeError, OSError):
+                continue
+        if not rehearsal_ok and rehearsal_detail == "no_rehearsal_dir":
+            rehearsal_detail = "no_passing_rehearsal_in_last_7_days"
+    if not rehearsal_ok and "no_rehearsal_dir" not in rehearsal_detail:
+        rehearsal_detail = rehearsal_detail or "no_passing_rehearsal_in_last_7_days"
+    _append(
+        key="dress_rehearsal_passed",
+        title="Dress rehearsal passed in last 7 days",
+        ok=rehearsal_ok,
+        detail=rehearsal_detail,
+        recovery_hint="Run beta-dress-rehearsal and ensure GO result before enabling live mode.",
+    )
+
+    # Summary
+    all_ok = all(c.ok for c in checks)
+    finished_at = datetime.now(UTC)
+    result: dict[str, object] = {
+        "timestamp": finished_at.isoformat(),
+        "go_no_go": "GO" if all_ok else "NO_GO",
+        "checks": [c.to_dict() for c in checks],
+        "blocking_failures": [c.key for c in checks if not c.ok],
+    }
+
+    if as_json:
+        print(json.dumps(result, indent=2))
+    else:
+        print("Live Readiness Check")
+        print(f"Go/No-Go: {result['go_no_go']}")
+        print()
+        for c in checks:
+            status = "PASS" if c.ok else "FAIL"
+            print(f"  {c.step:02d}. [{status}] {c.title}")
+            print(f"      {c.detail}")
+            if not c.ok:
+                print(f"      -> {c.recovery_hint}")
+        if not all_ok:
+            print(f"\nBlocking failures: {', '.join(str(f) for f in result['blocking_failures'])}")
+
+    return 0 if all_ok else 1

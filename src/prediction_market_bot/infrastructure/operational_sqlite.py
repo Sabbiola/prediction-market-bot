@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Generator, Mapping
 
 from prediction_market_bot.domain.models import (
     PendingSettlementRequest,
@@ -37,14 +39,97 @@ def bootstrap_operational_schema(db_path: str | Path, *, dialect: MigrationDiale
     upgrade_operational_schema(db_path, dialect=dialect)
 
 
+# ---------------------------------------------------------------------------
+# Lightweight thread-safe SQLite connection pool with WAL mode
+# ---------------------------------------------------------------------------
+
+
+class _SqliteConnectionPool:
+    """Reuse a small number of SQLite connections instead of opening one per call."""
+
+    def __init__(self, db_path: Path, *, pool_size: int = 4) -> None:
+        self._db_path = db_path
+        self._pool_size = pool_size
+        self._lock = threading.Lock()
+        self._connections: list[sqlite3.Connection] = []
+
+    def acquire(self) -> sqlite3.Connection:
+        with self._lock:
+            if self._connections:
+                return self._connections.pop()
+        return self._create_connection()
+
+    def release(self, conn: sqlite3.Connection) -> None:
+        with self._lock:
+            if len(self._connections) < self._pool_size:
+                self._connections.append(conn)
+                return
+        conn.close()
+
+    def _create_connection(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        return conn
+
+    def close_all(self) -> None:
+        with self._lock:
+            for conn in self._connections:
+                conn.close()
+            self._connections.clear()
+
+
+_pool_registry: dict[str, _SqliteConnectionPool] = {}
+_pool_registry_lock = threading.Lock()
+
+
+def _get_pool(db_path: Path) -> _SqliteConnectionPool:
+    key = str(db_path.resolve())
+    with _pool_registry_lock:
+        if key not in _pool_registry:
+            _pool_registry[key] = _SqliteConnectionPool(db_path)
+        return _pool_registry[key]
+
+
+def close_pool_for_path(db_path: str | Path) -> None:
+    """Close and remove the connection pool for a given database path.
+
+    Useful for test teardown and backup/restore operations on Windows where
+    open connections prevent file deletion.
+    """
+    key = str(Path(db_path).resolve())
+    with _pool_registry_lock:
+        pool = _pool_registry.pop(key, None)
+    if pool is not None:
+        pool.close_all()
+
+
+# ---------------------------------------------------------------------------
+# Base repository
+# ---------------------------------------------------------------------------
+
+
 class _SqliteBaseRepository:
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
+        self._pool = _get_pool(self.db_path)
 
+    # Keep for backward compatibility; internal code should use _connection().
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return self._pool.acquire()
+
+    def _release(self, conn: sqlite3.Connection) -> None:
+        self._pool.release(conn)
+
+    @contextmanager
+    def _connection(self) -> Generator[sqlite3.Connection, None, None]:
+        conn = self._pool.acquire()
+        try:
+            yield conn
+        finally:
+            self._pool.release(conn)
 
     @staticmethod
     def _utc_now() -> str:
@@ -64,7 +149,7 @@ class SqliteRunsRepository(_SqliteBaseRepository, RunsRepositoryPort):
     def upsert_run(self, run_id: str, payload: Mapping[str, Any]) -> None:
         now = self._utc_now()
         status = str(payload.get("status", "")).strip()
-        with self._connect() as conn:
+        with self._connection() as conn:
             conn.execute(
                 """
                 INSERT INTO runs (run_id, status, updated_at, payload_json)
@@ -82,7 +167,7 @@ class SqliteRunsRepository(_SqliteBaseRepository, RunsRepositoryPort):
 class SqliteReviewQueueRepository(_SqliteBaseRepository, ReviewQueueRepositoryPort):
     def upsert_candidate(self, candidate: TradeReviewCandidate) -> None:
         payload = candidate.model_dump(mode="json")
-        with self._connect() as conn:
+        with self._connection() as conn:
             conn.execute(
                 """
                 INSERT INTO review_queue (queue_id, run_id, market_id, updated_at, payload_json)
@@ -107,7 +192,7 @@ class SqliteReviewQueueRepository(_SqliteBaseRepository, ReviewQueueRepositoryPo
         target = queue_id.strip()
         if not target:
             return None
-        with self._connect() as conn:
+        with self._connection() as conn:
             row = conn.execute(
                 "SELECT payload_json FROM review_queue WHERE queue_id = ?",
                 (target,),
@@ -129,7 +214,7 @@ class SqliteReviewQueueRepository(_SqliteBaseRepository, ReviewQueueRepositoryPo
         if limit > 0:
             query += " LIMIT ?"
             params.append(limit)
-        with self._connect() as conn:
+        with self._connection() as conn:
             rows = conn.execute(query, tuple(params)).fetchall()
         records: list[TradeReviewCandidate] = []
         for row in rows:
@@ -144,7 +229,7 @@ class SqliteReviewQueueRepository(_SqliteBaseRepository, ReviewQueueRepositoryPo
 class SqliteReviewDecisionRepository(_SqliteBaseRepository, ReviewDecisionRepositoryPort):
     def append_decision(self, decision: TradeReviewDecision) -> None:
         payload = decision.model_dump(mode="json")
-        with self._connect() as conn:
+        with self._connection() as conn:
             conn.execute(
                 """
                 INSERT INTO review_decisions (queue_id, run_id, decided_at, payload_json)
@@ -172,7 +257,7 @@ class SqliteReviewDecisionRepository(_SqliteBaseRepository, ReviewDecisionReposi
         if where:
             query += " WHERE " + " AND ".join(where)
         query += " ORDER BY decided_at ASC, id ASC"
-        with self._connect() as conn:
+        with self._connection() as conn:
             rows = conn.execute(query, tuple(params)).fetchall()
         records: list[TradeReviewDecision] = []
         for row in rows:
@@ -186,7 +271,7 @@ class SqliteReviewDecisionRepository(_SqliteBaseRepository, ReviewDecisionReposi
 
 class SqliteOpenPositionsRepository(_SqliteBaseRepository, OpenPositionsRepositoryPort):
     def replace_snapshot(self, payload: Mapping[str, Any]) -> None:
-        with self._connect() as conn:
+        with self._connection() as conn:
             conn.execute(
                 """
                 INSERT INTO open_positions_state (id, updated_at, payload_json)
@@ -200,7 +285,7 @@ class SqliteOpenPositionsRepository(_SqliteBaseRepository, OpenPositionsReposito
             conn.commit()
 
     def load_snapshot(self) -> Mapping[str, Any] | None:
-        with self._connect() as conn:
+        with self._connection() as conn:
             row = conn.execute("SELECT payload_json FROM open_positions_state WHERE id = 1").fetchone()
         if row is None:
             return None
@@ -210,7 +295,7 @@ class SqliteOpenPositionsRepository(_SqliteBaseRepository, OpenPositionsReposito
 class SqlitePendingSettlementsRepository(_SqliteBaseRepository, PendingSettlementsRepositoryPort):
     def upsert_request(self, request: PendingSettlementRequest) -> None:
         payload = request.model_dump(mode="json")
-        with self._connect() as conn:
+        with self._connection() as conn:
             conn.execute(
                 """
                 INSERT INTO pending_settlements (request_id, run_id, state, updated_at, payload_json)
@@ -235,7 +320,7 @@ class SqlitePendingSettlementsRepository(_SqliteBaseRepository, PendingSettlemen
         target = request_id.strip()
         if not target:
             return None
-        with self._connect() as conn:
+        with self._connection() as conn:
             row = conn.execute(
                 "SELECT payload_json FROM pending_settlements WHERE request_id = ?",
                 (target,),
@@ -269,7 +354,7 @@ class SqlitePendingSettlementsRepository(_SqliteBaseRepository, PendingSettlemen
         if limit > 0:
             query += " LIMIT ?"
             params.append(limit)
-        with self._connect() as conn:
+        with self._connection() as conn:
             rows = conn.execute(query, tuple(params)).fetchall()
         records: list[PendingSettlementRequest] = []
         for row in rows:
@@ -285,7 +370,7 @@ class SqliteTransactionIntentsRepository(_SqliteBaseRepository, TransactionInten
     def upsert_intent(self, run_id: str, intent: TxIntent) -> None:
         payload = intent.model_dump(mode="json")
         intent_id = _intent_id(intent)
-        with self._connect() as conn:
+        with self._connection() as conn:
             conn.execute(
                 """
                 INSERT INTO transaction_intents (intent_id, run_id, created_at, payload_json)
@@ -303,7 +388,7 @@ class SqliteTransactionIntentsRepository(_SqliteBaseRepository, TransactionInten
         target = intent_id.strip()
         if not target:
             return None
-        with self._connect() as conn:
+        with self._connection() as conn:
             row = conn.execute(
                 "SELECT payload_json FROM transaction_intents WHERE intent_id = ?",
                 (target,),
@@ -325,7 +410,7 @@ class SqliteTransactionIntentsRepository(_SqliteBaseRepository, TransactionInten
         if limit > 0:
             query += " LIMIT ?"
             params.append(limit)
-        with self._connect() as conn:
+        with self._connection() as conn:
             rows = conn.execute(query, tuple(params)).fetchall()
         intents: list[TxIntent] = []
         for row in rows:
@@ -340,7 +425,7 @@ class SqliteTransactionIntentsRepository(_SqliteBaseRepository, TransactionInten
 class SqliteTransactionAttemptsRepository(_SqliteBaseRepository, TransactionAttemptsRepositoryPort):
     def append_attempt(self, run_id: str, attempt: TxAttempt) -> None:
         payload = attempt.model_dump(mode="json")
-        with self._connect() as conn:
+        with self._connection() as conn:
             conn.execute(
                 """
                 INSERT INTO transaction_attempts (run_id, intent_id, created_at, payload_json)
@@ -372,7 +457,7 @@ class SqliteTransactionAttemptsRepository(_SqliteBaseRepository, TransactionAtte
         if limit > 0:
             query += " LIMIT ?"
             params.append(limit)
-        with self._connect() as conn:
+        with self._connection() as conn:
             rows = conn.execute(query, tuple(params)).fetchall()
         attempts: list[TxAttempt] = []
         for row in rows:
@@ -393,7 +478,7 @@ class SqliteTransactionReceiptsRepository(_SqliteBaseRepository, TransactionRece
             f"{receipt.confirmed_at.isoformat() if receipt.confirmed_at else ''}"
         )
         receipt_id = sha256(base.encode("utf-8")).hexdigest()
-        with self._connect() as conn:
+        with self._connection() as conn:
             conn.execute(
                 """
                 INSERT INTO transaction_receipts (receipt_id, run_id, created_at, payload_json)
@@ -423,7 +508,7 @@ class SqliteTransactionReceiptsRepository(_SqliteBaseRepository, TransactionRece
         if limit > 0:
             query += " LIMIT ?"
             params.append(limit)
-        with self._connect() as conn:
+        with self._connection() as conn:
             rows = conn.execute(query, tuple(params)).fetchall()
         receipts: list[TxReceipt] = []
         for row in rows:
@@ -439,14 +524,14 @@ class SqliteTransactionReceiptsRepository(_SqliteBaseRepository, TransactionRece
 
 class SqliteOperatorControlStateRepository(_SqliteBaseRepository, OperatorControlStateRepositoryPort):
     def load_state(self) -> Mapping[str, Any] | None:
-        with self._connect() as conn:
+        with self._connection() as conn:
             row = conn.execute("SELECT payload_json FROM operator_control_state WHERE id = 1").fetchone()
         if row is None:
             return None
         return self._loads(str(row["payload_json"]))
 
     def save_state(self, payload: Mapping[str, Any]) -> None:
-        with self._connect() as conn:
+        with self._connection() as conn:
             conn.execute(
                 """
                 INSERT INTO operator_control_state (id, updated_at, payload_json)

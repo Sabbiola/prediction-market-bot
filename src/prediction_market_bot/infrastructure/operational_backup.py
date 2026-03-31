@@ -11,6 +11,7 @@ from prediction_market_bot.infrastructure.operational_migrations import (
     OperationalMigrationError,
     get_operational_schema_status,
 )
+from prediction_market_bot.infrastructure.operational_sqlite import close_pool_for_path
 
 
 @dataclass(slots=True, frozen=True)
@@ -156,6 +157,7 @@ def restore_sqlite_backup(
         tmp_target.unlink()
     shutil.copy2(source_backup, tmp_target)
     if target.exists():
+        close_pool_for_path(target)
         target.unlink()
     tmp_target.replace(target)
 
