@@ -27,6 +27,7 @@ def test_blocking_trade_review_gate_blocks_execution_until_operator_approval(
     app_payload["runtime"]["research_provider"] = "STATIC"
     app_payload.setdefault("execution", {})
     app_payload["execution"]["blocking_trade_review"] = False
+    app_payload["execution"]["review_auto_approve"] = False  # test validates blocking without auto-approve
     app_payload["execution"]["settlement_same_run"] = False
     app_payload.setdefault("feature_flags", {})
     app_payload["feature_flags"]["enable_manual_review_queue"] = False

@@ -43,6 +43,12 @@ def test_build_http_client_reads_openalex_key_from_env(
 
 def test_build_coordinator_wires_static_runtime_path(temp_config_paths: tuple[Path, Path]) -> None:
     app_cfg, agents_cfg = temp_config_paths
+    raw = yaml.safe_load(app_cfg.read_text(encoding="utf-8")) or {}
+    raw.setdefault("runtime", {})["mode"] = "DRY_RUN_STATIC"
+    raw.setdefault("runtime", {})["market_data_provider"] = "STATIC"
+    raw.setdefault("runtime", {})["research_provider"] = "STATIC"
+    raw.setdefault("execution", {})["review_auto_approve"] = False
+    app_cfg.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
     settings = load_settings(app_cfg, agents_cfg)
     persistence = build_persistence(settings)
 
@@ -66,6 +72,7 @@ def test_build_market_data_provider_uses_live_adapter_in_paper_live_mode(
     runtime = raw.setdefault("runtime", {})
     runtime["mode"] = "PAPER_LIVE"
     runtime["market_data_provider"] = "AUTO"
+    runtime["provider_failure_policy"] = "FAIL_FAST"  # avoid fallback wrapper for isinstance check
     app_cfg.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
 
     settings = load_settings(app_cfg, agents_cfg)

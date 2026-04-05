@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib import error
 
@@ -131,8 +132,8 @@ def test_run_once_uses_live_providers_in_paper_live_mode(
             "active": True,
             "closed": False,
             "resolved": False,
-            "updatedAt": "2026-03-14T11:55:00Z",
-            "endDate": "2027-03-20T11:55:00Z",
+            "updatedAt": (datetime.now(UTC) - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "endDate": (datetime.now(UTC) + timedelta(days=365)).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "outcomePrices": "[\"0.58\", \"0.42\"]",
             "liquidity": "45000",
             "volume24hr": "20000",

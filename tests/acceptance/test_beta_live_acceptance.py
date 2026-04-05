@@ -4,6 +4,7 @@ import json
 import socket
 import threading
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Iterator
@@ -273,11 +274,13 @@ def _configure_app_for_sandbox_chain(
     payload["sandbox_chain"]["private_key_env"] = "SANDBOX_CHAIN_PRIVATE_KEY"
 
     payload.setdefault("live_market_data", {})
+    payload["live_market_data"]["enabled"] = False  # dress rehearsal skips live smoke when disabled
     payload["live_market_data"]["endpoint_url"] = "https://example.test/markets"
     payload["live_market_data"]["max_staleness_sec"] = 999_999
     payload["live_market_data"]["limit"] = 10
 
     payload.setdefault("live_research", {})
+    payload["live_research"]["enabled"] = False  # dress rehearsal skips live smoke when disabled
     payload["live_research"]["limit_per_source"] = 5
     wikipedia = payload["live_research"].setdefault("wikipedia", {})  # type: ignore[index]
     openalex = payload["live_research"].setdefault("openalex", {})  # type: ignore[index]
@@ -315,8 +318,8 @@ def _patch_live_providers(monkeypatch: pytest.MonkeyPatch) -> None:
             "active": True,
             "closed": False,
             "resolved": False,
-            "updatedAt": "2026-03-14T11:55:00Z",
-            "endDate": "2027-03-20T11:55:00Z",
+            "updatedAt": (datetime.now(UTC) - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "endDate": (datetime.now(UTC) + timedelta(days=365)).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "outcomePrices": "[\"0.42\", \"0.58\"]",
             "liquidity": "45000",
             "volume24hr": "20000",

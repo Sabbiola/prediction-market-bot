@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -45,8 +46,8 @@ def test_smoke_live_data_command_fetches_and_persists_batch(
             "active": True,
             "closed": False,
             "resolved": False,
-            "updatedAt": "2026-03-13T11:55:00Z",
-            "endDate": "2026-03-14T11:55:00Z",
+            "updatedAt": (datetime.now(UTC) - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "endDate": (datetime.now(UTC) + timedelta(days=365)).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "outcomePrices": "[\"0.55\", \"0.45\"]",
             "liquidity": "42000",
             "volume24hr": "18000",

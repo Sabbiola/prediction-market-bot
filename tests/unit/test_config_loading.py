@@ -11,7 +11,7 @@ def test_load_settings_from_repository_config() -> None:
         app_config_path=Path("config/app.yaml"),
         agents_config_path=Path("config/agents.yaml"),
     )
-    assert settings.runtime.mode == RuntimeMode.DRY_RUN_STATIC
+    assert settings.runtime.mode == RuntimeMode.PAPER_LIVE
     assert settings.dry_run is True
     assert settings.prediction.min_confidence > 0.0
     assert settings.prediction.engine == "heuristic"
