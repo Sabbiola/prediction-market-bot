@@ -30,6 +30,18 @@ class RuntimeMetricsSnapshot:
     pipeline_failures_total: int = 0
     pipeline_last_run_duration_ms: float = 0.0
     pipeline_stage_last_duration_ms: dict[str, float] = dataclasses.field(default_factory=dict)
+    # Execution outcomes
+    executions_filled: int = 0
+    executions_failed: int = 0
+    executions_skipped: int = 0
+    # Review decisions
+    review_decisions_approved: int = 0
+    review_decisions_rejected: int = 0
+    review_decisions_expired: int = 0
+    # Portfolio PnL (paper trading)
+    pnl_realized_usd: float = 0.0
+    pnl_unrealized_usd: float = 0.0
+    pnl_total_usd: float = 0.0
 
     def to_dict(self) -> dict[str, int | float | dict[str, float]]:
         return {
@@ -46,6 +58,15 @@ class RuntimeMetricsSnapshot:
             "pipeline_failures_total": self.pipeline_failures_total,
             "pipeline_last_run_duration_ms": self.pipeline_last_run_duration_ms,
             "pipeline_stage_last_duration_ms": dict(self.pipeline_stage_last_duration_ms),
+            "executions_filled": self.executions_filled,
+            "executions_failed": self.executions_failed,
+            "executions_skipped": self.executions_skipped,
+            "review_decisions_approved": self.review_decisions_approved,
+            "review_decisions_rejected": self.review_decisions_rejected,
+            "review_decisions_expired": self.review_decisions_expired,
+            "pnl_realized_usd": self.pnl_realized_usd,
+            "pnl_unrealized_usd": self.pnl_unrealized_usd,
+            "pnl_total_usd": self.pnl_total_usd,
         }
 
 
@@ -68,7 +89,11 @@ def collect_runtime_metrics(
     restored = portfolio_engine.restore_from_repository()
     if not restored:
         portfolio_engine.replay_rows(persistence.read_all_artifact_records("paper_portfolio_events"))
-    open_positions_count = portfolio_engine.snapshot().position_count
+    portfolio_snapshot = portfolio_engine.snapshot()
+    open_positions_count = portfolio_snapshot.position_count
+    pnl_realized_usd = portfolio_snapshot.realized_pnl_usd
+    pnl_unrealized_usd = portfolio_snapshot.unrealized_pnl_usd
+    pnl_total_usd = portfolio_snapshot.total_pnl_usd
 
     settlement_queue = SettlementRequestQueueService(
         persistence,
@@ -100,6 +125,10 @@ def collect_runtime_metrics(
     pipeline_runs_total, pipeline_failures_total, pipeline_last_run_duration_ms, pipeline_stage_last_duration_ms = (
         _collect_pipeline_counters(persistence)
     )
+    executions_filled, executions_failed, executions_skipped = _collect_execution_counters(persistence)
+    review_decisions_approved, review_decisions_rejected, review_decisions_expired = (
+        _collect_review_decision_counters(operational)
+    )
 
     return RuntimeMetricsSnapshot(
         live_source_failures_total=live_source_failures_total,
@@ -115,6 +144,15 @@ def collect_runtime_metrics(
         pipeline_failures_total=pipeline_failures_total,
         pipeline_last_run_duration_ms=pipeline_last_run_duration_ms,
         pipeline_stage_last_duration_ms=pipeline_stage_last_duration_ms,
+        executions_filled=executions_filled,
+        executions_failed=executions_failed,
+        executions_skipped=executions_skipped,
+        review_decisions_approved=review_decisions_approved,
+        review_decisions_rejected=review_decisions_rejected,
+        review_decisions_expired=review_decisions_expired,
+        pnl_realized_usd=pnl_realized_usd,
+        pnl_unrealized_usd=pnl_unrealized_usd,
+        pnl_total_usd=pnl_total_usd,
     )
 
 
@@ -165,7 +203,28 @@ def format_prometheus_text(snapshot: RuntimeMetricsSnapshot) -> str:
         lines.append("# TYPE pm_bot_pipeline_stage_last_duration_ms gauge")
         for stage, duration in sorted(snapshot.pipeline_stage_last_duration_ms.items()):
             lines.append(f'pm_bot_pipeline_stage_last_duration_ms{{stage="{stage}"}} {duration}')
-    lines.append("")
+    lines += [
+        "# HELP pm_bot_executions_total Total trade executions by outcome status.",
+        "# TYPE pm_bot_executions_total gauge",
+        f'pm_bot_executions_total{{status="filled"}} {snapshot.executions_filled}',
+        f'pm_bot_executions_total{{status="failed"}} {snapshot.executions_failed}',
+        f'pm_bot_executions_total{{status="skipped"}} {snapshot.executions_skipped}',
+        "# HELP pm_bot_review_decisions_total Total review decisions by outcome.",
+        "# TYPE pm_bot_review_decisions_total gauge",
+        f'pm_bot_review_decisions_total{{decision="approved"}} {snapshot.review_decisions_approved}',
+        f'pm_bot_review_decisions_total{{decision="rejected"}} {snapshot.review_decisions_rejected}',
+        f'pm_bot_review_decisions_total{{decision="expired"}} {snapshot.review_decisions_expired}',
+        "# HELP pm_bot_pnl_realized_usd Cumulative realized PnL in USD (paper trading).",
+        "# TYPE pm_bot_pnl_realized_usd gauge",
+        f"pm_bot_pnl_realized_usd {snapshot.pnl_realized_usd}",
+        "# HELP pm_bot_pnl_unrealized_usd Current unrealized PnL in USD (paper trading).",
+        "# TYPE pm_bot_pnl_unrealized_usd gauge",
+        f"pm_bot_pnl_unrealized_usd {snapshot.pnl_unrealized_usd}",
+        "# HELP pm_bot_pnl_total_usd Total PnL (realized + unrealized) in USD (paper trading).",
+        "# TYPE pm_bot_pnl_total_usd gauge",
+        f"pm_bot_pnl_total_usd {snapshot.pnl_total_usd}",
+        "",
+    ]
     return "\n".join(lines)
 
 
@@ -206,6 +265,51 @@ def _collect_pipeline_counters(
                 last_duration_ms = float(stage_timings.get("total", 0.0)) if "total" in stage_timings else 0.0
 
     return total, failures, last_duration_ms, last_stage_durations
+
+
+def _collect_execution_counters(persistence: JsonlPersistence) -> tuple[int, int, int]:
+    """Return (filled, failed, skipped) counts from execution_results artifacts."""
+    rows = persistence.read_all_artifact_records("execution_results")
+    filled = failed = skipped = 0
+    for row in rows:
+        payload = row.get("payload")
+        if not isinstance(payload, Mapping):
+            continue
+        status = _to_text(payload.get("status")).upper()
+        if status == "FILLED":
+            filled += 1
+        elif status == "FAILED":
+            failed += 1
+        elif status == "SKIPPED":
+            skipped += 1
+    return filled, failed, skipped
+
+
+def _collect_review_decision_counters(
+    operational: OperationalRepositories,
+) -> tuple[int, int, int]:
+    """Return (approved, rejected, expired) from the review decisions repository.
+
+    'expired' is derived from queue items whose final status is EXPIRED rather
+    than from explicit decision records (the EXPIRE action is stored on the queue
+    item, not as a separate decision row).
+    """
+    from prediction_market_bot.domain.enums import TradeReviewAction, TradeReviewStatus
+
+    decisions = operational.review_decisions.list_decisions()
+    approved = rejected = 0
+    for decision in decisions:
+        action = getattr(decision, "action", None)
+        if action == TradeReviewAction.APPROVE:
+            approved += 1
+        elif action == TradeReviewAction.REJECT:
+            rejected += 1
+
+    candidates = operational.review_queue.list_candidates()
+    expired = sum(
+        1 for c in candidates if getattr(c, "status", None) == TradeReviewStatus.EXPIRED
+    )
+    return approved, rejected, expired
 
 
 def _collect_stale_data_counters(persistence: JsonlPersistence) -> tuple[int, int]:

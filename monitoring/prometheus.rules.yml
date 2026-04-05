@@ -1,0 +1,72 @@
+groups:
+  - name: prediction_market_bot
+    interval: 60s
+    rules:
+
+      # ── Pipeline health ──────────────────────────────────────────────────────
+      - alert: HighPipelineErrorRate
+        expr: |
+          (
+            pm_bot_pipeline_failures_total
+            /
+            clamp_min(pm_bot_pipeline_runs_total, 1)
+          ) > 0.20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High pipeline failure rate ({{ $value | humanizePercentage }})"
+          description: >
+            More than 20 % of pipeline runs are failing.
+            Check worker logs for recurring errors.
+
+      # ── Review queue backlog ─────────────────────────────────────────────────
+      - alert: ReviewQueueBacklog
+        expr: pm_bot_review_queue_depth > 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Review queue backlog (depth={{ $value }})"
+          description: >
+            The manual-review queue has been above 20 items for 10 minutes.
+            Process pending reviews or check auto-approval configuration.
+
+      # ── Stale market data ────────────────────────────────────────────────────
+      - alert: StaleMarketData
+        expr: |
+          increase(pm_bot_stale_data_events_total[10m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Stale market data detected"
+          description: >
+            The bot observed stale market-data events in the last 10 minutes.
+            Verify that the live market-data source is reachable and returning
+            up-to-date timestamps.
+
+      # ── Pipeline latency ────────────────────────────────────────────────────
+      - alert: HighPipelineLatency
+        expr: pm_bot_pipeline_last_run_duration_ms > 30000
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pipeline run latency > 30 s ({{ $value | humanizeDuration }})"
+          description: >
+            The last full pipeline run took longer than 30 seconds.
+            Investigate slow research sources or heavy scoring stages.
+
+      # ── Live source failures ─────────────────────────────────────────────────
+      - alert: LiveSourceFailureSpike
+        expr: |
+          increase(pm_bot_live_source_failures_total[15m]) > 5
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Multiple live-source failures in 15 min ({{ $value }})"
+          description: >
+            More than 5 live research-source failures recorded in the last
+            15 minutes.  External APIs may be rate-limiting or unavailable.

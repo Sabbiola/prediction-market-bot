@@ -1,0 +1,29 @@
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: default
+  group_by: [alertname, severity]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - match:
+        severity: critical
+      receiver: default
+      repeat_interval: 1h
+
+receivers:
+  - name: default
+    # Replace this with a real receiver (e.g. slack_configs, email_configs)
+    # or point ALERTMANAGER_WEBHOOK_URL at an external endpoint.
+    webhook_configs:
+      - url: ${ALERTMANAGER_WEBHOOK_URL:-http://localhost:9999/alerts}
+        send_resolved: true
+
+inhibit_rules:
+  - source_match:
+      severity: critical
+    target_match:
+      severity: warning
+    equal: [alertname]
