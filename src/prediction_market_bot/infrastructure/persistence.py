@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
@@ -16,6 +17,7 @@ class JsonlPersistence(PersistencePort):
         self.audit_log_path = Path(audit_log_path)
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
         self.audit_log_path.parent.mkdir(parents=True, exist_ok=True)
+        self._write_lock = threading.Lock()
 
     def write_run_event(self, run_id: str, event_type: str, payload: Mapping[str, Any]) -> None:
         record = {
@@ -24,7 +26,8 @@ class JsonlPersistence(PersistencePort):
             "event_type": event_type,
             "payload": dict(payload),
         }
-        self._append_jsonl(self.audit_log_path, record)
+        with self._write_lock:
+            self._append_jsonl(self.audit_log_path, record)
 
     def write_artifact(self, run_id: str, artifact_type: str, payload: Mapping[str, Any]) -> None:
         path = self.artifacts_dir / f"{artifact_type}.jsonl"
@@ -34,7 +37,8 @@ class JsonlPersistence(PersistencePort):
             "artifact_type": artifact_type,
             "payload": dict(payload),
         }
-        self._append_jsonl(path, record)
+        with self._write_lock:
+            self._append_jsonl(path, record)
 
     def read_run_events(self, run_id: str) -> list[dict[str, Any]]:
         rows = self._read_jsonl(self.audit_log_path)

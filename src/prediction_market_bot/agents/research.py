@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from math import sqrt
 from typing import Sequence
 
@@ -10,13 +11,16 @@ from prediction_market_bot.services.research_features import build_bundle_from_f
 
 logger = logging.getLogger(__name__)
 
+_MAX_RESEARCH_WORKERS = 8
+
 
 class ResearchAgent:
     name = "research-agent"
 
-    def __init__(self, sources: Sequence[ResearchSource]) -> None:
+    def __init__(self, sources: Sequence[ResearchSource], *, max_workers: int | None = None) -> None:
         self.sources = tuple(sources)
         self.last_source_failures: int = 0
+        self._max_workers = max_workers
 
     def run(self, candidate: MarketCandidate) -> ResearchPacket:
         self.last_source_failures = 0
@@ -55,23 +59,41 @@ class ResearchAgent:
         )
 
     def _collect_findings(self, candidate: MarketCandidate) -> tuple[ResearchFinding, ...]:
+        if not self.sources:
+            return ()
+
+        market = candidate.market
+        max_workers = min(
+            self._max_workers if self._max_workers is not None else _MAX_RESEARCH_WORKERS,
+            len(self.sources),
+        )
+
         buffer: list[ResearchFinding] = []
-        for source in self.sources:
-            try:
-                fetched = source.fetch(candidate.market)
-            except Exception as exc:
-                self.last_source_failures += 1
-                logger.warning(
-                    "research_source_failed",
-                    extra={
-                        "event": "research_source_failed",
-                        "market_id": candidate.market.market_id,
-                        "source_type": type(source).__name__,
-                        "error": str(exc),
-                    },
-                )
-                continue
-            buffer.extend(fetched)
+        failures = 0
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_source = {
+                executor.submit(source.fetch, market): source
+                for source in self.sources
+            }
+            for future in as_completed(future_to_source):
+                source = future_to_source[future]
+                try:
+                    fetched = future.result()
+                    buffer.extend(fetched)
+                except Exception as exc:
+                    failures += 1
+                    logger.warning(
+                        "research_source_failed",
+                        extra={
+                            "event": "research_source_failed",
+                            "market_id": market.market_id,
+                            "source_type": type(source).__name__,
+                            "error": str(exc),
+                        },
+                    )
+
+        self.last_source_failures += failures
         return tuple(
             sorted(
                 buffer,
