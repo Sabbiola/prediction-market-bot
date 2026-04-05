@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import random
 import socket
+import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Callable, Mapping, NoReturn
@@ -96,6 +98,7 @@ class StructuredHttpClient:
         retry_backoff_sec: float = 0.5,
         retry_jitter_sec: float = 0.25,
         cache_ttl_sec: int = 600,
+        cache_max_size: int = 1_000,
         openalex_api_key: str = "",
         enforce_allowed_hosts: bool = False,
         allowed_hosts: tuple[str, ...] = (),
@@ -111,6 +114,7 @@ class StructuredHttpClient:
         self.retry_backoff_sec = min(max(retry_backoff_sec, 0.0), 10.0)
         self.retry_jitter_sec = min(max(retry_jitter_sec, 0.0), 5.0)
         self.cache_ttl_sec = max(cache_ttl_sec, 0)
+        self.cache_max_size = max(cache_max_size, 1)
         self.openalex_api_key = openalex_api_key.strip()
         self.enforce_allowed_hosts = enforce_allowed_hosts
         self.allowed_hosts = tuple(host.strip().lower() for host in allowed_hosts if host.strip())
@@ -118,7 +122,10 @@ class StructuredHttpClient:
         self.now_fn = now_fn or (lambda: datetime.now(UTC))
         self.sleep_fn = sleep_fn or time.sleep
         self.random_fn = random_fn or random.random
-        self._cache: dict[str, _CacheEntry] = {}
+        # OrderedDict gives O(1) LRU move_to_end + popitem; Lock makes it thread-safe
+        # when multiple ResearchAgent worker threads share this client instance.
+        self._cache: OrderedDict[str, _CacheEntry] = OrderedDict()
+        self._cache_lock = threading.Lock()
         self._circuit_breaker_threshold = 5  # consecutive failures before opening
         self._circuit_breaker_reset_sec = 60.0
         self._host_failures: dict[str, int] = {}
@@ -156,10 +163,14 @@ class StructuredHttpClient:
         cache_allowed = use_cache and method_name == "GET" and json_body is None
         cache_key = f"{method_name}|{final_url}"
         if cache_allowed and ttl > 0:
-            cached = self._cache.get(cache_key)
-            now = self.now_fn()
-            if cached is not None and cached.expires_at >= now:
-                return HttpJsonResponse(payload=cached.payload, retries_used=0, cache_hit=True, url=final_url)
+            with self._cache_lock:
+                cached = self._cache.get(cache_key)
+                now = self.now_fn()
+                if cached is not None and cached.expires_at >= now:
+                    self._cache.move_to_end(cache_key)  # mark as recently used
+                    return HttpJsonResponse(payload=cached.payload, retries_used=0, cache_hit=True, url=final_url)
+                if cached is not None:
+                    del self._cache[cache_key]  # evict expired entry eagerly
 
         resolved_api_key = (api_key or "").strip()
         resolved_api_key_header = (api_key_header or "").strip()
@@ -235,10 +246,15 @@ class StructuredHttpClient:
                         _raise_http_error(metadata)
                     payload = json.loads(raw.decode("utf-8"))
                 if cache_allowed and ttl > 0:
-                    self._cache[cache_key] = _CacheEntry(
-                        expires_at=self.now_fn() + timedelta(seconds=ttl),
-                        payload=payload,
-                    )
+                    with self._cache_lock:
+                        self._cache[cache_key] = _CacheEntry(
+                            expires_at=self.now_fn() + timedelta(seconds=ttl),
+                            payload=payload,
+                        )
+                        self._cache.move_to_end(cache_key)
+                        # Evict LRU entries when over capacity
+                        while len(self._cache) > self.cache_max_size:
+                            self._cache.popitem(last=False)
                 self._record_success(final_url)
                 return HttpJsonResponse(
                     payload=payload,
