@@ -285,7 +285,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Path to agent catalog config YAML.",
     )
-    scheduler.add_argument("--interval-sec", type=float, default=60.0, help="Seconds between scheduler ticks.")
+    scheduler.add_argument(
+        "--interval-sec",
+        type=float,
+        default=0.0,
+        help="Seconds between scheduler ticks. 0 (default) reads scan_interval_sec from app config.",
+    )
     scheduler.add_argument(
         "--max-iterations",
         type=int,

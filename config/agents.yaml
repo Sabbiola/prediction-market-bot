@@ -18,8 +18,8 @@ standards:
   allow_business_logic_in_ui: false
 
 thresholds:
-  min_confidence: 0.62
-  min_edge_bps: 300
+  min_confidence: 0.38
+  min_edge_bps: 200
   max_spread_bps: 300
   min_liquidity_usd: 10000
   min_volume_24h_usd: 5000
@@ -154,11 +154,11 @@ agents:
       narrative_weight: 0.45
       structure_weight: 0.10
     model_inference:
-      engine: heuristic
-      model_artifact_path: ""
+      engine: model_v2
+      model_artifact_path: data/models/v1/logistic_regression_v1.json
       calibration_artifact_path: ""
       feature_schema_version: v1
-      strict_feature_parity: true
+      strict_feature_parity: false
       fallback_to_heuristic: true
       forced_heuristic_reason: ""
       alt_shadow:

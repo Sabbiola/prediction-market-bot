@@ -14,9 +14,9 @@ def test_load_settings_from_repository_config() -> None:
     assert settings.runtime.mode == RuntimeMode.PAPER_LIVE
     assert settings.dry_run is True
     assert settings.prediction.min_confidence > 0.0
-    assert settings.prediction.engine == "heuristic"
+    assert settings.prediction.engine == "model_v2"
     assert settings.prediction.fallback_to_heuristic is True
-    assert settings.prediction.strict_feature_parity is True
+    assert settings.prediction.strict_feature_parity is False
     assert settings.prediction.alt_shadow_promoted_enabled is False
     assert settings.prediction.alt_shadow_promoted_runtime_modes == ("SANDBOX_CHAIN",)
     assert settings.model_promotion.enabled is True

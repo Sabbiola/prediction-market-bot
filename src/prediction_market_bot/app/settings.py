@@ -138,6 +138,7 @@ class RuntimeSettings:
     market_data_provider: ProviderSelection = ProviderSelection.AUTO
     research_provider: ProviderSelection = ProviderSelection.AUTO
     provider_failure_policy: ProviderFailurePolicy = ProviderFailurePolicy.FAIL_FAST
+    scan_interval_sec: int = 300
 
 
 @dataclass(slots=True, frozen=True)
@@ -670,6 +671,7 @@ class AppSettings:
         components = _as_dict(prediction_agent.get("components"))
         model_inference = _as_dict(prediction_agent.get("model_inference"))
 
+        run_loop_section = _as_dict(app_section.get("run_loop"))
         runtime_mode = _parse_runtime_mode(runtime_section.get("mode", app_section.get("mode", "DRY_RUN_STATIC")))
         runtime = RuntimeSettings(
             app_name=str(app_section.get("name", "prediction-market-bot")),
@@ -691,6 +693,7 @@ class AppSettings:
             provider_failure_policy=_parse_provider_failure_policy(
                 runtime_section.get("provider_failure_policy", "FAIL_FAST")
             ),
+            scan_interval_sec=max(int(run_loop_section.get("scan_interval_sec", 300)), 1),
         )
         logging_settings = LoggingSettings(
             level=str(observability.get("log_level", "INFO")),

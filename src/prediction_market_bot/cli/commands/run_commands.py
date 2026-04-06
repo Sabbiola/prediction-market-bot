@@ -302,6 +302,7 @@ def run_scheduler_command(
 ) -> int:
     settings = load_settings(config_path, agents_config_path)
     configure_logging(settings.logging)
+    effective_interval = interval_sec if interval_sec > 0 else float(settings.runtime.scan_interval_sec)
     persistence = build_persistence(settings)
     operational = build_operational_repositories(settings)
     startup_report = run_startup_validation(settings=settings, persistence=persistence, operational=operational)
@@ -317,7 +318,7 @@ def run_scheduler_command(
 
     print(
         "Scheduler started "
-        f"interval_sec={interval_sec} max_iterations={max_iterations if max_iterations > 0 else 'infinite'}"
+        f"interval_sec={effective_interval} max_iterations={max_iterations if max_iterations > 0 else 'infinite'}"
     )
     shutdown_requested = False
     previous_sigint = signal.getsignal(signal.SIGINT)
@@ -358,8 +359,8 @@ def run_scheduler_command(
             iterations += 1
             if max_iterations > 0 and iterations >= max_iterations:
                 break
-            if interval_sec > 0 and not shutdown_requested:
-                sleep_remaining = interval_sec
+            if effective_interval > 0 and not shutdown_requested:
+                sleep_remaining = effective_interval
                 while sleep_remaining > 0 and not shutdown_requested:
                     step = min(sleep_remaining, 1.0)
                     time.sleep(step)
