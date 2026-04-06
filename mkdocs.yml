@@ -1,0 +1,78 @@
+site_name: Prediction Market Bot
+site_description: Documentation for the prediction-market-bot autonomous trading system
+site_author: Prediction Market Bot Team
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: README.md
+  - Architecture:
+      - Overview: ARCHITECTURE.md
+      - Beta Scope: BETA_SCOPE.md
+      - Beta Gate: BETA_GATE.md
+      - ADR — Operator Control Plane: ADR_0001_OPERATOR_CONTROL_PLANE_WEB_UI.md
+  - User Guide:
+      - Development: DEVELOPMENT.md
+      - Operations: OPERATIONS.md
+      - Runbook: RUNBOOK.md
+  - Strategy Research:
+      - Overview: STRATEGY_RESEARCH.md
+      - Alt Data: ALT_DATA_RESEARCH.md
+      - Datasets: DATASETS.md
+      - LLM Enrichment: LLM_ENRICHMENT.md
+      - Model Promotion: MODEL_PROMOTION.md
+      - Model Card Template: MODEL_CARD_TEMPLATE.md
+      - News & Social Policy: NEWS_SOCIAL_SOURCE_POLICY.md
+  - Reference:
+      - Legacy Mapping: LEGACY_MAPPING.md
+      - Refactor Plan: REFACTOR_PLAN.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/your-org/prediction-market-bot

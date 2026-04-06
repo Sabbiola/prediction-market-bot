@@ -25,6 +25,8 @@ dev = [
   "ruff>=0.5,<1",
   "types-PyYAML>=6.0.12.20241230",
   "httpx>=0.27,<1",
+  "hypothesis>=6.100,<7",
+  "bandit>=1.7,<2",
 ]
 postgres = [
   "psycopg[binary]>=3.2,<4",
@@ -62,6 +64,7 @@ pythonpath = ["src"]
 testpaths = ["tests"]
 markers = [
   "acceptance: beta-live acceptance suite and release gate tests",
+  "property: property-based tests using Hypothesis",
 ]
 norecursedirs = [
   "legacy_reference",
@@ -72,6 +75,11 @@ norecursedirs = [
   ".ruff_cache",
   "data",
 ]
+
+[tool.bandit]
+targets = ["src"]
+skips = ["B101", "B311", "B404"]
+exclude_dirs = ["tests", "data", "docs"]
 
 [tool.mypy]
 python_version = "3.11"

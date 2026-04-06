@@ -21,3 +21,9 @@ data/audit/*
 # Legacy reference code (non-runtime)
 solana-memecoin-bot-main/
 legacy_reference/
+
+# Hypothesis test database
+.hypothesis/
+
+# Log files
+data/logs/

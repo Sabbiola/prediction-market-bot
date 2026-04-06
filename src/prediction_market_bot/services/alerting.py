@@ -75,6 +75,113 @@ class WebhookAlertSink:
                     time.sleep(delay)
 
 
+_SLACK_SEVERITY_EMOJI: dict[str, str] = {
+    "info": ":information_source:",
+    "warning": ":warning:",
+    "error": ":rotating_light:",
+    "critical": ":red_circle:",
+}
+
+_TELEGRAM_SEVERITY_PREFIX: dict[str, str] = {
+    "info": "\u2139\ufe0f",
+    "warning": "\u26a0\ufe0f",
+    "error": "\U0001f6a8",
+    "critical": "\U0001f534",
+}
+
+
+@dataclass(slots=True)
+class SlackAlertSink:
+    """Sends alerts to a Slack channel via an Incoming Webhook URL."""
+
+    webhook_url: str
+    timeout_sec: float = 5.0
+    max_retries: int = 1
+    retry_backoff_sec: float = 0.5
+
+    def send(self, event: AlertEvent) -> None:
+        emoji = _SLACK_SEVERITY_EMOJI.get(event.severity, ":bell:")
+        payload = {
+            "text": f"{emoji} *[{event.severity.upper()}]* {event.title}",
+            "blocks": [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": (
+                            f"{emoji} *[{event.severity.upper()}]* {event.title}\n"
+                            f"{event.message}"
+                        ),
+                    },
+                },
+                {
+                    "type": "context",
+                    "elements": [
+                        {
+                            "type": "mrkdwn",
+                            "text": (
+                                f"*type:* `{event.event_type}` | *at:* {event.occurred_at}"
+                            ),
+                        }
+                    ],
+                },
+            ],
+        }
+        body = json.dumps(payload).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        retries = max(self.max_retries, 0)
+        for attempt in range(retries + 1):
+            try:
+                req = request.Request(self.webhook_url, method="POST", data=body, headers=headers)
+                with request.urlopen(req, timeout=max(self.timeout_sec, 0.1)) as response:  # nosec B310
+                    if int(getattr(response, "status", 200)) >= 400:
+                        raise RuntimeError(f"slack_sink_http_{response.status}")
+                return
+            except (error.URLError, error.HTTPError, TimeoutError, RuntimeError) as exc:
+                if attempt >= retries:
+                    raise RuntimeError(f"slack_webhook_delivery_failed: {type(exc).__name__}: {exc}") from exc
+                delay = max(self.retry_backoff_sec, 0.0) * (attempt + 1)
+                if delay > 0:
+                    time.sleep(delay)
+
+
+@dataclass(slots=True)
+class TelegramAlertSink:
+    """Sends alerts to a Telegram chat via the Bot API."""
+
+    bot_token: str
+    chat_id: str
+    timeout_sec: float = 5.0
+    max_retries: int = 1
+    retry_backoff_sec: float = 0.5
+
+    def send(self, event: AlertEvent) -> None:
+        prefix = _TELEGRAM_SEVERITY_PREFIX.get(event.severity, "\U0001f514")
+        text = (
+            f"{prefix} <b>[{event.severity.upper()}]</b> {_escape_html(event.title)}\n"
+            f"{_escape_html(event.message)}\n"
+            f"<i>type: {_escape_html(event.event_type)} | at: {_escape_html(event.occurred_at)}</i>"
+        )
+        payload = {"chat_id": self.chat_id, "text": text, "parse_mode": "HTML"}
+        body = json.dumps(payload).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        api_url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"  # nosec B105
+        retries = max(self.max_retries, 0)
+        for attempt in range(retries + 1):
+            try:
+                req = request.Request(api_url, method="POST", data=body, headers=headers)
+                with request.urlopen(req, timeout=max(self.timeout_sec, 0.1)) as response:  # nosec B310
+                    if int(getattr(response, "status", 200)) >= 400:
+                        raise RuntimeError(f"telegram_sink_http_{response.status}")
+                return
+            except (error.URLError, error.HTTPError, TimeoutError, RuntimeError) as exc:
+                if attempt >= retries:
+                    raise RuntimeError(f"telegram_delivery_failed: {type(exc).__name__}: {exc}") from exc
+                delay = max(self.retry_backoff_sec, 0.0) * (attempt + 1)
+                if delay > 0:
+                    time.sleep(delay)
+
+
 @dataclass(slots=True)
 class AlertingService:
     enabled: bool
@@ -124,6 +231,8 @@ def build_alerting_service(settings: AppSettings, *, secrets: SecretProvider | N
         return AlertingService(enabled=False, sinks=(), dedupe_window_sec=settings.alerting.dedupe_window_sec)
     secret_provider = secrets if secrets is not None else build_secret_provider(settings)
     sinks: list[AlertSink] = []
+
+    # ── Generic webhook ───────────────────────────────────────────────────────
     webhook = settings.alerting.webhook
     if webhook.enabled:
         url = webhook.webhook_url.strip()
@@ -143,11 +252,60 @@ def build_alerting_service(settings: AppSettings, *, secrets: SecretProvider | N
                 "alerting_webhook_disabled_missing_url",
                 extra={"event": "alerting_webhook_disabled_missing_url"},
             )
+
+    # ── Slack ────────────────────────────────────────────────────────────────
+    slack = settings.alerting.slack
+    if slack.enabled:
+        url = slack.webhook_url.strip()
+        if not url:
+            url = secret_provider.get(slack.webhook_url_env)
+        if url:
+            sinks.append(
+                SlackAlertSink(
+                    webhook_url=url,
+                    timeout_sec=slack.timeout_sec,
+                    max_retries=slack.max_retries,
+                    retry_backoff_sec=slack.retry_backoff_sec,
+                )
+            )
+        else:
+            logger.warning(
+                "alerting_slack_disabled_missing_url",
+                extra={"event": "alerting_slack_disabled_missing_url"},
+            )
+
+    # ── Telegram ─────────────────────────────────────────────────────────────
+    telegram = settings.alerting.telegram
+    if telegram.enabled:
+        token = telegram.bot_token.strip()
+        if not token:
+            token = secret_provider.get(telegram.bot_token_env)
+        chat_id = telegram.chat_id.strip()
+        if token and chat_id:
+            sinks.append(
+                TelegramAlertSink(
+                    bot_token=token,
+                    chat_id=chat_id,
+                    timeout_sec=telegram.timeout_sec,
+                    max_retries=telegram.max_retries,
+                    retry_backoff_sec=telegram.retry_backoff_sec,
+                )
+            )
+        else:
+            logger.warning(
+                "alerting_telegram_disabled_missing_token_or_chat",
+                extra={"event": "alerting_telegram_disabled_missing_token_or_chat"},
+            )
+
     return AlertingService(
         enabled=bool(sinks),
         sinks=tuple(sinks),
         dedupe_window_sec=settings.alerting.dedupe_window_sec,
     )
+
+
+def _escape_html(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def _redact_payload(value: Any) -> Any:

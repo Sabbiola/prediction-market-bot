@@ -80,6 +80,21 @@ alerting:
     timeout_sec: 5.0
     max_retries: 1
     retry_backoff_sec: 0.5
+  slack:
+    enabled: false
+    webhook_url: ""
+    webhook_url_env: PM_BOT_SLACK_WEBHOOK_URL
+    timeout_sec: 5.0
+    max_retries: 1
+    retry_backoff_sec: 0.5
+  telegram:
+    enabled: false
+    bot_token: ""
+    bot_token_env: PM_BOT_TELEGRAM_BOT_TOKEN
+    chat_id: ""
+    timeout_sec: 5.0
+    max_retries: 1
+    retry_backoff_sec: 0.5
 
 live_market_data:
   enabled: true

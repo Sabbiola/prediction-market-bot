@@ -1,6 +1,6 @@
 # HELP pm_bot_live_source_failures_total Total live source failure artifacts recorded.
 # TYPE pm_bot_live_source_failures_total gauge
-pm_bot_live_source_failures_total 0
+pm_bot_live_source_failures_total 314
 # HELP pm_bot_review_queue_depth Current pending review queue depth.
 # TYPE pm_bot_review_queue_depth gauge
 pm_bot_review_queue_depth 0
@@ -25,3 +25,41 @@ pm_bot_stale_data_events_total 0
 # HELP pm_bot_stale_data_blocked_total Risk decisions blocked due to stale market data.
 # TYPE pm_bot_stale_data_blocked_total gauge
 pm_bot_stale_data_blocked_total 0
+# HELP pm_bot_pipeline_runs_total Total completed pipeline runs.
+# TYPE pm_bot_pipeline_runs_total gauge
+pm_bot_pipeline_runs_total 93
+# HELP pm_bot_pipeline_failures_total Total failed pipeline runs.
+# TYPE pm_bot_pipeline_failures_total gauge
+pm_bot_pipeline_failures_total 0
+# HELP pm_bot_pipeline_last_run_duration_ms Duration of last pipeline run in milliseconds.
+# TYPE pm_bot_pipeline_last_run_duration_ms gauge
+pm_bot_pipeline_last_run_duration_ms 21217.966
+# HELP pm_bot_pipeline_stage_last_duration_ms Last duration per pipeline stage in milliseconds.
+# TYPE pm_bot_pipeline_stage_last_duration_ms gauge
+pm_bot_pipeline_stage_last_duration_ms{stage="execution"} 0.532
+pm_bot_pipeline_stage_last_duration_ms{stage="postmortem"} 0.48
+pm_bot_pipeline_stage_last_duration_ms{stage="prediction"} 1.944
+pm_bot_pipeline_stage_last_duration_ms{stage="research"} 21005.953
+pm_bot_pipeline_stage_last_duration_ms{stage="risk"} 1.903
+pm_bot_pipeline_stage_last_duration_ms{stage="scan"} 0.476
+pm_bot_pipeline_stage_last_duration_ms{stage="settlement"} 0.648
+pm_bot_pipeline_stage_last_duration_ms{stage="total"} 21217.966
+# HELP pm_bot_executions_total Total trade executions by outcome status.
+# TYPE pm_bot_executions_total gauge
+pm_bot_executions_total{status="filled"} 0
+pm_bot_executions_total{status="failed"} 0
+pm_bot_executions_total{status="skipped"} 366
+# HELP pm_bot_review_decisions_total Total review decisions by outcome.
+# TYPE pm_bot_review_decisions_total gauge
+pm_bot_review_decisions_total{decision="approved"} 0
+pm_bot_review_decisions_total{decision="rejected"} 0
+pm_bot_review_decisions_total{decision="expired"} 0
+# HELP pm_bot_pnl_realized_usd Cumulative realized PnL in USD (paper trading).
+# TYPE pm_bot_pnl_realized_usd gauge
+pm_bot_pnl_realized_usd 0.0
+# HELP pm_bot_pnl_unrealized_usd Current unrealized PnL in USD (paper trading).
+# TYPE pm_bot_pnl_unrealized_usd gauge
+pm_bot_pnl_unrealized_usd 0.0
+# HELP pm_bot_pnl_total_usd Total PnL (realized + unrealized) in USD (paper trading).
+# TYPE pm_bot_pnl_total_usd gauge
+pm_bot_pnl_total_usd 0.0

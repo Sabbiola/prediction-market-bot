@@ -33,6 +33,14 @@ def test_run_once_emits_slow_stage_event_when_threshold_low(
     app_cfg, agents_cfg = temp_config_paths
     run_id = f"{deterministic_run_id}-perf-slow-stage"
     _set_slow_stage_threshold(app_cfg, threshold_ms=0.001)
+    # Force static market data so the test is deterministic regardless of live
+    # Polymarket availability.  Without this the scan may return 0 candidates
+    # (live API rate-limit / transient failure) and prediction/risk stages are
+    # never entered, causing the assertion on stage_timings to fail.
+    raw = yaml.safe_load(app_cfg.read_text(encoding="utf-8")) or {}
+    raw.setdefault("live_market_data", {})["enabled"] = False
+    raw.setdefault("runtime", {})["market_data_provider"] = "STATIC"
+    app_cfg.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
 
     exit_code = main(
         [

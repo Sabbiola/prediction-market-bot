@@ -1,0 +1,16 @@
+[bandit]
+# Directories to scan
+targets = src
+
+# Skip tests — they intentionally use patterns that bandit would flag (e.g. assert)
+exclude_dirs = tests,data,docs,monitoring,k8s
+
+# Severity / confidence thresholds (LOW|MEDIUM|HIGH)
+level = LOW
+confidence = LOW
+
+# Skipped checks:
+# B101 assert_used      — asserts in src are intentional pre-conditions
+# B311 random           — stdlib random is used only for non-security jitter
+# B404 subprocess       — no subprocess calls in src currently
+skips = B101,B311,B404

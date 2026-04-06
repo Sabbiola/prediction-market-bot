@@ -326,11 +326,34 @@ class AlertingWebhookSettings:
 
 
 @dataclass(slots=True, frozen=True)
+class AlertingSlackSettings:
+    enabled: bool = False
+    webhook_url: str = ""
+    webhook_url_env: str = "PM_BOT_SLACK_WEBHOOK_URL"
+    timeout_sec: float = 5.0
+    max_retries: int = 1
+    retry_backoff_sec: float = 0.5
+
+
+@dataclass(slots=True, frozen=True)
+class AlertingTelegramSettings:
+    enabled: bool = False
+    bot_token: str = ""
+    bot_token_env: str = "PM_BOT_TELEGRAM_BOT_TOKEN"
+    chat_id: str = ""
+    timeout_sec: float = 5.0
+    max_retries: int = 1
+    retry_backoff_sec: float = 0.5
+
+
+@dataclass(slots=True, frozen=True)
 class AlertingSettings:
     enabled: bool = False
     dedupe_window_sec: int = 300
     repeated_live_source_failures_threshold: int = 3
     webhook: AlertingWebhookSettings = field(default_factory=AlertingWebhookSettings)
+    slack: AlertingSlackSettings = field(default_factory=AlertingSlackSettings)
+    telegram: AlertingTelegramSettings = field(default_factory=AlertingTelegramSettings)
 
 
 @dataclass(slots=True, frozen=True)
@@ -616,6 +639,8 @@ class AppSettings:
         http_section = _as_dict(app_config.get("http"))
         alerting_section = _as_dict(app_config.get("alerting"))
         alerting_webhook_section = _as_dict(alerting_section.get("webhook"))
+        alerting_slack_section = _as_dict(alerting_section.get("slack"))
+        alerting_telegram_section = _as_dict(alerting_section.get("telegram"))
         live_market_section = _as_dict(app_config.get("live_market_data"))
         live_research_section = _as_dict(app_config.get("live_research"))
         alt_data_section = _as_dict(app_config.get("alt_data"))
@@ -870,6 +895,29 @@ class AppSettings:
                 timeout_sec=max(float(alerting_webhook_section.get("timeout_sec", 5.0)), 0.1),
                 max_retries=max(int(alerting_webhook_section.get("max_retries", 1)), 0),
                 retry_backoff_sec=max(float(alerting_webhook_section.get("retry_backoff_sec", 0.5)), 0.0),
+            ),
+            slack=AlertingSlackSettings(
+                enabled=_as_bool(alerting_slack_section.get("enabled"), False),
+                webhook_url=_as_str(alerting_slack_section.get("webhook_url")),
+                webhook_url_env=_as_str(
+                    alerting_slack_section.get("webhook_url_env"),
+                    "PM_BOT_SLACK_WEBHOOK_URL",
+                ),
+                timeout_sec=max(float(alerting_slack_section.get("timeout_sec", 5.0)), 0.1),
+                max_retries=max(int(alerting_slack_section.get("max_retries", 1)), 0),
+                retry_backoff_sec=max(float(alerting_slack_section.get("retry_backoff_sec", 0.5)), 0.0),
+            ),
+            telegram=AlertingTelegramSettings(
+                enabled=_as_bool(alerting_telegram_section.get("enabled"), False),
+                bot_token=_as_str(alerting_telegram_section.get("bot_token")),
+                bot_token_env=_as_str(
+                    alerting_telegram_section.get("bot_token_env"),
+                    "PM_BOT_TELEGRAM_BOT_TOKEN",
+                ),
+                chat_id=_as_str(alerting_telegram_section.get("chat_id")),
+                timeout_sec=max(float(alerting_telegram_section.get("timeout_sec", 5.0)), 0.1),
+                max_retries=max(int(alerting_telegram_section.get("max_retries", 1)), 0),
+                retry_backoff_sec=max(float(alerting_telegram_section.get("retry_backoff_sec", 0.5)), 0.0),
             ),
         )
         model_promotion = ModelPromotionSettings(
