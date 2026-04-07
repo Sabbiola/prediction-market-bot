@@ -52,10 +52,25 @@ class _RuntimeBinaryModel(Protocol):
 
 
 def _try_import_xgboost() -> Any:
-    """Lazy-import xgboost. Returns the module or None."""
     try:
         import xgboost  # type: ignore[import-untyped]
         return xgboost
+    except ImportError:
+        return None
+
+
+def _try_import_lightgbm() -> Any:
+    try:
+        import lightgbm  # type: ignore[import-untyped]
+        return lightgbm
+    except ImportError:
+        return None
+
+
+def _try_import_catboost() -> Any:
+    try:
+        import catboost  # type: ignore[import-untyped]
+        return catboost
     except ImportError:
         return None
 
@@ -128,6 +143,118 @@ class _XGBoostRuntimeModel:
         dm = self._DMatrix(row, feature_names=list(self._feature_names))
         prob = float(self._booster.predict(dm)[0])
         return _clamp_probability(prob)
+
+
+class _LightGBMRuntimeModel:
+    def __init__(self, feature_names: tuple[str, ...], model_path: Path) -> None:
+        self._feature_names = feature_names
+        lgb = _try_import_lightgbm()
+        if lgb is None:
+            raise PredictionModelArtifactError(
+                f"lightgbm_not_installed model_path={model_path} — pip install lightgbm"
+            )
+        if not model_path.exists():
+            raise PredictionModelArtifactError(f"lgbm_model_not_found path={model_path}")
+        self._booster = lgb.Booster(model_file=str(model_path))
+
+    @property
+    def feature_names(self) -> tuple[str, ...]:
+        return self._feature_names
+
+    def predict_proba(self, features: Mapping[str, float]) -> float:
+        import numpy as np
+        row = np.array([[float(features.get(n, 0.0)) for n in self._feature_names]], dtype=np.float32)
+        prob = float(self._booster.predict(row)[0])
+        return _clamp_probability(prob)
+
+
+class _CatBoostRuntimeModel:
+    def __init__(self, feature_names: tuple[str, ...], model_path: Path) -> None:
+        self._feature_names = feature_names
+        cb = _try_import_catboost()
+        if cb is None:
+            raise PredictionModelArtifactError(
+                f"catboost_not_installed model_path={model_path} — pip install catboost"
+            )
+        if not model_path.exists():
+            raise PredictionModelArtifactError(f"catboost_model_not_found path={model_path}")
+        self._model = cb.CatBoost()
+        self._model.load_model(str(model_path))
+
+    @property
+    def feature_names(self) -> tuple[str, ...]:
+        return self._feature_names
+
+    def predict_proba(self, features: Mapping[str, float]) -> float:
+        import numpy as np
+        row = np.array([[float(features.get(n, 0.0)) for n in self._feature_names]], dtype=np.float32)
+        prob = float(self._model.predict(row, prediction_type="Probability")[0][1])
+        return _clamp_probability(prob)
+
+
+class _StackingRuntimeModel:
+    """Meta-model: LightGBM + XGBoost + CatBoost base, LR meta with isotonic scaling."""
+
+    def __init__(
+        self,
+        feature_names: tuple[str, ...],
+        base_model_paths: Mapping[str, str],
+        artifact_dir: Path,
+        meta_weights: tuple[float, ...],
+        meta_bias: float,
+        meta_scaler_means: tuple[float, ...],
+        meta_scaler_stds: tuple[float, ...],
+    ) -> None:
+        self._feature_names = feature_names
+        self._meta_weights = meta_weights
+        self._meta_bias = meta_bias
+        self._meta_means = meta_scaler_means
+        self._meta_stds = meta_scaler_stds
+        self._base_models: list[_RuntimeBinaryModel] = []
+
+        loaders = {
+            "lgbm": (_LightGBMRuntimeModel, "lgbm_model_path"),
+            "xgb":  (_XGBoostRuntimeModel,  "xgb_model_path"),
+            "cat":  (_CatBoostRuntimeModel,  "cat_model_path"),
+        }
+        for name, (cls, _) in loaders.items():
+            rel = base_model_paths.get(name, "")
+            if not rel:
+                continue
+            path = artifact_dir / rel
+            try:
+                self._base_models.append(cls(feature_names, path))  # type: ignore[call-arg]
+            except PredictionModelArtifactError as exc:
+                raise PredictionModelArtifactError(
+                    f"stacking_base_model_load_failed name={name} error={exc}"
+                ) from exc
+
+        if not self._base_models:
+            raise PredictionModelArtifactError("stacking_no_base_models_loaded")
+
+    @property
+    def feature_names(self) -> tuple[str, ...]:
+        return self._feature_names
+
+    def predict_proba(self, features: Mapping[str, float]) -> float:
+        # Level-0 predictions
+        base_probas = [m.predict_proba(features) for m in self._base_models]
+        # Standardise meta-features
+        n = len(base_probas)
+        meta_scaled = [
+            (base_probas[i] - self._meta_means[i]) / max(self._meta_stds[i], 1e-12)
+            for i in range(min(n, len(self._meta_means)))
+        ]
+        # LR meta
+        logit = self._meta_bias + sum(
+            self._meta_weights[i] * meta_scaled[i]
+            for i in range(min(len(self._meta_weights), len(meta_scaled)))
+        )
+        if logit >= 0:
+            exp = math.exp(-logit)
+            return _clamp_probability(1.0 / (1.0 + exp))
+        exp = math.exp(logit)
+        return _clamp_probability(exp / (1.0 + exp))
 
 
 @dataclass(slots=True, frozen=True)
@@ -334,8 +461,38 @@ class PredictionModelArtifactLoader:
             xgb_model_rel = str(payload.get("xgb_model_path") or "").strip()
             if not xgb_model_rel:
                 raise PredictionModelArtifactError(f"missing_xgb_model_path path={path}")
-            xgb_model_path = path.parent / xgb_model_rel
-            return _XGBoostRuntimeModel(feature_names=feature_names, model_path=xgb_model_path)
+            return _XGBoostRuntimeModel(feature_names=feature_names, model_path=path.parent / xgb_model_rel)
+        if algorithm == "lightgbm":
+            feature_names = _as_str_tuple(payload.get("feature_names")) or feature_columns
+            lgbm_rel = str(payload.get("lgbm_model_path") or "").strip()
+            if not lgbm_rel:
+                raise PredictionModelArtifactError(f"missing_lgbm_model_path path={path}")
+            return _LightGBMRuntimeModel(feature_names=feature_names, model_path=path.parent / lgbm_rel)
+        if algorithm == "catboost":
+            feature_names = _as_str_tuple(payload.get("feature_names")) or feature_columns
+            cat_rel = str(payload.get("cat_model_path") or "").strip()
+            if not cat_rel:
+                raise PredictionModelArtifactError(f"missing_cat_model_path path={path}")
+            return _CatBoostRuntimeModel(feature_names=feature_names, model_path=path.parent / cat_rel)
+        if algorithm == "stacking":
+            feature_names = _as_str_tuple(payload.get("feature_names")) or feature_columns
+            base_paths_raw = payload.get("base_model_paths")
+            if not isinstance(base_paths_raw, Mapping):
+                raise PredictionModelArtifactError(f"missing_stacking_base_model_paths path={path}")
+            base_paths: dict[str, str] = {k: str(v) for k, v in base_paths_raw.items()}
+            meta_weights = self._coerce_float_tuple(payload.get("meta_weights"), name="meta_weights", path=path)
+            meta_bias = _as_float(payload.get("meta_bias"))
+            meta_means = self._coerce_float_tuple(payload.get("meta_scaler_means"), name="meta_scaler_means", path=path)
+            meta_stds  = self._coerce_float_tuple(payload.get("meta_scaler_stds"),  name="meta_scaler_stds",  path=path)
+            return _StackingRuntimeModel(
+                feature_names=feature_names,
+                base_model_paths=base_paths,
+                artifact_dir=path.parent,
+                meta_weights=meta_weights,
+                meta_bias=meta_bias,
+                meta_scaler_means=meta_means,
+                meta_scaler_stds=meta_stds,
+            )
         if algorithm == "xgboost_candidate":
             raise PredictionModelArtifactError(
                 "unsupported_runtime_algorithm=xgboost_candidate "

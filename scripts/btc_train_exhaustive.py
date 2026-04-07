@@ -1,29 +1,30 @@
-"""Exhaustive BTC Up/Down model search — XGBoost + Logistic Regression.
+"""Exhaustive BTC Up/Down model search — LR + LightGBM + XGBoost + CatBoost + Stacking.
 
 Grid search over:
-  - 2 model types: XGBoost (non-linear) + Logistic Regression
-  - 18 feature configs (OHLCV technicals + derivatives: funding rate, LS ratio, taker ratio)
+  - 5 model types: Logistic Regression, LightGBM, XGBoost, CatBoost, Stacking ensemble
+  - 18 feature configs (OHLCV technicals + derivatives: funding rate, LS/taker ratio,
+    order book imbalance, open interest)
   - Multiple hyperparameter combos per model type
-  - 3-fold walk-forward cross-validation
+  - 3-fold walk-forward cross-validation (no future leakage)
+
+Metrics: AUC-ROC (primary), accuracy, Brier score, log-loss
 
 Usage:
-    # 1. Fetch base data:
+    # Fetch data first:
     python scripts/btc_fetch_ohlcv.py --months 24
     python scripts/btc_fetch_derivatives.py --months 24
 
-    # 2. Train on 5m only (~15 min):
+    # Train on single interval:
     python scripts/btc_train_exhaustive.py --interval 5m
-
-    # 3. Train on 15m:
     python scripts/btc_train_exhaustive.py --interval 15m
 
-    # 4. Train all (default):
+    # Train all (default = 5m + 15m):
     python scripts/btc_train_exhaustive.py
 
 Outputs (per interval):
-    data/models/v3/btc_updown_{interval}_best.json       (artifact)
-    data/models/v3/btc_updown_{interval}_xgb_model.json  (XGBoost native, if XGB wins)
-    data/models/v3/grid_search_results_{interval}.json    (full ranking)
+    data/models/v3/btc_updown_{interval}_best.json
+    data/models/v3/btc_updown_{interval}_{model}.model  (LightGBM/XGB/CatBoost native)
+    data/models/v3/grid_search_results_{interval}.json
 """
 from __future__ import annotations
 
@@ -43,13 +44,29 @@ from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import StandardScaler
 
+warnings.filterwarnings("ignore", category=FutureWarning, module="sklearn")
+warnings.filterwarnings("ignore", category=UserWarning)
+
+# Optional heavy deps — graceful fallback
 try:
     from xgboost import XGBClassifier
     HAS_XGBOOST = True
 except ImportError:
     HAS_XGBOOST = False
 
-warnings.filterwarnings("ignore", category=FutureWarning, module="sklearn")
+try:
+    import lightgbm as lgb
+    HAS_LIGHTGBM = True
+except ImportError:
+    HAS_LIGHTGBM = False
+
+try:
+    from catboost import CatBoostClassifier
+    HAS_CATBOOST = True
+except ImportError:
+    HAS_CATBOOST = False
+
+print(f"  Models available: LR=True  LightGBM={HAS_LIGHTGBM}  XGBoost={HAS_XGBOOST}  CatBoost={HAS_CATBOOST}")
 
 # ---------------------------------------------------------------------------
 # Paths and interval config
@@ -58,7 +75,9 @@ BASE_OHLCV_PATH = Path("data/btc/ohlcv_5m.jsonl")
 FUNDING_PATH    = Path("data/btc/funding_rate.jsonl")
 LS_RATIO_PATH   = Path("data/btc/long_short_ratio.jsonl")
 TAKER_PATH      = Path("data/btc/taker_ratio.jsonl")
-OUT_DIR = Path("data/models/v3")
+OI_PATH         = Path("data/btc/open_interest.jsonl")
+OB_PATH         = Path("data/btc/order_book_snapshots.jsonl")
+OUT_DIR         = Path("data/models/v3")
 
 _INTERVAL_FACTOR: dict[str, int] = {
     "5m": 1, "15m": 3, "30m": 6, "1h": 12, "2h": 24, "4h": 48,
@@ -93,14 +112,14 @@ def load_or_resample(interval: str, candles_5m: list[dict]) -> list[dict]:
     native_path = Path(f"data/btc/ohlcv_{interval}.jsonl")
     if interval != "5m" and native_path.exists():
         print(f"  Using native {interval} candles from {native_path}")
-        candles: list[dict] = []
+        out: list[dict] = []
         with native_path.open(encoding="utf-8") as fh:
             for line in fh:
-                line = line.strip()
-                if line:
-                    candles.append(json.loads(line))
-        candles.sort(key=lambda c: c["open_time_ms"])
-        return candles
+                s = line.strip()
+                if s:
+                    out.append(json.loads(s))
+        out.sort(key=lambda c: c["open_time_ms"])
+        return out
     factor = _INTERVAL_FACTOR[interval]
     if factor == 1:
         return candles_5m
@@ -119,61 +138,64 @@ def _load_jsonl(path: Path) -> list[dict]:
     rows = []
     with path.open(encoding="utf-8") as fh:
         for line in fh:
-            line = line.strip()
-            if line:
-                rows.append(json.loads(line))
+            s = line.strip()
+            if s:
+                rows.append(json.loads(s))
     rows.sort(key=lambda r: r["timestamp_ms"])
     return rows
 
 
 def _align_series(candle_times_ms: np.ndarray, series: list[dict], value_key: str) -> np.ndarray:
-    """For each candle, find the most recent value from `series` (by timestamp).
-
-    Returns array of same length as candle_times_ms, with np.nan where no data.
-    """
+    """For each candle, look up the most recent value from `series` (by timestamp)."""
     n = len(candle_times_ms)
     result = np.full(n, np.nan)
     if not series:
         return result
-    ts = [r["timestamp_ms"] for r in series]
+    ts   = [r["timestamp_ms"] for r in series]
     vals = [r[value_key] for r in series]
     for i in range(n):
-        idx = bisect_right(ts, candle_times_ms[i]) - 1
+        idx = bisect_right(ts, int(candle_times_ms[i])) - 1
         if idx >= 0:
             result[i] = vals[idx]
     return result
 
 
 class DerivativesData:
-    """Holds pre-aligned derivatives arrays for fast feature building."""
+    """Pre-aligned derivatives arrays indexed by candle position."""
 
     def __init__(self, candle_times_ms: np.ndarray) -> None:
-        self.has_data = False
+        self.has_any = False
+
         funding_raw = _load_jsonl(FUNDING_PATH)
         ls_raw      = _load_jsonl(LS_RATIO_PATH)
         taker_raw   = _load_jsonl(TAKER_PATH)
+        oi_raw      = _load_jsonl(OI_PATH)
+        ob_raw      = _load_jsonl(OB_PATH)
 
-        if not funding_raw and not ls_raw and not taker_raw:
-            print("  [derivatives] No derivatives data found, skipping")
-            self.funding_rate  = np.full(len(candle_times_ms), np.nan)
-            self.ls_ratio      = np.full(len(candle_times_ms), np.nan)
-            self.taker_ratio   = np.full(len(candle_times_ms), np.nan)
-            return
+        self.funding_rate  = _align_series(candle_times_ms, funding_raw, "funding_rate")
+        self.ls_ratio      = _align_series(candle_times_ms, ls_raw,      "long_short_ratio")
+        self.taker_ratio   = _align_series(candle_times_ms, taker_raw,   "buy_sell_ratio")
+        self.oi            = _align_series(candle_times_ms, oi_raw,      "open_interest")
+        self.ob_imbalance  = _align_series(candle_times_ms, ob_raw,      "imbalance")
 
-        self.funding_rate = _align_series(candle_times_ms, funding_raw, "funding_rate")
-        self.ls_ratio     = _align_series(candle_times_ms, ls_raw,     "long_short_ratio")
-        self.taker_ratio  = _align_series(candle_times_ms, taker_raw,  "buy_sell_ratio")
-
-        fr_valid = int(np.isfinite(self.funding_rate).sum())
-        ls_valid = int(np.isfinite(self.ls_ratio).sum())
-        tk_valid = int(np.isfinite(self.taker_ratio).sum())
+        counts = {
+            "funding":     int(np.isfinite(self.funding_rate).sum()),
+            "ls_ratio":    int(np.isfinite(self.ls_ratio).sum()),
+            "taker":       int(np.isfinite(self.taker_ratio).sum()),
+            "oi":          int(np.isfinite(self.oi).sum()),
+            "ob_imbalance":int(np.isfinite(self.ob_imbalance).sum()),
+        }
         total = len(candle_times_ms)
-        self.has_data = (fr_valid + ls_valid + tk_valid) > 0
-        print(f"  [derivatives] Aligned: funding={fr_valid}/{total}  ls_ratio={ls_valid}/{total}  taker={tk_valid}/{total}")
+        self.has_any = any(v > 0 for v in counts.values())
+        available = [k for k, v in counts.items() if v > 0]
+        print(f"  [derivatives] total={total}  available={available}")
+        for k, v in counts.items():
+            if v > 0:
+                print(f"    {k}: {v}/{total} ({v/total*100:.0f}%)")
 
 
 # ---------------------------------------------------------------------------
-# Feature computation (vectorised with numpy)
+# Feature computation
 # ---------------------------------------------------------------------------
 
 def _ema(arr: np.ndarray, period: int) -> np.ndarray:
@@ -189,7 +211,7 @@ def _rsi_series(closes: np.ndarray, period: int) -> np.ndarray:
     n = len(closes)
     rsi = np.full(n, 0.5)
     deltas = np.diff(closes, prepend=closes[0])
-    gains = np.where(deltas > 0, deltas, 0.0)
+    gains  = np.where(deltas > 0, deltas, 0.0)
     losses = np.where(deltas < 0, -deltas, 0.0)
     for i in range(period, n):
         avg_g = gains[i - period + 1:i + 1].mean()
@@ -218,29 +240,25 @@ def build_features(
     use_atr: bool,
     use_derivatives: bool,
 ) -> tuple[np.ndarray, np.ndarray, list[str]]:
-    """Compute feature matrix X and label vector y.
-
-    Label: 1 if candle.close > candle.open (UP), else 0.
-    Features use PRIOR completed candles only (no leakage).
-    """
     n = len(candles)
-    opens  = np.array([c["open"]   for c in candles])
-    highs  = np.array([c["high"]   for c in candles])
-    lows   = np.array([c["low"]    for c in candles])
-    closes = np.array([c["close"]  for c in candles])
-    vols   = np.array([c["volume"] for c in candles])
+    opens  = np.array([c["open"]        for c in candles])
+    highs  = np.array([c["high"]        for c in candles])
+    lows   = np.array([c["low"]         for c in candles])
+    closes = np.array([c["close"]       for c in candles])
+    vols   = np.array([c["volume"]      for c in candles])
     times  = np.array([c["open_time_ms"] for c in candles])
 
-    rsi_arr = _rsi_series(closes, rsi_period)
-    macd_line = None
+    rsi_arr  = _rsi_series(closes, rsi_period)
+    macd_arr = None
     if use_macd:
         ema12 = _ema(closes, 12)
         ema26 = _ema(closes, 26)
-        macd_line = (ema12 - ema26) / np.maximum(closes, 1e-8)
+        macd_arr = (ema12 - ema26) / np.maximum(closes, 1e-8)
 
     required_warmup = max(
         max(return_lags, default=1), rsi_period + 1, bb_window,
-        vol_ma_window, volatility_window, 26 if use_macd else 1,
+        vol_ma_window, volatility_window,
+        26 if use_macd else 1,
         14 if use_stochastic else 1,
     ) + 2
 
@@ -250,9 +268,7 @@ def build_features(
     first_row = True
 
     for idx in range(required_warmup, n - 1):
-        c = candles[idx]
-        label = 1 if c["close"] > c["open"] else 0
-
+        label = 1 if candles[idx]["close"] > candles[idx]["open"] else 0
         feats: list[float] = []
         names: list[str] = []
 
@@ -260,61 +276,55 @@ def build_features(
         prev_close = closes[idx - 1]
         for lag in return_lags:
             base = closes[max(0, idx - lag)]
-            ret = (prev_close - base) / max(base, 1e-8)
-            feats.append(float(np.clip(ret, -0.30, 0.30)))
+            feats.append(float(np.clip((prev_close - base) / max(base, 1e-8), -0.30, 0.30)))
             names.append(f"f_btc_return_{lag}c")
 
         # RSI
-        rsi_val = rsi_arr[idx - 1]
-        feats.append(float(np.clip((rsi_val - 0.5) * 2.0, -1.0, 1.0)))
+        feats.append(float(np.clip((rsi_arr[idx - 1] - 0.5) * 2.0, -1.0, 1.0)))
         names.append(f"f_btc_rsi_{rsi_period}")
 
         # Volume ratio
-        vol_slice = vols[max(0, idx - vol_ma_window):idx]
-        avg_vol = vol_slice.mean() if len(vol_slice) > 0 else vols[idx - 1]
+        vol_sl = vols[max(0, idx - vol_ma_window):idx]
+        avg_vol = vol_sl.mean() if len(vol_sl) > 0 else vols[idx - 1]
         feats.append(float(np.clip(math.log(max(vols[idx - 1], 1e-8) / max(avg_vol, 1e-8)), -3.0, 3.0)))
         names.append(f"f_btc_vol_ratio_ma{vol_ma_window}")
 
         # Realized volatility
-        cl_slice = closes[max(0, idx - volatility_window):idx]
-        if len(cl_slice) >= 2:
-            rets_s = np.diff(cl_slice) / np.maximum(cl_slice[:-1], 1e-8)
-            f_vol = float(np.clip(rets_s.std() * 100, 0.0, 5.0))
+        cl_sl = closes[max(0, idx - volatility_window):idx]
+        if len(cl_sl) >= 2:
+            rets = np.diff(cl_sl) / np.maximum(cl_sl[:-1], 1e-8)
+            feats.append(float(np.clip(rets.std() * 100, 0.0, 5.0)))
         else:
-            f_vol = 0.0
-        feats.append(f_vol)
+            feats.append(0.0)
         names.append(f"f_btc_volatility_{volatility_window}c")
 
         # Bollinger Band
-        bb_slice = closes[max(0, idx - bb_window):idx]
-        if len(bb_slice) >= 2:
-            bb_mean = bb_slice.mean()
-            bb_std = bb_slice.std()
+        bb_sl = closes[max(0, idx - bb_window):idx]
+        if len(bb_sl) >= 2:
+            bb_mean = bb_sl.mean()
+            bb_std  = bb_sl.std()
             bw = max((bb_mean + 2 * bb_std) - (bb_mean - 2 * bb_std), 1e-8)
-            bb_pos = float(np.clip((closes[idx - 1] - (bb_mean - 2 * bb_std)) / bw, 0.0, 1.0)) - 0.5
+            feats.append(float(np.clip((closes[idx - 1] - (bb_mean - 2 * bb_std)) / bw, 0.0, 1.0)) - 0.5)
         else:
-            bb_pos = 0.0
-        feats.append(bb_pos)
+            feats.append(0.0)
         names.append(f"f_btc_bb_pos_{bb_window}")
 
-        # Time features
+        # Time
         if use_hour:
             ts_sec = times[idx] / 1000
-            hour_frac = (ts_sec % 86400) / 3600
-            feats.append(math.sin(2 * math.pi * hour_frac / 24))
-            feats.append(math.cos(2 * math.pi * hour_frac / 24))
+            hf = (ts_sec % 86400) / 3600
+            feats += [math.sin(2 * math.pi * hf / 24), math.cos(2 * math.pi * hf / 24)]
             names += ["f_decision_hour_utc_sin", "f_decision_hour_utc_cos"]
 
         if use_weekday:
             ts_sec = times[idx] / 1000
             dow = (int(ts_sec // 86400) + 3) % 7
-            feats.append(math.sin(2 * math.pi * dow / 7))
-            feats.append(math.cos(2 * math.pi * dow / 7))
+            feats += [math.sin(2 * math.pi * dow / 7), math.cos(2 * math.pi * dow / 7)]
             names += ["f_decision_weekday_sin", "f_decision_weekday_cos"]
 
         # MACD
         if use_macd:
-            feats.append(float(np.clip(macd_line[idx - 1], -0.05, 0.05)))
+            feats.append(float(np.clip(macd_arr[idx - 1], -0.05, 0.05)))
             names.append("f_btc_macd")
 
         # Stochastic %K
@@ -324,32 +334,44 @@ def build_features(
             feats.append(float(np.clip((closes[idx - 1] - lo14) / max(hi14 - lo14, 1e-8), 0.0, 1.0)) - 0.5)
             names.append("f_btc_stochastic_k")
 
-        # ATR ratio
+        # ATR
         if use_atr:
-            tr_slice = []
-            for k in range(max(1, idx - 14), idx):
-                tr = max(highs[k] - lows[k], abs(highs[k] - closes[k - 1]), abs(lows[k] - closes[k - 1]))
-                tr_slice.append(tr)
-            atr = np.mean(tr_slice) if tr_slice else 1e-8
+            tr_s = [max(highs[k] - lows[k], abs(highs[k] - closes[k - 1]), abs(lows[k] - closes[k - 1]))
+                    for k in range(max(1, idx - 14), idx)]
+            atr = np.mean(tr_s) if tr_s else 1e-8
             feats.append(float(np.clip(atr / max(closes[idx - 1], 1e-8) * 100, 0.0, 5.0)))
             names.append("f_btc_atr_ratio")
 
-        # -- Derivatives features --
-        if use_derivatives and derivatives is not None and derivatives.has_data:
-            # Funding rate (normalised: typical range -0.01 to +0.01, scale x100)
-            fr = derivatives.funding_rate[idx - 1]
+        # Derivatives
+        if use_derivatives and derivatives is not None and derivatives.has_any:
+            i1 = idx - 1
+
+            fr = derivatives.funding_rate[i1]
             feats.append(float(np.clip(fr * 100 if np.isfinite(fr) else 0.0, -3.0, 3.0)))
             names.append("f_btc_funding_rate")
 
-            # Long/short ratio (centered at 1.0, log-scaled)
-            ls = derivatives.ls_ratio[idx - 1]
-            feats.append(float(np.clip(math.log(max(ls, 0.01)) if np.isfinite(ls) else 0.0, -2.0, 2.0)))
+            ls = derivatives.ls_ratio[i1]
+            feats.append(float(np.clip(math.log(max(ls, 0.01)) if np.isfinite(ls) and ls > 0 else 0.0, -2.0, 2.0)))
             names.append("f_btc_ls_ratio_log")
 
-            # Taker buy/sell ratio (centered at 1.0, log-scaled)
-            tk = derivatives.taker_ratio[idx - 1]
-            feats.append(float(np.clip(math.log(max(tk, 0.01)) if np.isfinite(tk) else 0.0, -2.0, 2.0)))
+            tk = derivatives.taker_ratio[i1]
+            feats.append(float(np.clip(math.log(max(tk, 0.01)) if np.isfinite(tk) and tk > 0 else 0.0, -2.0, 2.0)))
             names.append("f_btc_taker_ratio_log")
+
+            # Open interest — percentage change vs previous reading
+            oi_cur  = derivatives.oi[i1]
+            oi_prev = derivatives.oi[max(0, i1 - 1)]
+            if np.isfinite(oi_cur) and np.isfinite(oi_prev) and oi_prev > 0:
+                oi_chg = (oi_cur - oi_prev) / oi_prev
+                feats.append(float(np.clip(oi_chg * 100, -5.0, 5.0)))
+            else:
+                feats.append(0.0)
+            names.append("f_btc_oi_change_pct")
+
+            # Order book imbalance (already in [-1, 1] range)
+            ob = derivatives.ob_imbalance[i1]
+            feats.append(float(np.clip(ob if np.isfinite(ob) else 0.0, -1.0, 1.0)))
+            names.append("f_btc_ob_imbalance")
 
         rows_X.append(feats)
         rows_y.append(label)
@@ -423,122 +445,235 @@ _BASE_CONFIGS: list[dict[str, Any]] = [
 
 
 def _build_feature_configs(has_derivatives: bool) -> list[dict[str, Any]]:
-    """Return all feature configs. Duplicate base configs with derivatives=True if data available."""
-    configs: list[dict[str, Any]] = []
-    for fc in _BASE_CONFIGS:
-        configs.append({**fc, "use_derivatives": False})
+    configs = [{**fc, "use_derivatives": False} for fc in _BASE_CONFIGS]
     if has_derivatives:
-        for fc in _BASE_CONFIGS:
-            configs.append({**fc, "name": fc["name"] + "+deriv", "use_derivatives": True})
+        configs += [{**fc, "name": fc["name"] + "+deriv", "use_derivatives": True} for fc in _BASE_CONFIGS]
     return configs
 
 
 # ---------------------------------------------------------------------------
-# Hyperparameter grid
+# HP grid — one entry per model type x hyperparameter combo
 # ---------------------------------------------------------------------------
 
 def _build_hp_grid() -> list[dict[str, Any]]:
     grid: list[dict[str, Any]] = []
 
-    # Logistic Regression grid
-    for l1_ratio, c_val in product(
-        [0.0, 0.5, 1.0],
-        [0.001, 0.01, 0.1, 1.0, 10.0, 100.0],
-    ):
-        penalty_name = {0.0: "l2", 0.5: "elasticnet", 1.0: "l1"}[l1_ratio]
-        grid.append({
-            "model_type": "lr",
-            "l1_ratio": l1_ratio,
-            "C": c_val,
-            "penalty_name": penalty_name,
-        })
+    # Logistic Regression
+    for l1_ratio, c_val in product([0.0, 0.5, 1.0], [0.001, 0.01, 0.1, 1.0, 10.0, 100.0]):
+        pname = {0.0: "l2", 0.5: "elasticnet", 1.0: "l1"}[l1_ratio]
+        grid.append({"model_type": "lr", "l1_ratio": l1_ratio, "C": c_val, "penalty_name": pname})
 
-    # XGBoost grid
-    if HAS_XGBOOST:
-        for n_est, max_depth, lr, subsample, colsample in product(
-            [100, 300],      # n_estimators
-            [3, 5, 7],       # max_depth
-            [0.01, 0.05],    # learning_rate
-            [0.8],           # subsample
-            [0.8],           # colsample_bytree
+    # LightGBM
+    if HAS_LIGHTGBM:
+        for n_est, num_leaves, lr, min_data in product(
+            [200, 500],       # n_estimators
+            [15, 31, 63],     # num_leaves
+            [0.01, 0.05],     # learning_rate
+            [20],             # min_child_samples
         ):
-            grid.append({
-                "model_type": "xgb",
-                "n_estimators": n_est,
-                "max_depth": max_depth,
-                "learning_rate": lr,
-                "subsample": subsample,
-                "colsample_bytree": colsample,
-            })
+            grid.append({"model_type": "lgbm", "n_estimators": n_est,
+                          "num_leaves": num_leaves, "learning_rate": lr, "min_child_samples": min_data})
+
+    # XGBoost
+    if HAS_XGBOOST:
+        for n_est, max_depth, lr, subsample in product(
+            [200, 500], [3, 5, 7], [0.01, 0.05], [0.8],
+        ):
+            grid.append({"model_type": "xgb", "n_estimators": n_est,
+                          "max_depth": max_depth, "learning_rate": lr, "subsample": subsample})
+
+    # CatBoost
+    if HAS_CATBOOST:
+        for n_est, depth, lr in product([300, 600], [4, 6], [0.01, 0.05]):
+            grid.append({"model_type": "cat", "n_estimators": n_est, "depth": depth, "learning_rate": lr})
+
+    # Stacking (always present — uses LR as meta, best base models as level-0)
+    grid.append({"model_type": "stack", "meta": "lr", "base_models": "lgbm+xgb+cat"})
 
     return grid
 
 
 def _hp_label(hp: dict[str, Any]) -> str:
-    if hp["model_type"] == "lr":
-        return f"LR  pen={hp['penalty_name']:>11}  C={hp['C']:>6}"
-    return f"XGB n={hp['n_estimators']:>3} d={hp['max_depth']} lr={hp['learning_rate']}"
+    mt = hp["model_type"]
+    if mt == "lr":
+        return f"LR    pen={hp['penalty_name']:>11}  C={hp['C']:>6}"
+    if mt == "lgbm":
+        return f"LGBM  n={hp['n_estimators']:>3}  leaves={hp['num_leaves']:>2}  lr={hp['learning_rate']}"
+    if mt == "xgb":
+        return f"XGB   n={hp['n_estimators']:>3}  d={hp['max_depth']}  lr={hp['learning_rate']}"
+    if mt == "cat":
+        return f"CAT   n={hp['n_estimators']:>3}  d={hp['depth']}  lr={hp['learning_rate']}"
+    return f"STACK base={hp.get('base_models','?')}"
+
+
+# ---------------------------------------------------------------------------
+# Model factories
+# ---------------------------------------------------------------------------
+
+def _make_lgbm(hp: dict[str, Any]) -> Any:
+    return lgb.LGBMClassifier(
+        n_estimators=hp["n_estimators"],
+        num_leaves=hp["num_leaves"],
+        learning_rate=hp["learning_rate"],
+        min_child_samples=hp["min_child_samples"],
+        subsample=0.8,
+        colsample_bytree=0.8,
+        random_state=42,
+        n_jobs=-1,
+        verbosity=-1,
+    )
+
+
+def _make_xgb(hp: dict[str, Any]) -> Any:
+    return XGBClassifier(
+        n_estimators=hp["n_estimators"],
+        max_depth=hp["max_depth"],
+        learning_rate=hp["learning_rate"],
+        subsample=hp.get("subsample", 0.8),
+        colsample_bytree=0.8,
+        objective="binary:logistic",
+        eval_metric="logloss",
+        random_state=42,
+        n_jobs=-1,
+        verbosity=0,
+    )
+
+
+def _make_cat(hp: dict[str, Any]) -> Any:
+    return CatBoostClassifier(
+        iterations=hp["n_estimators"],
+        depth=hp["depth"],
+        learning_rate=hp["learning_rate"],
+        random_seed=42,
+        verbose=False,
+        allow_writing_files=False,
+    )
 
 
 # ---------------------------------------------------------------------------
 # Training + evaluation
 # ---------------------------------------------------------------------------
 
+def _fit_base(clf: Any, X_tr: np.ndarray, y_tr: np.ndarray, model_type: str) -> None:
+    if model_type == "lgbm":
+        clf.fit(X_tr, y_tr, callbacks=[lgb.log_evaluation(period=-1)])
+    else:
+        clf.fit(X_tr, y_tr)
+
+
 def fit_and_evaluate(
-    X: np.ndarray, y: np.ndarray,
+    X: np.ndarray,
+    y: np.ndarray,
     hp: dict[str, Any],
     n_splits: int = 3,
 ) -> dict[str, float]:
     tscv = TimeSeriesSplit(n_splits=n_splits)
-    accs, briers, aucs, loglosses = [], [], [], []
+    accs, briers, aucs, lls = [], [], [], []
 
     for train_idx, val_idx in tscv.split(X):
         X_tr, X_va = X[train_idx], X[val_idx]
         y_tr, y_va = y[train_idx], y[val_idx]
 
-        if hp["model_type"] == "lr":
-            scaler = StandardScaler()
-            X_tr_s = scaler.fit_transform(X_tr)
-            X_va_s = scaler.transform(X_va)
-            clf = LogisticRegression(
-                l1_ratio=hp["l1_ratio"], C=hp["C"],
-                solver="saga", max_iter=500, random_state=42,
-            )
+        mt = hp["model_type"]
+
+        if mt == "lr":
+            sc = StandardScaler()
+            X_tr_s = sc.fit_transform(X_tr)
+            X_va_s = sc.transform(X_va)
+            clf = LogisticRegression(l1_ratio=hp["l1_ratio"], C=hp["C"],
+                                     solver="saga", max_iter=500, random_state=42)
             clf.fit(X_tr_s, y_tr)
             proba = clf.predict_proba(X_va_s)[:, 1]
-        else:
-            clf = XGBClassifier(
-                n_estimators=hp["n_estimators"],
-                max_depth=hp["max_depth"],
-                learning_rate=hp["learning_rate"],
-                subsample=hp.get("subsample", 0.8),
-                colsample_bytree=hp.get("colsample_bytree", 0.8),
-                objective="binary:logistic",
-                eval_metric="logloss",
-                random_state=42,
-                n_jobs=-1,
-                verbosity=0,
-            )
+
+        elif mt == "lgbm":
+            clf = _make_lgbm(hp)
+            _fit_base(clf, X_tr, y_tr, "lgbm")
+            proba = clf.predict_proba(X_va)[:, 1]
+
+        elif mt == "xgb":
+            clf = _make_xgb(hp)
             clf.fit(X_tr, y_tr)
             proba = clf.predict_proba(X_va)[:, 1]
+
+        elif mt == "cat":
+            clf = _make_cat(hp)
+            clf.fit(X_tr, y_tr)
+            proba = clf.predict_proba(X_va)[:, 1]
+
+        elif mt == "stack":
+            proba = _stack_predict(X_tr, y_tr, X_va)
+
+        else:
+            continue
 
         preds = (proba >= 0.5).astype(int)
         accs.append(float((preds == y_va).mean()))
         briers.append(float(brier_score_loss(y_va, proba)))
         aucs.append(float(roc_auc_score(y_va, proba)))
-        loglosses.append(float(log_loss(y_va, proba)))
+        lls.append(float(log_loss(y_va, proba)))
 
     return {
         "val_acc":     round(float(np.mean(accs)), 6),
         "val_acc_std": round(float(np.std(accs)), 6),
         "val_brier":   round(float(np.mean(briers)), 6),
         "val_auc":     round(float(np.mean(aucs)), 6),
-        "val_logloss": round(float(np.mean(loglosses)), 6),
+        "val_logloss": round(float(np.mean(lls)), 6),
     }
 
 
+def _stack_predict(X_tr: np.ndarray, y_tr: np.ndarray, X_va: np.ndarray) -> np.ndarray:
+    """Level-0: LightGBM + XGBoost + CatBoost. Level-1: Logistic Regression."""
+    base_probas_tr: list[np.ndarray] = []
+    base_probas_va: list[np.ndarray] = []
+
+    # Use inner CV to generate out-of-fold predictions for level-1 training
+    inner_cv = TimeSeriesSplit(n_splits=2)
+
+    for make_fn, available, name in [
+        (_make_lgbm, HAS_LIGHTGBM, "lgbm"),
+        (_make_xgb,  HAS_XGBOOST,  "xgb"),
+        (_make_cat,  HAS_CATBOOST,  "cat"),
+    ]:
+        if not available:
+            continue
+        hp_base = {
+            "lgbm": {"n_estimators": 200, "num_leaves": 31, "learning_rate": 0.05, "min_child_samples": 20},
+            "xgb":  {"n_estimators": 200, "max_depth": 5,   "learning_rate": 0.05, "subsample": 0.8},
+            "cat":  {"n_estimators": 300, "depth": 5,        "learning_rate": 0.05},
+        }[name]
+
+        # OOF for meta-training
+        oof = np.zeros(len(X_tr))
+        for tr_i, va_i in inner_cv.split(X_tr):
+            clf = make_fn(hp_base)
+            _fit_base(clf, X_tr[tr_i], y_tr[tr_i], name)
+            oof[va_i] = clf.predict_proba(X_tr[va_i])[:, 1]
+        base_probas_tr.append(oof)
+
+        # Full fit for validation prediction
+        clf = make_fn(hp_base)
+        _fit_base(clf, X_tr, y_tr, name)
+        base_probas_va.append(clf.predict_proba(X_va)[:, 1])
+
+    if not base_probas_tr:
+        # Fallback: plain LR
+        sc = StandardScaler()
+        lr = LogisticRegression(C=1.0, solver="lbfgs", max_iter=300, random_state=42)
+        lr.fit(sc.fit_transform(X_tr), y_tr)
+        return lr.predict_proba(sc.transform(X_va))[:, 1]
+
+    # Stack meta-features
+    meta_tr = np.column_stack(base_probas_tr)
+    meta_va = np.column_stack(base_probas_va)
+
+    sc = StandardScaler()
+    meta_clf = LogisticRegression(C=1.0, solver="lbfgs", max_iter=300, random_state=42)
+    meta_clf.fit(sc.fit_transform(meta_tr), y_tr)
+    return meta_clf.predict_proba(sc.transform(meta_va))[:, 1]
+
+
 # ---------------------------------------------------------------------------
-# Retrain + artifact building
+# Full retrain + artifact building
 # ---------------------------------------------------------------------------
 
 def retrain_and_build_artifact(
@@ -550,101 +685,139 @@ def retrain_and_build_artifact(
     cv_metrics: dict[str, float],
     timeframe: str,
 ) -> tuple[dict[str, Any], Any]:
-    """Retrain on full data and build artifact dict. Returns (artifact, fitted_model)."""
+    mt = hp["model_type"]
 
-    if hp["model_type"] == "lr":
-        scaler = StandardScaler()
-        X_s = scaler.fit_transform(X)
-        clf = LogisticRegression(
-            l1_ratio=hp["l1_ratio"], C=hp["C"],
-            solver="saga", max_iter=1000, random_state=42,
-        )
+    if mt == "lr":
+        sc = StandardScaler()
+        X_s = sc.fit_transform(X)
+        clf = LogisticRegression(l1_ratio=hp["l1_ratio"], C=hp["C"],
+                                 solver="saga", max_iter=1000, random_state=42)
         clf.fit(X_s, y)
         train_acc = float((clf.predict(X_s) == y).mean())
-
-        artifact = {
-            "artifact_type":          "prediction_model_v2",
-            "model_name":             f"btc_updown_{timeframe}_lr_v3",
-            "model_version":          "v3.0.0",
-            "feature_schema_version": f"btc-{timeframe}",
-            "description":            f"LR | {fc['name']} | {hp['penalty_name']} C={hp['C']} | val_auc={cv_metrics['val_auc']:.4f}",
-            "training_samples":       int(len(y)),
-            "yes_rate":               round(float(y.mean()), 6),
-            "train_accuracy":         round(train_acc, 6),
-            **cv_metrics,
-            "feature_columns":        feat_names,
-            "required_features":      feat_names[:2],
-            "feature_config_name":    fc["name"],
-            "feature_config":         {k: v for k, v in fc.items() if k != "name"},
-            "hyperparameters":        hp,
-            "algorithm_payload": {
-                "algorithm":     "logistic_regression",
-                "feature_names": feat_names,
-                "means":         [round(float(m), 8) for m in scaler.mean_],
-                "stds":          [round(float(s), 8) for s in scaler.scale_],
-                "weights":       [round(float(w), 8) for w in clf.coef_[0]],
-                "bias":          round(float(clf.intercept_[0]), 8),
-            },
-            "calibration": {"method": "none", "calibration_version": "none", "parameters": {}},
-        }
-
-        # Print feature weights
         print(f"\n  Feature weights (top by |weight|):")
         ranked = sorted(zip(feat_names, clf.coef_[0]), key=lambda x: abs(x[1]), reverse=True)
         for fname, w in ranked[:12]:
             print(f"    {fname:<40}  w={w:+.6f}")
-
+        artifact = _base_artifact(timeframe, fc, hp, cv_metrics, feat_names, len(y), float(y.mean()), train_acc)
+        artifact["algorithm_payload"] = {
+            "algorithm": "logistic_regression", "feature_names": feat_names,
+            "means":   [round(float(m), 8) for m in sc.mean_],
+            "stds":    [round(float(s), 8) for s in sc.scale_],
+            "weights": [round(float(w), 8) for w in clf.coef_[0]],
+            "bias":    round(float(clf.intercept_[0]), 8),
+        }
         return artifact, clf
 
-    else:  # XGBoost
-        clf = XGBClassifier(
-            n_estimators=hp["n_estimators"],
-            max_depth=hp["max_depth"],
-            learning_rate=hp["learning_rate"],
-            subsample=hp.get("subsample", 0.8),
-            colsample_bytree=hp.get("colsample_bytree", 0.8),
-            objective="binary:logistic",
-            eval_metric="logloss",
-            random_state=42,
-            n_jobs=-1,
-            verbosity=0,
-        )
+    model_file = f"btc_updown_{timeframe}_{mt}.model"
+
+    if mt == "lgbm":
+        clf = _make_lgbm(hp)
+        _fit_base(clf, X, y, "lgbm")
+        train_acc = float((clf.predict(X) == y).mean())
+        _print_importances(feat_names, clf.feature_importances_, "gain")
+        artifact = _base_artifact(timeframe, fc, hp, cv_metrics, feat_names, len(y), float(y.mean()), train_acc)
+        artifact["algorithm_payload"] = {
+            "algorithm": "lightgbm", "lgbm_model_path": model_file, "feature_names": feat_names,
+        }
+        return artifact, clf
+
+    if mt == "xgb":
+        clf = _make_xgb(hp)
         clf.fit(X, y)
         train_acc = float((clf.predict(X) == y).mean())
-
-        xgb_model_filename = f"btc_updown_{timeframe}_xgb_model.json"
-
-        artifact = {
-            "artifact_type":          "prediction_model_v2",
-            "model_name":             f"btc_updown_{timeframe}_xgb_v3",
-            "model_version":          "v3.0.0",
-            "feature_schema_version": f"btc-{timeframe}",
-            "description":            f"XGB | {fc['name']} | n={hp['n_estimators']} d={hp['max_depth']} lr={hp['learning_rate']} | val_auc={cv_metrics['val_auc']:.4f}",
-            "training_samples":       int(len(y)),
-            "yes_rate":               round(float(y.mean()), 6),
-            "train_accuracy":         round(train_acc, 6),
-            **cv_metrics,
-            "feature_columns":        feat_names,
-            "required_features":      feat_names[:2],
-            "feature_config_name":    fc["name"],
-            "feature_config":         {k: v for k, v in fc.items() if k != "name"},
-            "hyperparameters":        hp,
-            "algorithm_payload": {
-                "algorithm":      "xgboost",
-                "xgb_model_path": xgb_model_filename,
-                "feature_names":  feat_names,
-            },
-            "calibration": {"method": "none", "calibration_version": "none", "parameters": {}},
+        _print_importances(feat_names, clf.feature_importances_, "gain")
+        artifact = _base_artifact(timeframe, fc, hp, cv_metrics, feat_names, len(y), float(y.mean()), train_acc)
+        artifact["algorithm_payload"] = {
+            "algorithm": "xgboost", "xgb_model_path": model_file, "feature_names": feat_names,
         }
-
-        # Print feature importances
-        print(f"\n  Feature importances (XGBoost gain):")
-        importances = clf.feature_importances_
-        ranked = sorted(zip(feat_names, importances), key=lambda x: x[1], reverse=True)
-        for fname, imp in ranked[:12]:
-            print(f"    {fname:<40}  imp={imp:.4f}")
-
         return artifact, clf
+
+    if mt == "cat":
+        clf = _make_cat(hp)
+        clf.fit(X, y)
+        train_acc = float((clf.predict(X) == y).mean())
+        importances = clf.get_feature_importance()
+        _print_importances(feat_names, importances, "importance")
+        artifact = _base_artifact(timeframe, fc, hp, cv_metrics, feat_names, len(y), float(y.mean()), train_acc)
+        artifact["algorithm_payload"] = {
+            "algorithm": "catboost", "cat_model_path": model_file, "feature_names": feat_names,
+        }
+        return artifact, clf
+
+    if mt == "stack":
+        # For stacking: retrain all base models on full data, save each
+        base_clfs: dict[str, Any] = {}
+        base_paths: dict[str, str] = {}
+        for name, available, make_fn in [
+            ("lgbm", HAS_LIGHTGBM, _make_lgbm),
+            ("xgb",  HAS_XGBOOST,  _make_xgb),
+            ("cat",  HAS_CATBOOST,  _make_cat),
+        ]:
+            if not available:
+                continue
+            hp_base = {
+                "lgbm": {"n_estimators": 200, "num_leaves": 31, "learning_rate": 0.05, "min_child_samples": 20},
+                "xgb":  {"n_estimators": 200, "max_depth": 5,   "learning_rate": 0.05, "subsample": 0.8},
+                "cat":  {"n_estimators": 300, "depth": 5,        "learning_rate": 0.05},
+            }[name]
+            c = make_fn(hp_base)
+            _fit_base(c, X, y, name)
+            base_clfs[name] = c
+            base_paths[name] = f"btc_updown_{timeframe}_stack_{name}.model"
+
+        # Train meta
+        meta_tr = np.column_stack([c.predict_proba(X)[:, 1] for c in base_clfs.values()])
+        sc = StandardScaler()
+        meta = LogisticRegression(C=1.0, solver="lbfgs", max_iter=300, random_state=42)
+        meta.fit(sc.fit_transform(meta_tr), y)
+        meta_proba = meta.predict_proba(sc.transform(meta_tr))[:, 1]
+        train_acc = float(((meta_proba >= 0.5).astype(int) == y).mean())
+
+        artifact = _base_artifact(timeframe, fc, hp, cv_metrics, feat_names, len(y), float(y.mean()), train_acc)
+        artifact["algorithm_payload"] = {
+            "algorithm": "stacking",
+            "base_model_paths": base_paths,
+            "meta_weights": [round(float(w), 8) for w in meta.coef_[0]],
+            "meta_bias": round(float(meta.intercept_[0]), 8),
+            "meta_scaler_means": [round(float(m), 8) for m in sc.mean_],
+            "meta_scaler_stds":  [round(float(s), 8) for s in sc.scale_],
+            "feature_names": feat_names,
+        }
+        return artifact, (base_clfs, meta, sc)
+
+    raise ValueError(f"Unknown model_type={mt}")
+
+
+def _base_artifact(
+    timeframe: str, fc: dict, hp: dict, cv_metrics: dict,
+    feat_names: list, n_samples: int, yes_rate: float, train_acc: float,
+) -> dict[str, Any]:
+    mt = hp["model_type"]
+    return {
+        "artifact_type":          "prediction_model_v2",
+        "model_name":             f"btc_updown_{timeframe}_{mt}_v3",
+        "model_version":          "v3.0.0",
+        "feature_schema_version": f"btc-{timeframe}",
+        "description":            f"{mt.upper()} | {fc['name']} | {_hp_label(hp)} | val_auc={cv_metrics['val_auc']:.4f}",
+        "training_samples":       n_samples,
+        "yes_rate":               round(yes_rate, 6),
+        "train_accuracy":         round(train_acc, 6),
+        **cv_metrics,
+        "feature_columns":        feat_names,
+        "required_features":      feat_names[:2],
+        "feature_config_name":    fc["name"],
+        "feature_config":         {k: v for k, v in fc.items() if k != "name"},
+        "hyperparameters":        hp,
+        "algorithm_payload":      {},  # filled by caller
+        "calibration": {"method": "none", "calibration_version": "none", "parameters": {}},
+    }
+
+
+def _print_importances(feat_names: list[str], importances: Any, label: str) -> None:
+    print(f"\n  Feature importances ({label}, top 12):")
+    ranked = sorted(zip(feat_names, importances), key=lambda x: x[1], reverse=True)
+    for fname, imp in ranked[:12]:
+        print(f"    {fname:<40}  {label}={imp:.4f}")
 
 
 # ---------------------------------------------------------------------------
@@ -658,27 +831,28 @@ def run_search(
     timeframe: str,
     n_cv_splits: int = 3,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], Any]:
-    """Run full grid search. Returns (best_artifact, all_results, best_fitted_model)."""
-    feature_configs = _build_feature_configs(derivatives is not None and derivatives.has_data)
+    feature_configs = _build_feature_configs(derivatives is not None and derivatives.has_any)
     hp_grid = _build_hp_grid()
-    total_configs = len(feature_configs) * len(hp_grid)
+    total = len(feature_configs) * len(hp_grid)
+
+    model_counts = {}
+    for hp in hp_grid:
+        model_counts[hp["model_type"]] = model_counts.get(hp["model_type"], 0) + 1
 
     print(f"\n{'='*70}")
     print(f"  Timeframe: {timeframe.upper()}  |  Candles: {len(candles):,}")
-    print(f"  Feature configs: {len(feature_configs)}  |  HP combos: {len(hp_grid)}  |  Total: {total_configs}")
-    print(f"  Models: LR + {'XGBoost' if HAS_XGBOOST else 'XGBoost (NOT INSTALLED)'}")
-    print(f"  Walk-forward folds: {n_cv_splits}")
+    print(f"  Feature configs: {len(feature_configs)}  |  HP combos: {len(hp_grid)}  |  Total: {total}")
+    print(f"  Per model: {model_counts}")
     print(f"{'='*70}")
 
     all_results: list[dict[str, Any]] = []
     best_auc = -1.0
     best_info: dict[str, Any] | None = None
-
     run_idx = 0
     t0_total = time.time()
 
     for fc in feature_configs:
-        t0_feat = time.time()
+        t0 = time.time()
         try:
             X, y, feat_names = build_features(
                 candles, derivatives,
@@ -699,49 +873,45 @@ def run_search(
             run_idx += len(hp_grid)
             continue
 
-        yes_rate = float(y.mean())
-        ms = int((time.time() - t0_feat) * 1000)
-        print(f"\n  [{fc['name']}]  n={len(X):,}  d={X.shape[1]}  yes={yes_rate:.3f}  {ms}ms")
+        ms = int((time.time() - t0) * 1000)
+        print(f"\n  [{fc['name']}]  n={len(X):,}  d={X.shape[1]}  yes={y.mean():.3f}  {ms}ms")
 
         for hp in hp_grid:
             run_idx += 1
-            t0 = time.time()
+            t0_hp = time.time()
             try:
                 metrics = fit_and_evaluate(X, y, hp, n_splits=n_cv_splits)
             except Exception as exc:
-                print(f"    [{run_idx:>4}/{total_configs}] {_hp_label(hp)} ERROR: {exc}")
+                print(f"    [{run_idx:>4}/{total}] {_hp_label(hp)} ERROR: {exc}")
                 continue
 
-            dt = time.time() - t0
+            dt = time.time() - t0_hp
             marker = " <-- BEST" if metrics["val_auc"] > best_auc else ""
             print(
-                f"    [{run_idx:>4}/{total_configs}]  {_hp_label(hp)}  "
-                f"acc={metrics['val_acc']:.4f}(+/-{metrics['val_acc_std']:.4f})  "
-                f"auc={metrics['val_auc']:.4f}  brier={metrics['val_brier']:.4f}  "
-                f"{dt:.1f}s{marker}"
+                f"    [{run_idx:>4}/{total}]  {_hp_label(hp):<45}  "
+                f"acc={metrics['val_acc']:.4f}  auc={metrics['val_auc']:.4f}  "
+                f"brier={metrics['val_brier']:.4f}  {dt:.1f}s{marker}"
             )
 
             all_results.append({
                 "timeframe": timeframe, "feature_config": fc["name"],
                 "model_type": hp["model_type"], "n_features": X.shape[1],
-                "n_samples": len(X), "yes_rate": yes_rate, **hp, **metrics,
+                "n_samples": len(X), "yes_rate": float(y.mean()),
+                **{k: v for k, v in hp.items() if k != "model_type"},
+                **metrics,
             })
 
             if metrics["val_auc"] > best_auc:
                 best_auc = metrics["val_auc"]
-                best_info = {
-                    "X": X, "y": y, "feat_names": feat_names,
-                    "fc": fc, "hp": hp, "metrics": metrics,
-                }
+                best_info = {"X": X, "y": y, "feat_names": feat_names, "fc": fc, "hp": hp, "metrics": metrics}
 
-    elapsed_total = time.time() - t0_total
-    print(f"\n  Search complete in {elapsed_total / 60:.1f} min")
+    elapsed = time.time() - t0_total
+    print(f"\n  Search complete in {elapsed / 60:.1f} min")
 
     if best_info is None:
         raise RuntimeError("No valid results")
 
-    # Retrain best
-    print(f"\n  Retraining best: {best_info['fc']['name']}  {_hp_label(best_info['hp'])}")
+    print(f"\n  Retraining best: [{best_info['fc']['name']}]  {_hp_label(best_info['hp'])}")
     artifact, fitted_model = retrain_and_build_artifact(
         best_info["X"], best_info["y"],
         hp=best_info["hp"], fc=best_info["fc"],
@@ -754,13 +924,51 @@ def run_search(
 
 
 # ---------------------------------------------------------------------------
+# Save helpers
+# ---------------------------------------------------------------------------
+
+def save_model_file(fitted_model: Any, artifact: dict[str, Any], out_dir: Path) -> None:
+    algo = artifact.get("algorithm_payload", {}).get("algorithm", "")
+    if algo == "logistic_regression":
+        return  # weights embedded in artifact
+
+    if algo == "lightgbm":
+        path = out_dir / artifact["algorithm_payload"]["lgbm_model_path"]
+        fitted_model.booster_.save_model(str(path))
+        print(f"    LGBM model: {path}")
+
+    elif algo == "xgboost":
+        path = out_dir / artifact["algorithm_payload"]["xgb_model_path"]
+        fitted_model.save_model(str(path))
+        print(f"    XGB model: {path}")
+
+    elif algo == "catboost":
+        path = out_dir / artifact["algorithm_payload"]["cat_model_path"]
+        fitted_model.save_model(str(path))
+        print(f"    CAT model: {path}")
+
+    elif algo == "stacking":
+        base_clfs, meta, sc = fitted_model
+        for name, clf in base_clfs.items():
+            rel_path = artifact["algorithm_payload"]["base_model_paths"][name]
+            path = out_dir / rel_path
+            if name == "lgbm":
+                clf.booster_.save_model(str(path))
+            elif name == "xgb":
+                clf.save_model(str(path))
+            elif name == "cat":
+                clf.save_model(str(path))
+            print(f"    Stack [{name}] model: {path}")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="BTC model grid search (XGBoost + LR)")
+    parser = argparse.ArgumentParser(description="BTC model grid search: LR + LightGBM + XGBoost + CatBoost + Stacking")
     parser.add_argument("--interval", default="all",
-                        help=f"Options: {', '.join(SUPPORTED_INTERVALS)}, all (default: all = 5m+15m)")
+                        help=f"Options: {', '.join(SUPPORTED_INTERVALS)}, all (default: 5m+15m)")
     parser.add_argument("--cv-splits", type=int, default=3, help="Walk-forward CV folds (default: 3)")
     args = parser.parse_args()
 
@@ -770,7 +978,7 @@ def main() -> None:
     elif interval_arg in _INTERVAL_FACTOR:
         intervals = [interval_arg]
     else:
-        print(f"ERROR: unknown interval '{interval_arg}'. Options: {', '.join(SUPPORTED_INTERVALS)}, all")
+        print(f"ERROR: unknown interval '{interval_arg}'")
         return
 
     if not BASE_OHLCV_PATH.exists():
@@ -792,8 +1000,6 @@ def main() -> None:
 
     for interval in intervals:
         candles = load_or_resample(interval, candles_5m)
-
-        # Load derivatives data aligned to this candle set
         times_ms = np.array([c["open_time_ms"] for c in candles])
         deriv = DerivativesData(times_ms)
 
@@ -801,19 +1007,12 @@ def main() -> None:
             candles, deriv, timeframe=interval, n_cv_splits=args.cv_splits,
         )
 
-        # Save artifact
         art_path = OUT_DIR / f"btc_updown_{interval}_best.json"
         art_path.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
         print(f"\n  [{interval}] Artifact: {art_path}")
 
-        # Save XGBoost native model if applicable
-        algo = artifact.get("algorithm_payload", {}).get("algorithm", "")
-        if algo == "xgboost" and hasattr(fitted_model, "save_model"):
-            xgb_path = OUT_DIR / artifact["algorithm_payload"]["xgb_model_path"]
-            fitted_model.save_model(str(xgb_path))
-            print(f"  [{interval}] XGB model: {xgb_path}")
+        save_model_file(fitted_model, artifact, OUT_DIR)
 
-        # Save grid results
         res_path = OUT_DIR / f"grid_search_results_{interval}.json"
         results.sort(key=lambda r: r.get("val_auc", 0), reverse=True)
         res_path.write_text(json.dumps(results, indent=2), encoding="utf-8")
@@ -821,7 +1020,6 @@ def main() -> None:
 
         all_artifacts.append((interval, artifact))
 
-    # Summary
     print("\n" + "=" * 70)
     print("  FINAL SUMMARY")
     print("=" * 70)
@@ -829,16 +1027,14 @@ def main() -> None:
         algo = art.get("algorithm_payload", {}).get("algorithm", "?")
         config_name = art.get("feature_config_name", "?")
         print(
-            f"  [{interval:>3}]  {algo:<5}  config={config_name:<25}"
+            f"  [{interval:>3}]  {algo:<14}  config={config_name:<25}"
             f"  d={len(art['feature_columns'])}  "
-            f"val_acc={art['val_accuracy']:.4f}(+/-{art['val_accuracy_std']:.4f})  "
             f"val_auc={art['val_auc']:.4f}  brier={art['val_brier']:.4f}"
         )
 
     print("\nNext steps:")
     for interval, art in all_artifacts:
-        path = OUT_DIR / f"btc_updown_{interval}_best.json"
-        print(f"  [{interval}] model_artifact_path: {path}")
+        print(f"  [{interval}] model_artifact_path: {OUT_DIR / f'btc_updown_{interval}_best.json'}")
         print(f"  [{interval}] feature_schema_version: {art['feature_schema_version']}")
 
 

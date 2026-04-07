@@ -139,35 +139,78 @@ class BtcFeatureEnricher:
                 return self._cache  # stale cache on error
 
     def _fetch_all(self) -> dict[str, Any]:
-        """Fetch candles + derivatives in sequence (fast, ~200ms total)."""
+        """Fetch candles + all derivatives in parallel-ish sequence (~300ms total)."""
         candles = self._fetch_candles()
 
         # Funding rate — latest entry
-        funding_url = f"{FAPI_BASE}/fapi/v1/fundingRate?symbol={self.symbol}&limit=1"
-        funding_raw = _safe_json_get(funding_url, timeout=self.timeout_sec)
+        funding_raw = _safe_json_get(
+            f"{FAPI_BASE}/fapi/v1/fundingRate?symbol={self.symbol}&limit=1",
+            timeout=self.timeout_sec,
+        )
         funding_rate = None
         if isinstance(funding_raw, list) and funding_raw:
             funding_rate = float(funding_raw[-1].get("fundingRate", 0))
 
         # Long/short account ratio — latest 5m
-        ls_url = f"{FAPI_BASE}/futures/data/globalLongShortAccountRatio?symbol={self.symbol}&period=5m&limit=1"
-        ls_raw = _safe_json_get(ls_url, timeout=self.timeout_sec)
+        ls_raw = _safe_json_get(
+            f"{FAPI_BASE}/futures/data/globalLongShortAccountRatio?symbol={self.symbol}&period=5m&limit=1",
+            timeout=self.timeout_sec,
+        )
         ls_ratio = None
         if isinstance(ls_raw, list) and ls_raw:
             ls_ratio = float(ls_raw[-1].get("longShortRatio", 1.0))
 
         # Taker buy/sell ratio — latest 5m
-        taker_url = f"{FAPI_BASE}/futures/data/takerlongshortRatio?symbol={self.symbol}&period=5m&limit=1"
-        taker_raw = _safe_json_get(taker_url, timeout=self.timeout_sec)
+        taker_raw = _safe_json_get(
+            f"{FAPI_BASE}/futures/data/takerlongshortRatio?symbol={self.symbol}&period=5m&limit=1",
+            timeout=self.timeout_sec,
+        )
         taker_ratio = None
         if isinstance(taker_raw, list) and taker_raw:
             taker_ratio = float(taker_raw[-1].get("buySellRatio", 1.0))
 
+        # Open interest — latest 5m + previous (to compute change)
+        oi_raw = _safe_json_get(
+            f"{FAPI_BASE}/futures/data/openInterestHist?symbol={self.symbol}&period=5m&limit=2",
+            timeout=self.timeout_sec,
+        )
+        oi_current = None
+        oi_prev = None
+        if isinstance(oi_raw, list) and len(oi_raw) >= 1:
+            oi_current = float(oi_raw[-1].get("sumOpenInterest", 0))
+        if isinstance(oi_raw, list) and len(oi_raw) >= 2:
+            oi_prev = float(oi_raw[-2].get("sumOpenInterest", 0))
+
+        # Order book imbalance — spot depth (top 20 levels)
+        ob_raw = _safe_json_get(
+            f"https://api.binance.com/api/v3/depth?symbol={self.symbol}&limit=20",
+            timeout=self.timeout_sec,
+        )
+        ob_imbalance = None
+        ob_spread_bps = None
+        if isinstance(ob_raw, dict):
+            bids = ob_raw.get("bids", [])
+            asks = ob_raw.get("asks", [])
+            bid_vol = sum(float(b[1]) for b in bids)
+            ask_vol = sum(float(a[1]) for a in asks)
+            total_vol = bid_vol + ask_vol
+            if total_vol > 0:
+                ob_imbalance = (bid_vol - ask_vol) / total_vol
+            if bids and asks:
+                best_bid = float(bids[0][0])
+                best_ask = float(asks[0][0])
+                if best_bid > 0:
+                    ob_spread_bps = (best_ask - best_bid) / best_bid * 10000
+
         return {
-            "candles": candles,
+            "candles":      candles,
             "funding_rate": funding_rate,
-            "ls_ratio": ls_ratio,
-            "taker_ratio": taker_ratio,
+            "ls_ratio":     ls_ratio,
+            "taker_ratio":  taker_ratio,
+            "oi_current":   oi_current,
+            "oi_prev":      oi_prev,
+            "ob_imbalance": ob_imbalance,
+            "ob_spread_bps": ob_spread_bps,
         }
 
     def _fetch_candles(self) -> list[dict[str, Any]]:
@@ -343,22 +386,42 @@ class BtcFeatureEnricher:
     def _compute_derivatives_features(self, data: dict[str, Any]) -> dict[str, float]:
         feats: dict[str, float] = {}
 
+        # Funding rate (scaled x100, clipped to [-3, 3])
         fr = data.get("funding_rate")
-        if fr is not None and math.isfinite(fr):
-            feats["f_btc_funding_rate"] = _clamp(fr * 100, -3.0, 3.0)
-        else:
-            feats["f_btc_funding_rate"] = 0.0
+        feats["f_btc_funding_rate"] = (
+            _clamp(fr * 100, -3.0, 3.0) if fr is not None and math.isfinite(fr) else 0.0
+        )
 
+        # Long/short ratio (log-scaled, centered at 0)
         ls = data.get("ls_ratio")
-        if ls is not None and math.isfinite(ls) and ls > 0:
-            feats["f_btc_ls_ratio_log"] = _clamp(math.log(ls), -2.0, 2.0)
-        else:
-            feats["f_btc_ls_ratio_log"] = 0.0
+        feats["f_btc_ls_ratio_log"] = (
+            _clamp(math.log(ls), -2.0, 2.0) if ls is not None and math.isfinite(ls) and ls > 0 else 0.0
+        )
 
+        # Taker buy/sell ratio (log-scaled, centered at 0)
         tk = data.get("taker_ratio")
-        if tk is not None and math.isfinite(tk) and tk > 0:
-            feats["f_btc_taker_ratio_log"] = _clamp(math.log(tk), -2.0, 2.0)
+        feats["f_btc_taker_ratio_log"] = (
+            _clamp(math.log(tk), -2.0, 2.0) if tk is not None and math.isfinite(tk) and tk > 0 else 0.0
+        )
+
+        # Open interest percentage change vs previous 5m candle
+        oi_cur  = data.get("oi_current")
+        oi_prev = data.get("oi_prev")
+        if oi_cur is not None and oi_prev is not None and oi_prev > 0:
+            feats["f_btc_oi_change_pct"] = _clamp((oi_cur - oi_prev) / oi_prev * 100, -5.0, 5.0)
         else:
-            feats["f_btc_taker_ratio_log"] = 0.0
+            feats["f_btc_oi_change_pct"] = 0.0
+
+        # Order book imbalance [-1, 1]: positive = more bids
+        ob = data.get("ob_imbalance")
+        feats["f_btc_ob_imbalance"] = (
+            _clamp(ob, -1.0, 1.0) if ob is not None and math.isfinite(ob) else 0.0
+        )
+
+        # Spread in bps (normalised: divide by 10 to get ~[0, 1] range for BTC)
+        sp = data.get("ob_spread_bps")
+        feats["f_btc_ob_spread_bps"] = (
+            _clamp(sp / 10.0, 0.0, 5.0) if sp is not None and math.isfinite(sp) else 0.0
+        )
 
         return feats
