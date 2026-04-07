@@ -1,27 +1,39 @@
-"""Exhaustive BTC Up/Down model search — 5m and 15m timeframes.
+"""Exhaustive BTC Up/Down model search — any Binance interval.
 
 Tries all combinations of:
   - Feature configs (15 curated sets with different indicators and lookbacks)
-  - Regularisation (L1/L2, C in [0.001..100])
+  - Regularisation (L1/L2/ElasticNet, C in [0.001..100])
   - 3-fold walk-forward cross-validation
 
-Outputs the best model artifact per timeframe (compatible with the existing
-prediction_model_v2 runtime) plus a full grid-search results JSON.
-
 Usage:
-    # 1. Fetch 5m candles (if not already done):
+    # Fetch base 5m candles first (needed for all intervals):
     python scripts/btc_fetch_ohlcv.py --months 24
 
-    # 2. Run exhaustive search (20-40 min on a modern CPU):
+    # Train on 5m only (~13 min):
+    python scripts/btc_train_exhaustive.py --interval 5m
+
+    # Train on 15m only (~13 min):
+    python scripts/btc_train_exhaustive.py --interval 15m
+
+    # Train on both 5m and 15m (~26 min, default):
     python scripts/btc_train_exhaustive.py
 
-Outputs:
-    data/models/v2/btc_updown_5m_best.json
-    data/models/v2/btc_updown_15m_best.json
-    data/models/v2/grid_search_results.json
+    # Train on any resampleable interval (30m, 1h, 4h):
+    python scripts/btc_train_exhaustive.py --interval 30m
+    python scripts/btc_train_exhaustive.py --interval 1h
+
+    # Use native fetched candles instead of resampling (if available):
+    python scripts/btc_fetch_ohlcv.py --interval 15m
+    python scripts/btc_train_exhaustive.py --interval 15m
+    # (auto-detects data/btc/ohlcv_15m.jsonl and uses it directly)
+
+Outputs (per interval):
+    data/models/v2/btc_updown_{interval}_best.json
+    data/models/v2/grid_search_results_{interval}.json
 """
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import time
@@ -40,21 +52,37 @@ from sklearn.preprocessing import StandardScaler
 warnings.filterwarnings("ignore", category=FutureWarning, module="sklearn")
 
 # ---------------------------------------------------------------------------
-# Paths
+# Paths and interval config
 # ---------------------------------------------------------------------------
-OHLCV_PATH = Path("data/btc/ohlcv_5m.jsonl")
+BASE_OHLCV_PATH = Path("data/btc/ohlcv_5m.jsonl")
 OUT_DIR = Path("data/models/v2")
 
+# How many 5m candles make up each target interval
+_INTERVAL_FACTOR: dict[str, int] = {
+    "5m":  1,
+    "15m": 3,
+    "30m": 6,
+    "1h":  12,
+    "2h":  24,
+    "4h":  48,
+}
+
+SUPPORTED_INTERVALS = list(_INTERVAL_FACTOR.keys())
+
+
 # ---------------------------------------------------------------------------
-# 15m resampling
+# Resampling
 # ---------------------------------------------------------------------------
 
-def resample_to_15m(candles_5m: list[dict]) -> list[dict]:
-    """Aggregate consecutive 5m candles into 15m candles (3x grouping)."""
+def resample_candles(candles_5m: list[dict], factor: int) -> list[dict]:
+    """Aggregate consecutive 5m candles by `factor` into a coarser interval."""
+    if factor == 1:
+        return candles_5m
     out = []
     i = 0
-    while i + 2 < len(candles_5m):
-        group = candles_5m[i:i + 3]
+    needed = factor
+    while i + needed - 1 < len(candles_5m):
+        group = candles_5m[i:i + needed]
         out.append({
             "open_time_ms": group[0]["open_time_ms"],
             "open":   group[0]["open"],
@@ -63,8 +91,29 @@ def resample_to_15m(candles_5m: list[dict]) -> list[dict]:
             "close":  group[-1]["close"],
             "volume": sum(c["volume"] for c in group),
         })
-        i += 3
+        i += needed
     return out
+
+
+def load_or_resample(interval: str, candles_5m: list[dict]) -> list[dict]:
+    """Load native candle file for `interval` if it exists, else resample from 5m."""
+    native_path = Path(f"data/btc/ohlcv_{interval}.jsonl")
+    if interval != "5m" and native_path.exists():
+        print(f"  Using native {interval} candles from {native_path}")
+        candles: list[dict] = []
+        with native_path.open(encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    candles.append(json.loads(line))
+        candles.sort(key=lambda c: c["open_time_ms"])
+        return candles
+    factor = _INTERVAL_FACTOR[interval]
+    if factor == 1:
+        return candles_5m
+    resampled = resample_candles(candles_5m, factor)
+    print(f"  Resampled 5m -> {interval}: {len(resampled):,} candles (factor={factor})")
+    return resampled
 
 
 # ---------------------------------------------------------------------------
@@ -663,67 +712,88 @@ def run_search(
 
 
 def main() -> None:
-    if not OHLCV_PATH.exists():
-        print(f"ERROR: {OHLCV_PATH} not found. Run scripts/btc_fetch_ohlcv.py first.")
+    parser = argparse.ArgumentParser(
+        description="Exhaustive BTC model grid search",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--interval",
+        default="all",
+        help=(
+            f"Interval to train on. Options: {', '.join(SUPPORTED_INTERVALS)}, all. "
+            "Default: all (5m + 15m). Use 'all' to run every supported interval."
+        ),
+    )
+    parser.add_argument(
+        "--cv-splits", type=int, default=3,
+        help="Number of walk-forward CV folds (default: 3)",
+    )
+    args = parser.parse_args()
+
+    interval_arg = args.interval.strip().lower()
+    if interval_arg == "all":
+        intervals_to_run = ["5m", "15m"]
+    elif interval_arg in _INTERVAL_FACTOR:
+        intervals_to_run = [interval_arg]
+    else:
+        print(f"ERROR: unsupported interval '{interval_arg}'. Choose from: {', '.join(SUPPORTED_INTERVALS)}, all")
         return
 
-    print(f"Loading candles from {OHLCV_PATH} ...")
+    if not BASE_OHLCV_PATH.exists():
+        print(f"ERROR: {BASE_OHLCV_PATH} not found. Run scripts/btc_fetch_ohlcv.py first.")
+        return
+
+    print(f"Loading base 5m candles from {BASE_OHLCV_PATH} ...")
     candles_5m: list[dict] = []
-    with OHLCV_PATH.open(encoding="utf-8") as fh:
+    with BASE_OHLCV_PATH.open(encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
             if line:
                 candles_5m.append(json.loads(line))
     candles_5m.sort(key=lambda c: c["open_time_ms"])
-    print(f"  Loaded {len(candles_5m):,} 5m candles  "
-          f"({candles_5m[0]['open_time_ms']//1000} to {candles_5m[-1]['open_time_ms']//1000})")
-
-    candles_15m = resample_to_15m(candles_5m)
-    print(f"  Resampled to {len(candles_15m):,} 15m candles")
+    start_dt = candles_5m[0]["open_time_ms"] // 1000
+    end_dt   = candles_5m[-1]["open_time_ms"] // 1000
+    print(f"  Loaded {len(candles_5m):,} 5m candles  ({start_dt} to {end_dt})")
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    all_results: list[dict[str, Any]] = []
+    all_artifacts: list[tuple[str, dict[str, Any]]] = []
 
-    # --- 5m search ---
-    artifact_5m, results_5m = run_search(candles_5m, timeframe="5m", n_cv_splits=3)
-    all_results.extend(results_5m)
-    path_5m = OUT_DIR / "btc_updown_5m_best.json"
-    path_5m.write_text(json.dumps(artifact_5m, indent=2), encoding="utf-8")
-    print(f"\n  [5m] Saved: {path_5m}")
+    for interval in intervals_to_run:
+        candles = load_or_resample(interval, candles_5m)
+        artifact, results = run_search(candles, timeframe=interval, n_cv_splits=args.cv_splits)
 
-    # --- 15m search ---
-    artifact_15m, results_15m = run_search(candles_15m, timeframe="15m", n_cv_splits=3)
-    all_results.extend(results_15m)
-    path_15m = OUT_DIR / "btc_updown_15m_best.json"
-    path_15m.write_text(json.dumps(artifact_15m, indent=2), encoding="utf-8")
-    print(f"\n  [15m] Saved: {path_15m}")
+        out_path = OUT_DIR / f"btc_updown_{interval}_best.json"
+        out_path.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
+        print(f"\n  [{interval}] Artifact saved: {out_path}")
 
-    # --- Full results grid ---
-    results_path = OUT_DIR / "grid_search_results.json"
-    # Sort by val_auc descending
-    all_results.sort(key=lambda r: r.get("val_auc", 0.0), reverse=True)
-    results_path.write_text(json.dumps(all_results, indent=2), encoding="utf-8")
-    print(f"\n  Grid results saved: {results_path}  ({len(all_results)} entries)")
+        results_path = OUT_DIR / f"grid_search_results_{interval}.json"
+        results.sort(key=lambda r: r.get("val_auc", 0.0), reverse=True)
+        results_path.write_text(json.dumps(results, indent=2), encoding="utf-8")
+        print(f"  [{interval}] Grid results saved: {results_path}  ({len(results)} entries)")
+
+        all_artifacts.append((interval, artifact))
 
     # --- Summary ---
     print("\n" + "="*60)
     print("  FINAL SUMMARY")
     print("="*60)
-    for timeframe, artifact in [("5m", artifact_5m), ("15m", artifact_15m)]:
-        fc_name = artifact["feature_config"].get("name", artifact.get("description", "")[:30])
+    for interval, artifact in all_artifacts:
+        fc = artifact.get("feature_config", {})
+        fc_name = fc.get("name", "?") if isinstance(fc, dict) else "?"
         print(
-            f"  [{timeframe}]  config={artifact['feature_config']['name'] if isinstance(artifact['feature_config'], dict) else '?'}"
+            f"  [{interval:>3}]  config={fc_name:<22}"
             f"  features={len(artifact['feature_columns'])}"
             f"  val_acc={artifact['val_accuracy']:.4f}(±{artifact['val_accuracy_std']:.4f})"
             f"  val_auc={artifact['val_auc']:.4f}"
             f"  brier={artifact['val_brier']:.4f}"
         )
 
-    print("\nDone. Next steps:")
-    print("  1. Check data/models/v2/grid_search_results.json for full ranking.")
-    print("  2. Update config/agents.yaml -> model_artifact_path to point at the best artifact.")
-    print("  3. Update feature_schema_version to match the artifact (btc-5m or btc-15m).")
-    print("  4. Retrain btc_feature_enricher.py if feature_config changes (add new features).")
+    print("\nNext steps:")
+    for interval, artifact in all_artifacts:
+        schema = artifact["feature_schema_version"]
+        path   = OUT_DIR / f"btc_updown_{interval}_best.json"
+        print(f"  [{interval}] config/agents.yaml -> model_artifact_path: {path}")
+        print(f"  [{interval}]                    -> feature_schema_version: {schema}")
 
 
 if __name__ == "__main__":
