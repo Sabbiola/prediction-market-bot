@@ -65,7 +65,7 @@ live_research:
 sandbox_chain:
   enabled: true
   submit_tx: true
-  rpc_url: https://sandbox-rpc.example
+  rpc_url: http://127.0.0.1:18545
   chain_id: 80002
   contract_address: "0x0000000000000000000000000000000000000000"
   from_address: ""
@@ -81,7 +81,7 @@ ui_auth:
   session_secret_env: PM_BOT_UI_SESSION_SECRET
   session_timeout_sec: 1800
   cookie_name: pm_bot_ui_session
-  cookie_secure: true
+  cookie_secure: false
   cookie_samesite: lax
   require_password_hashes: true
   max_failed_attempts: 5
@@ -99,7 +99,7 @@ ui_auth:
 
 storage:
   operational_db:
-    driver: postgres
+    driver: sqlite
     dsn: ""
     dsn_env: OPERATIONAL_DB_DSN
     backup_dir: data/backups/operational-db

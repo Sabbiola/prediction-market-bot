@@ -154,4 +154,4 @@ def test_load_settings_from_staging_profile() -> None:
     assert settings.sandbox_chain.submit_tx is True
     assert settings.ui_auth.enabled is True
     assert settings.ui_auth.require_password_hashes is True
-    assert settings.storage.operational_db_driver == "postgres"
+    assert settings.storage.operational_db_driver == "sqlite"

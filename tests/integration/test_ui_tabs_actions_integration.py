@@ -20,12 +20,12 @@ def test_ui_tabs_and_operator_actions_end_to_end(
         page = client.get("/")
         assert page.status_code == 200
         assert "Overview" in page.text
-        assert "System/Health" in page.text
+        assert "System Health" in page.text
         assert "Scanner" in page.text
         assert "Review Queue" in page.text
         assert "Positions" in page.text
         assert "Reports" in page.text
-        assert "Open Reports / Replay" in page.text
+        assert "Reports" in page.text
 
         overview_before = client.get("/api/tabs/overview")
         assert overview_before.status_code == 200

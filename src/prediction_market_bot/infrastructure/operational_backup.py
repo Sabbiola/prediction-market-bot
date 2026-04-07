@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import gc
 import shutil
 import sqlite3
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -158,7 +160,15 @@ def restore_sqlite_backup(
     shutil.copy2(source_backup, tmp_target)
     if target.exists():
         close_pool_for_path(target)
-        target.unlink()
+        gc.collect()
+        for _attempt in range(20):
+            try:
+                target.unlink()
+                break
+            except PermissionError:
+                time.sleep(0.25)
+        else:
+            target.unlink()  # final attempt; raise if still locked
     tmp_target.replace(target)
 
     integrity_ok = True

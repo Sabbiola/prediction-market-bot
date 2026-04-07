@@ -555,15 +555,23 @@ def _check_staging_profile_requirements(settings: AppSettings) -> tuple[StartupC
             )
         )
 
+    _db_driver = settings.storage.operational_db_driver.strip().lower()
+    _db_dsn_ok = bool(settings.storage.operational_db_dsn.strip() or settings.storage.operational_db_dsn_env.strip())
     if (
-        settings.storage.operational_db_driver.strip().lower() == "postgres"
+        _db_driver == "postgres"
         and settings.storage.operational_db_require_up_to_date
-        and (
-            settings.storage.operational_db_dsn.strip()
-            or settings.storage.operational_db_dsn_env.strip()
-        )
+        and _db_dsn_ok
     ):
         checks.append(StartupCheck("staging_profile_operational_db", True, "info", "staging_operational_db_profile_ok"))
+    elif _db_driver == "sqlite" and _db_dsn_ok:
+        checks.append(
+            StartupCheck(
+                "staging_profile_operational_db",
+                True,
+                "warning",
+                "staging_operational_db_sqlite_local_dev_ok (postgres recommended for shared staging)",
+            )
+        )
     else:
         checks.append(
             StartupCheck(

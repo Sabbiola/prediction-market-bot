@@ -57,6 +57,8 @@ class _LocalSandboxRpcHandler(BaseHTTPRequestHandler):
             result = "0x5208"
         elif method == "eth_sendTransaction":
             result = "0xlocaltx123"
+        elif method == "eth_sendRawTransaction":
+            result = "0xlocaltx123"
         elif method == "eth_getTransactionByHash":
             tx_hash = params[0] if params else "0xlocaltx123"
             result = {"hash": tx_hash, "blockNumber": "0x10"}

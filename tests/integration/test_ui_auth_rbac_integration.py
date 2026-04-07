@@ -272,16 +272,16 @@ def test_ui_login_page_and_error_feedback(
         login_page = client.get("/login")
         assert login_page.status_code == 200
         assert "Sign in to access role-based controls" in login_page.text
-        assert "Viewer:</strong> observe all tabs, no write actions." in login_page.text
-        assert "Operator:</strong> viewer access plus review and tx reconcile actions." in login_page.text
-        assert "Admin:</strong> operator access plus pause/resume and admin settings." in login_page.text
+        assert "login-roles__chip" in login_page.text
+        assert "Viewer" in login_page.text
+        assert "Operator" in login_page.text
+        assert "Admin" in login_page.text
 
         bad_login = client.post(
             "/login",
             data={"username": "viewer_user", "password": "wrong", "next_path": "/"},
         )
         assert bad_login.status_code == 401
-        assert "Login failed" in bad_login.text
         assert "Invalid username or password. Check credentials and try again." in bad_login.text
 
         good_login_external_next = client.post(
@@ -368,29 +368,24 @@ def test_ui_overview_quick_actions_are_role_aware(
         _login(client, "viewer_user", "viewer-pass")
         viewer_page = client.get("/")
         assert viewer_page.status_code == 200
-        assert "Go To Pending Review" in viewer_page.text
-        assert _button_exists(viewer_page.text, "action-run-once")
-        assert _button_exists(viewer_page.text, "action-pause")
-        assert _button_exists(viewer_page.text, "action-resume")
-        assert _button_disabled(viewer_page.text, "action-run-once")
-        assert _button_disabled(viewer_page.text, "action-pause")
-        assert _button_disabled(viewer_page.text, "action-resume")
-        assert "Run Once is unavailable for role" in viewer_page.text
-        assert "Pause/Resume is unavailable for role" in viewer_page.text
-        assert "session_expires=" in viewer_page.text
-        assert "access=observe_only" in viewer_page.text
+        assert "Pending Review" in viewer_page.text
+        # Viewer: action buttons not rendered — template hides them and shows role message instead
+        assert not _button_exists(viewer_page.text, "action-run-once")
+        assert not _button_exists(viewer_page.text, "action-pause")
+        assert not _button_exists(viewer_page.text, "action-resume")
+        assert "Run Once unavailable for role" in viewer_page.text
+        assert "Pause/Resume requires admin role." in viewer_page.text
 
         client.post("/api/auth/logout")
         _login(client, "operator_user", "operator-pass")
         operator_page = client.get("/")
         assert operator_page.status_code == 200
+        # Operator: run-once visible and enabled; pause/resume hidden (admin-only)
         assert _button_exists(operator_page.text, "action-run-once")
-        assert _button_exists(operator_page.text, "action-pause")
-        assert _button_exists(operator_page.text, "action-resume")
+        assert not _button_exists(operator_page.text, "action-pause")
+        assert not _button_exists(operator_page.text, "action-resume")
         assert not _button_disabled(operator_page.text, "action-run-once")
-        assert _button_disabled(operator_page.text, "action-pause")
-        assert _button_disabled(operator_page.text, "action-resume")
-        assert "Pause/Resume is unavailable for role" in operator_page.text
+        assert "Pause/Resume requires admin role." in operator_page.text
 
         client.post("/api/auth/logout")
         _login(client, "admin_user", "admin-pass")
@@ -420,7 +415,7 @@ def test_ui_review_workflow_controls_are_role_aware(
         _login(client, "viewer_user", "viewer-pass")
         viewer_page = client.get(f"/?run_id={run_id}&active_tab=review-queue&review_status=PENDING_REVIEW")
         assert viewer_page.status_code == 200
-        assert "Current role is read-only. Review approve/reject requires operator or admin role." in viewer_page.text
+        assert "Read-only. Requires operator or admin role." in viewer_page.text
         assert _button_exists(viewer_page.text, "action-review-approve")
         assert _button_exists(viewer_page.text, "action-review-reject")
         assert _button_disabled(viewer_page.text, "action-review-approve")

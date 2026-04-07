@@ -17,9 +17,9 @@ def test_web_app_bootstrap_and_base_template_render(temp_config_paths: tuple[Pat
         assert response.status_code == 200
         assert "text/html" in response.headers.get("content-type", "")
         assert "Prediction Market Bot" in response.text
-        assert "Go To Pending Review" in response.text
-        assert "Open Reports / Replay" in response.text
-        assert "System/Health" in response.text
+        assert "Review Queue" in response.text
+        assert "Reports" in response.text
+        assert "System Health" in response.text
         assert "Scanner" in response.text
         assert "Research" in response.text
         assert "Prediction" in response.text
@@ -30,9 +30,8 @@ def test_web_app_bootstrap_and_base_template_render(temp_config_paths: tuple[Pat
         assert "Settlement" in response.text
         assert "Sandbox TX" in response.text
         assert "Reports" in response.text
-        assert "tab-btn--core" in response.text
-        assert "select-wide" in response.text
-        assert 'style="' not in response.text
+        assert "sidebar__nav-item" in response.text
+        assert "sidebar__nav-label" in response.text
 
         tab_paths = (
             "/api/tabs/overview",

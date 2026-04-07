@@ -95,6 +95,23 @@ def normalize_market(market_payload: Mapping[str, Any], *, event_id: str = "") -
         or market_payload.get("outcome")
         or ""
     ).strip()
+    # Derive resolution from outcomePrices when explicit fields are absent (Polymarket Gamma API).
+    # outcomePrices[0] = YES final price; 1.0 → resolved YES, 0.0 → resolved NO.
+    if not resolved_outcome:
+        outcome_prices = market_payload.get("outcomePrices")
+        if isinstance(outcome_prices, (list, str)):
+            if isinstance(outcome_prices, str):
+                import json as _json
+                try:
+                    outcome_prices = _json.loads(outcome_prices)
+                except Exception:
+                    outcome_prices = []
+            if outcome_prices:
+                yes_final = _to_float(outcome_prices[0])
+                if yes_final is not None and yes_final >= 0.99:
+                    resolved_outcome = "YES"
+                elif yes_final is not None and yes_final <= 0.01:
+                    resolved_outcome = "NO"
     return {
         "market_id": market_id,
         "event_id": event_id or str(market_payload.get("event_id") or market_payload.get("eventId") or "").strip(),

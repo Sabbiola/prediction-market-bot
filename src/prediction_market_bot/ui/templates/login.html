@@ -1,44 +1,95 @@
-{% extends "base.html" %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title | default("PMBot — Login") }}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="login-page">
+    <div class="login-card" role="main">
 
-{% block content %}
-<section class="card auth-card" aria-labelledby="login-title">
-  <div class="auth-stack">
-    <header>
-      <h1 id="login-title" class="page-title">Operator Login</h1>
-      <p class="subtle">Sign in to access role-based controls for review, execution, and system operations.</p>
+      <!-- Logo -->
+      <div class="login-logo">
+        <div class="login-logo__icon" aria-hidden="true">
+          <svg viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="3"  cy="9"  r="2"   fill="white" opacity=".9"/>
+            <circle cx="9"  cy="3"  r="2"   fill="white" opacity=".9"/>
+            <circle cx="9"  cy="15" r="2"   fill="white" opacity=".9"/>
+            <circle cx="15" cy="9"  r="2"   fill="white" opacity=".9"/>
+            <circle cx="9"  cy="9"  r="1.5" fill="white"/>
+            <line x1="5"    y1="9"    x2="7.5"  y2="9"    stroke="white" stroke-width=".9" opacity=".6"/>
+            <line x1="10.5" y1="9"    x2="13"   y2="9"    stroke="white" stroke-width=".9" opacity=".6"/>
+            <line x1="9"    y1="5"    x2="9"    y2="7.5"  stroke="white" stroke-width=".9" opacity=".6"/>
+            <line x1="9"    y1="10.5" x2="9"    y2="13"   stroke="white" stroke-width=".9" opacity=".6"/>
+            <line x1="4.4"  y1="7.4"  x2="7.5"  y2="8"    stroke="white" stroke-width=".6" opacity=".35"/>
+            <line x1="4.4"  y1="10.6" x2="7.5"  y2="10"   stroke="white" stroke-width=".6" opacity=".35"/>
+            <line x1="13.6" y1="7.4"  x2="10.5" y2="8"    stroke="white" stroke-width=".6" opacity=".35"/>
+            <line x1="13.6" y1="10.6" x2="10.5" y2="10"   stroke="white" stroke-width=".6" opacity=".35"/>
+          </svg>
+        </div>
+        <div class="login-logo__text">
+          <span class="login-logo__name">PMBot</span>
+          <span class="login-logo__tagline">Prediction Market Bot</span>
+        </div>
+      </div>
+
+      <h1 class="login-title">Operator Login</h1>
+      <p class="login-subtitle">Sign in to access role-based controls for review, execution, and system operations.</p>
+
       {% if next_path and next_path != "/" %}
-      <p class="muted-note">You will be redirected to <code>{{ next_path }}</code> after login.</p>
+      <p class="form-help" style="margin-bottom: var(--space-3);">
+        You will be redirected to <code class="mono">{{ next_path }}</code> after login.
+      </p>
       {% endif %}
-    </header>
 
-    {% if error %}
-    <div class="alert alert--warning" role="alert" aria-live="assertive">
-      <div class="alert__title">
-        <span class="pill pill--warn">Login failed</span>
+      {% if error %}
+      <div class="login-error" role="alert" aria-live="assertive">
+        {{ error }}
       </div>
-      <p>{{ error }}</p>
-    </div>
-    {% endif %}
+      {% endif %}
 
-    <form method="post" action="/login" class="actions actions-vertical" aria-describedby="login-help">
-      <input type="hidden" name="next_path" value="{{ next_path or '/' }}">
-      <div class="field">
-        <label class="field-label" for="login-username">Username</label>
-        <input id="login-username" type="text" name="username" autocomplete="username" required value="{{ username or '' }}" autofocus>
-      </div>
-      <div class="field">
-        <label class="field-label" for="login-password">Password</label>
-        <input id="login-password" type="password" name="password" autocomplete="current-password" required>
-      </div>
-      <button type="submit" class="btn btn--primary">Sign in</button>
-      <p id="login-help" class="field-help">Session timeout and role permissions are enforced server-side.</p>
-    </form>
+      <form method="post" action="/login">
+        <input type="hidden" name="next_path" value="{{ next_path | default('/') }}">
 
-    <aside class="role-guide" aria-label="Role access summary">
-      <p><strong>Viewer:</strong> observe all tabs, no write actions.</p>
-      <p class="meta-line"><strong>Operator:</strong> viewer access plus review and tx reconcile actions.</p>
-      <p class="meta-line"><strong>Admin:</strong> operator access plus pause/resume and admin settings.</p>
-    </aside>
-  </div>
-</section>
-{% endblock %}
+        <div class="form-group">
+          <label for="login-username">Username</label>
+          <input
+            id="login-username"
+            type="text"
+            name="username"
+            autocomplete="username"
+            required
+            value="{{ username | default('') }}"
+            autofocus
+            placeholder="Enter your username"
+          >
+        </div>
+
+        <div class="form-group">
+          <label for="login-password">Password</label>
+          <input
+            id="login-password"
+            type="password"
+            name="password"
+            autocomplete="current-password"
+            required
+            placeholder="••••••••••"
+          >
+        </div>
+
+        <button type="submit" class="login-submit">Sign In</button>
+      </form>
+
+      <!-- Role guide -->
+      <div class="login-roles" aria-label="Role access summary">
+        <span class="login-roles__chip pill pill--info">Viewer</span>
+        <span class="login-roles__chip pill pill--operator">Operator</span>
+        <span class="login-roles__chip pill pill--admin">Admin</span>
+      </div>
+
+    </div><!-- /.login-card -->
+  </div><!-- /.login-page -->
+</body>
+</html>

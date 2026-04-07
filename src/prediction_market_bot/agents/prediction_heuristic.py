@@ -22,7 +22,7 @@ def run_heuristic(
         + (structure_yes_prob * structure_weight)
     )
 
-    if fair_yes_prob >= 0.5:
+    if fair_yes_prob >= candidate.market.yes_price:
         selected_side = OutcomeSide.YES
         selected_market_price = candidate.market.yes_price
         selected_fair_price = fair_yes_prob
@@ -111,7 +111,7 @@ def prediction_from_fair_probability(
     confidence: float,
     rationale: tuple[str, ...],
 ) -> PredictionResult:
-    if fair_yes_prob >= 0.5:
+    if fair_yes_prob >= candidate.market.yes_price:
         selected_side = OutcomeSide.YES
         selected_market_price = candidate.market.yes_price
         selected_fair_price = fair_yes_prob
@@ -139,7 +139,7 @@ def prediction_from_fair_probability(
 
 
 def edge_for_side(*, candidate: MarketCandidate, fair_yes_prob: float) -> float:
-    if fair_yes_prob >= 0.5:
+    if fair_yes_prob >= candidate.market.yes_price:
         return fair_yes_prob - candidate.market.yes_price
     return (1.0 - fair_yes_prob) - candidate.market.no_price
 

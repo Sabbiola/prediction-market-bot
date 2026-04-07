@@ -1,3 +1,8 @@
+# Environment files — mai committare
+.env
+.env.*
+*.env
+
 # Python and type/lint/test caches
 .mypy_cache/
 .pytest_cache/
@@ -27,3 +32,20 @@ legacy_reference/
 
 # Log files
 data/logs/
+
+# Runtime database and WAL files
+data/runtime.db
+data/runtime.db-shm
+data/runtime.db-wal
+data/*.db
+data/*.db-shm
+data/*.db-wal
+
+# Runtime metrics
+data/metrics/
+
+# Historical strategy-research data (large, re-fetchable)
+data/strategy-research/
+
+# UI static build artifacts
+src/prediction_market_bot/ui/static/

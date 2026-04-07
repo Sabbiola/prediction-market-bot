@@ -72,7 +72,10 @@ class JsonlPersistence(PersistencePort):
                 text = line.strip()
                 if not text:
                     continue
-                raw = json.loads(text)
+                try:
+                    raw = json.loads(text)
+                except json.JSONDecodeError:
+                    continue
                 if isinstance(raw, dict):
                     rows.append(raw)
         return rows

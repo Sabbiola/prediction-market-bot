@@ -3,1176 +3,227 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ title }}</title>
-  <style>
-    :root {
-      --font-sans: "SF Pro Display", "Avenir Next", "Manrope", "Segoe UI", sans-serif;
-      --font-mono: "SF Mono", "IBM Plex Mono", "Consolas", monospace;
-
-      --bg-0: #060709;
-      --bg-1: #0b0d11;
-      --bg-2: #12151c;
-      --surface-0: rgba(20, 24, 31, 0.72);
-      --surface-1: rgba(24, 29, 38, 0.78);
-      --surface-2: rgba(31, 38, 49, 0.84);
-      --border-0: rgba(131, 144, 167, 0.24);
-      --border-1: rgba(170, 185, 209, 0.33);
-
-      --text-strong: #f8fafc;
-      --text: #dbe1ea;
-      --text-muted: #a7b1bf;
-      --text-soft: #8d98aa;
-
-      --ok: #34d399;
-      --warn: #fbbf24;
-      --danger: #fb7185;
-      --info: #60a5fa;
-      --pending: #f59e0b;
-      --approved: #10b981;
-      --rejected: #ef4444;
-      --failed: #f43f5e;
-
-      --space-1: 0.25rem;
-      --space-2: 0.5rem;
-      --space-3: 0.75rem;
-      --space-4: 1rem;
-      --space-5: 1.25rem;
-      --space-6: 1.5rem;
-      --space-7: 2rem;
-      --space-8: 2.5rem;
-
-      --radius-sm: 8px;
-      --radius-md: 12px;
-      --radius-lg: 18px;
-
-      --shadow-soft: 0 10px 32px rgba(0, 0, 0, 0.35);
-      --shadow-card: 0 18px 42px rgba(0, 0, 0, 0.4);
-      --focus-ring: #8cb3ff;
-      --accent: #3b82f6;
-      --accent-soft: rgba(59, 130, 246, 0.32);
-      --glass-blur: 14px;
-      --motion-fast: 140ms;
-      --motion-mid: 240ms;
-      --motion-slow: 420ms;
-    }
-
-    * {
-      box-sizing: border-box;
-    }
-
-    html, body {
-      min-height: 100%;
-    }
-
-    body {
-      margin: 0;
-      font-family: var(--font-sans);
-      color: var(--text);
-      background:
-        radial-gradient(1200px 720px at -16% -24%, rgba(59, 130, 246, 0.2) 0%, transparent 62%),
-        radial-gradient(960px 620px at 115% 2%, rgba(148, 163, 184, 0.16) 0%, transparent 58%),
-        linear-gradient(160deg, var(--bg-0), var(--bg-1) 54%, var(--bg-2));
-      line-height: 1.4;
-      letter-spacing: 0.01em;
-      position: relative;
-      overflow-x: hidden;
-    }
-
-    body::before {
-      content: "";
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
-      background:
-        linear-gradient(
-          to bottom,
-          rgba(255, 255, 255, 0.04),
-          rgba(255, 255, 255, 0.01) 18%,
-          transparent 45%
-        );
-      z-index: -2;
-    }
-
-    body::after {
-      content: "";
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
-      background-image:
-        linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-        linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
-      background-size: 48px 48px;
-      mask-image: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.65) 0%, transparent 72%);
-      z-index: -3;
-    }
-
-    .app-shell {
-      min-height: 100vh;
-      padding: var(--space-4) var(--space-4) var(--space-7);
-    }
-
-    .skip-link {
-      position: absolute;
-      top: -42px;
-      left: var(--space-3);
-      background: #1d4ed8;
-      color: #f3f7ff;
-      border-radius: var(--radius-sm);
-      padding: 0.45rem 0.7rem;
-      z-index: 99;
-      text-decoration: none;
-      font-size: 0.85rem;
-      font-weight: 700;
-    }
-
-    .skip-link:focus {
-      top: var(--space-3);
-    }
-
-    .app-header {
-      max-width: 1420px;
-      margin: 0 auto;
-      border: 1px solid var(--border-0);
-      border-radius: calc(var(--radius-lg) + 2px);
-      padding: var(--space-4) var(--space-6);
-      background:
-        linear-gradient(130deg, rgba(33, 40, 53, 0.58), rgba(20, 24, 32, 0.68)),
-        linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 55%);
-      position: sticky;
-      top: var(--space-4);
-      backdrop-filter: blur(var(--glass-blur)) saturate(1.2);
-      z-index: 20;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: var(--space-4);
-      box-shadow: var(--shadow-soft);
-    }
-
-    .brand {
-      display: flex;
-      flex-direction: column;
-      gap: var(--space-1);
-    }
-
-    .brand-title {
-      font-size: 1.05rem;
-      font-weight: 760;
-      color: var(--text-strong);
-      letter-spacing: 0.02em;
-    }
-
-    .brand-subtitle {
-      font-size: 0.72rem;
-      color: var(--text-soft);
-      text-transform: uppercase;
-      letter-spacing: 0.11em;
-    }
-
-    .header-auth {
-      display: flex;
-      align-items: center;
-      gap: var(--space-2);
-      font-size: 0.85rem;
-      color: var(--text-muted);
-      flex-wrap: wrap;
-      justify-content: flex-end;
-    }
-
-    .meta-chip {
-      border: 1px solid var(--border-1);
-      background: linear-gradient(145deg, rgba(33, 41, 56, 0.6), rgba(19, 24, 33, 0.65));
-      color: var(--text-muted);
-      border-radius: 999px;
-      padding: 0.35rem 0.7rem;
-      font-size: 0.75rem;
-      white-space: nowrap;
-    }
-
-    .meta-chip strong {
-      color: var(--text-strong);
-    }
-
-    .meta-chip--role {
-      border-color: rgba(59, 130, 246, 0.42);
-      color: #bdd9ff;
-      background: rgba(29, 78, 216, 0.18);
-    }
-
-    .meta-chip--readonly {
-      border-color: rgba(245, 158, 11, 0.42);
-      color: #ffd992;
-      background: rgba(180, 83, 9, 0.18);
-    }
-
-    .app-main {
-      padding: var(--space-6) var(--space-4);
-      max-width: 1420px;
-      margin: 0 auto;
-      width: 100%;
-    }
-
-    h1, h2, h3 {
-      margin: 0;
-      color: var(--text-strong);
-      line-height: 1.2;
-      letter-spacing: 0.01em;
-    }
-
-    h1 {
-      font-size: 1.9rem;
-      margin-bottom: var(--space-2);
-      font-weight: 760;
-      letter-spacing: 0.015em;
-    }
-
-    p {
-      margin: 0;
-      color: var(--text);
-    }
-
-    .sr-only {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      padding: 0;
-      margin: -1px;
-      overflow: hidden;
-      clip: rect(0, 0, 0, 0);
-      white-space: nowrap;
-      border: 0;
-    }
-
-    .stack-sm > * + * {
-      margin-top: var(--space-2);
-    }
-
-    .stack-md > * + * {
-      margin-top: var(--space-4);
-    }
-
-    .stack-lg > * + * {
-      margin-top: var(--space-6);
-    }
-
-    .subtle {
-      color: var(--text-muted);
-      font-size: 0.92rem;
-    }
-
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: var(--space-4);
-    }
-
-    .grid-tight {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-      gap: var(--space-3);
-    }
-
-    .card {
-      background:
-        linear-gradient(165deg, var(--surface-1), var(--surface-2)),
-        linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 62%);
-      border: 1px solid var(--border-0);
-      border-radius: var(--radius-lg);
-      padding: var(--space-5);
-      box-shadow: var(--shadow-card);
-      overflow-x: auto;
-      position: relative;
-      transform: translateY(0);
-      transition:
-        transform var(--motion-mid) ease,
-        border-color var(--motion-mid) ease,
-        box-shadow var(--motion-mid) ease;
-      animation: card-enter var(--motion-slow) ease both;
-    }
-
-    .card--soft {
-      background: linear-gradient(160deg, rgba(26, 33, 44, 0.7), rgba(20, 25, 34, 0.8));
-    }
-
-    .card::before {
-      content: "";
-      position: absolute;
-      inset: 0;
-      border-radius: inherit;
-      pointer-events: none;
-      border: 1px solid rgba(255, 255, 255, 0.05);
-      mask-image: linear-gradient(165deg, rgba(0, 0, 0, 0.85), transparent 48%);
-    }
-
-    .card:hover {
-      transform: translateY(-2px);
-      border-color: rgba(161, 178, 205, 0.42);
-      box-shadow: 0 24px 54px rgba(0, 0, 0, 0.46);
-    }
-
-    .card-title,
-    .label {
-      color: var(--text-soft);
-      font-size: 0.75rem;
-      margin-bottom: var(--space-2);
-      text-transform: uppercase;
-      letter-spacing: 0.07em;
-      font-weight: 600;
-    }
-
-    .value {
-      font-size: 1.55rem;
-      font-weight: 750;
-      color: var(--text-strong);
-      line-height: 1.1;
-      letter-spacing: 0.012em;
-    }
-
-    .value.ok,
-    .ok {
-      color: var(--ok);
-    }
-
-    .value.warn,
-    .warn {
-      color: var(--warn);
-    }
-
-    .value.danger,
-    .danger {
-      color: var(--danger);
-    }
-
-    .pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.35rem;
-      border-radius: 999px;
-      font-size: 0.74rem;
-      padding: 0.2rem 0.62rem;
-      border: 1px solid transparent;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      font-weight: 700;
-      white-space: nowrap;
-    }
-
-    .pill--ok {
-      color: #75f0c1;
-      background: rgba(16, 185, 129, 0.14);
-      border-color: rgba(16, 185, 129, 0.45);
-    }
-
-    .pill--warn {
-      color: #ffd771;
-      background: rgba(245, 158, 11, 0.14);
-      border-color: rgba(245, 158, 11, 0.45);
-    }
-
-    .pill--danger {
-      color: #ff9cae;
-      background: rgba(244, 63, 94, 0.15);
-      border-color: rgba(244, 63, 94, 0.5);
-    }
-
-    .pill--info {
-      color: #8dc8ff;
-      background: rgba(59, 130, 246, 0.15);
-      border-color: rgba(59, 130, 246, 0.45);
-    }
-
-    .pill--pending {
-      color: #ffd98d;
-      background: rgba(245, 158, 11, 0.2);
-      border-color: rgba(245, 158, 11, 0.52);
-    }
-
-    .pill--approved {
-      color: #86f6cf;
-      background: rgba(16, 185, 129, 0.18);
-      border-color: rgba(16, 185, 129, 0.5);
-    }
-
-    .pill--rejected {
-      color: #ffb2be;
-      background: rgba(239, 68, 68, 0.2);
-      border-color: rgba(239, 68, 68, 0.5);
-    }
-
-    .pill--failed {
-      color: #ff9cad;
-      background: rgba(244, 63, 94, 0.22);
-      border-color: rgba(244, 63, 94, 0.58);
-    }
-
-    .alert {
-      border-radius: var(--radius-sm);
-      border: 1px solid var(--border-1);
-      padding: var(--space-3);
-      background: rgba(16, 24, 39, 0.78);
-    }
-
-    .alert__title {
-      display: flex;
-      align-items: center;
-      gap: var(--space-2);
-      font-weight: 700;
-      margin-bottom: var(--space-2);
-      color: var(--text-strong);
-    }
-
-    .alert--danger {
-      border-color: rgba(244, 63, 94, 0.5);
-      background: rgba(78, 16, 31, 0.35);
-    }
-
-    .alert--warning {
-      border-color: rgba(245, 158, 11, 0.5);
-      background: rgba(71, 45, 8, 0.36);
-    }
-
-    .alert--info {
-      border-color: rgba(59, 130, 246, 0.45);
-      background: rgba(15, 35, 67, 0.36);
-    }
-
-    .tabs {
-      display: flex;
-      flex-wrap: wrap;
-      gap: var(--space-2);
-      margin: var(--space-5) 0;
-      padding: var(--space-2) var(--space-2);
-      border: 1px solid var(--border-0);
-      border-radius: 14px;
-      background: linear-gradient(180deg, rgba(17, 22, 30, 0.74), rgba(14, 18, 25, 0.8));
-      position: sticky;
-      top: 96px;
-      z-index: 15;
-      backdrop-filter: blur(var(--glass-blur));
-      box-shadow: var(--shadow-soft);
-    }
-
-    .tab-btn {
-      border: 1px solid var(--border-1);
-      background: linear-gradient(165deg, rgba(37, 45, 60, 0.42), rgba(20, 24, 33, 0.5));
-      color: var(--text-muted);
-      border-radius: 999px;
-      padding: 0.46rem 0.9rem;
-      cursor: pointer;
-      font-weight: 640;
-      font-size: 0.8rem;
-      transition: all var(--motion-fast) ease-in-out;
-    }
-
-    .tab-btn:hover {
-      color: var(--text-strong);
-      border-color: #5f7db2;
-      transform: translateY(-1px);
-    }
-
-    .tab-btn.active {
-      background: linear-gradient(135deg, #274c94, #3b82f6);
-      border-color: #7fa8ff;
-      color: #f3f7ff;
-      box-shadow: 0 14px 30px rgba(59, 130, 246, 0.34);
-    }
-
-    .tab-btn--core {
-      border-color: rgba(79, 141, 244, 0.55);
-      color: #c9ddff;
-      background: rgba(22, 46, 87, 0.58);
-    }
-
-    .tab-panel {
-      display: none;
-    }
-
-    .tab-panel.active {
-      display: block;
-      animation: panel-enter var(--motion-mid) ease both;
-    }
-
-    .tab-panel[hidden] {
-      display: none;
-    }
-
-    .actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: var(--space-2);
-      align-items: center;
-    }
-
-    .btn,
-    button,
-    .actions a {
-      border: 1px solid var(--border-1);
-      background: linear-gradient(165deg, rgba(43, 52, 68, 0.46), rgba(20, 25, 34, 0.6));
-      color: var(--text);
-      border-radius: var(--radius-sm);
-      padding: 0.54rem 0.9rem;
-      cursor: pointer;
-      font-size: 0.83rem;
-      line-height: 1.1;
-      text-decoration: none;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 0.35rem;
-      font-weight: 600;
-      transition:
-        transform var(--motion-fast) ease,
-        border-color var(--motion-fast) ease,
-        color var(--motion-fast) ease,
-        box-shadow var(--motion-fast) ease;
-    }
-
-    button:hover,
-    .btn:hover,
-    .actions a:hover {
-      border-color: #8aa4cf;
-      color: var(--text-strong);
-      transform: translateY(-1px);
-      box-shadow: 0 10px 22px rgba(0, 0, 0, 0.3);
-    }
-
-    button:focus-visible,
-    .btn:focus-visible,
-    .actions a:focus-visible,
-    .tab-btn:focus-visible,
-    a:focus-visible {
-      outline: 2px solid var(--focus-ring);
-      outline-offset: 2px;
-    }
-
-    .btn--primary {
-      background: linear-gradient(135deg, #2e5db1, #3b82f6);
-      border-color: #7da5ff;
-      color: #f3f7ff;
-      box-shadow: 0 10px 24px rgba(59, 130, 246, 0.35);
-    }
-
-    .btn--danger {
-      background: linear-gradient(135deg, #9d2148, #e11d48);
-      border-color: #ff9aad;
-      color: #fff1f4;
-      box-shadow: 0 10px 24px rgba(225, 29, 72, 0.28);
-    }
-
-    .btn[disabled],
-    button[disabled] {
-      cursor: not-allowed;
-      opacity: 0.55;
-      transform: none;
-      pointer-events: none;
-    }
-
-    .btn-role {
-      font-size: 0.72rem;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      color: var(--text-soft);
-    }
-
-    input,
-    select,
-    textarea {
-      border: 1px solid var(--border-1);
-      background: linear-gradient(160deg, rgba(20, 25, 34, 0.84), rgba(14, 18, 25, 0.88));
-      color: var(--text-strong);
-      border-radius: var(--radius-sm);
-      padding: 0.52rem 0.66rem;
-      min-width: 160px;
-      font-size: 0.88rem;
-    }
-
-    .field {
-      display: grid;
-      gap: 0.35rem;
-      min-width: 200px;
-    }
-
-    .field-label {
-      font-size: 0.8rem;
-      color: var(--text-soft);
-      font-weight: 600;
-    }
-
-    .field-help {
-      font-size: 0.78rem;
-      color: var(--text-muted);
-    }
-
-    .select-wide {
-      min-width: 320px;
-    }
-
-    .select-medium {
-      min-width: 240px;
-    }
-
-    input:focus,
-    select:focus,
-    textarea:focus {
-      outline: 2px solid rgba(59, 130, 246, 0.45);
-      outline-offset: 1px;
-      border-color: #4f8df4;
-    }
-
-    .event-log {
-      margin-top: var(--space-3);
-      font-size: 0.85rem;
-      color: var(--text-muted);
-      min-height: 1.2rem;
-    }
-
-    .event-log--ok {
-      color: #34d399;
-    }
-
-    .event-log--warn {
-      color: #fbbf24;
-    }
-
-    .event-log--failed {
-      color: #f87171;
-    }
-
-    .table-wrap {
-      width: 100%;
-      overflow-x: auto;
-      border-radius: var(--radius-sm);
-      border: 1px solid var(--border-0);
-      margin-top: var(--space-3);
-      background: rgba(14, 18, 25, 0.5);
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 0.84rem;
-      min-width: 680px;
-    }
-
-    th,
-    td {
-      text-align: left;
-      padding: 0.6rem 0.58rem;
-      border-bottom: 1px solid rgba(51, 70, 105, 0.5);
-      vertical-align: top;
-    }
-
-    th {
-      color: var(--text-soft);
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      font-size: 0.72rem;
-      background: rgba(21, 27, 36, 0.86);
-      position: sticky;
-      top: 0;
-      z-index: 1;
-    }
-
-    tr:hover td {
-      background: rgba(43, 52, 67, 0.34);
-    }
-
-    .row-focus td {
-      background: rgba(37, 99, 235, 0.22);
-    }
-
-    code {
-      font-family: var(--font-mono);
-      font-size: 0.79rem;
-      padding: 0.12rem 0.32rem;
-      border-radius: 6px;
-      background: rgba(15, 22, 36, 0.8);
-      border: 1px solid rgba(52, 71, 105, 0.6);
-      color: #c8d8f3;
-    }
-
-    a {
-      color: #90b8ff;
-    }
-
-    a:hover {
-      color: #b6d1ff;
-    }
-
-    .kicker {
-      margin-bottom: var(--space-3);
-    }
-
-    .engine-panel {
-      display: grid;
-      gap: var(--space-4);
-    }
-
-    .engine-section {
-      display: grid;
-      gap: var(--space-3);
-    }
-
-    .engine-heading {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: var(--space-3);
-      flex-wrap: wrap;
-      margin-bottom: var(--space-2);
-    }
-
-    .engine-heading h2 {
-      font-size: 1rem;
-      letter-spacing: 0.01em;
-      color: var(--text-strong);
-    }
-
-    .engine-heading .subtle {
-      font-size: 0.82rem;
-    }
-
-    .page-title {
-      margin-top: 0;
-    }
-
-    .mt-neg {
-      margin-top: -0.35rem;
-    }
-
-    .mt-2 {
-      margin-top: 0.6rem;
-    }
-
-    .mt-3 {
-      margin-top: 1rem;
-    }
-
-    .mt-4 {
-      margin-top: 1.25rem;
-    }
-
-    .mb-3 {
-      margin-bottom: 1rem;
-    }
-
-    .detail-line {
-      margin: 0.55rem 0 0;
-    }
-
-    .meta-line {
-      margin: 0.4rem 0 0;
-    }
-
-    .meta-line-strong {
-      margin: 0.6rem 0 0;
-    }
-
-    .empty-note {
-      margin: 0.8rem 0 0;
-      color: var(--text-muted);
-    }
-
-    .muted-note {
-      margin: 0.6rem 0 0;
-      color: var(--text-muted);
-    }
-
-    .banner-stack {
-      margin: 0.9rem 0 0.4rem;
-    }
-
-    .banner-card {
-      margin-top: 0.6rem;
-    }
-
-    .banner-card--danger {
-      border-color: rgba(239, 68, 68, 0.5);
-    }
-
-    .banner-card--warning {
-      border-color: rgba(245, 158, 11, 0.52);
-    }
-
-    .actions-vertical {
-      flex-direction: column;
-      align-items: stretch;
-    }
-
-    .actions-vertical .field {
-      width: 100%;
-    }
-
-    .form-reset {
-      margin: 0;
-    }
-
-    .auth-card {
-      max-width: 560px;
-      margin: 3.4rem auto;
-    }
-
-    .auth-stack {
-      display: grid;
-      gap: var(--space-3);
-    }
-
-    .role-guide {
-      border: 1px dashed rgba(99, 116, 156, 0.75);
-      border-radius: var(--radius-sm);
-      padding: 0.7rem 0.78rem;
-      background: rgba(13, 20, 33, 0.5);
-    }
-
-    .role-guide strong {
-      color: var(--text-strong);
-    }
-
-    @media (max-width: 1024px) {
-      .app-main {
-        padding: var(--space-5);
-      }
-
-      .tabs {
-        top: 84px;
-      }
-    }
-
-    @media (max-width: 760px) {
-      .app-header {
-        padding: var(--space-3) var(--space-4);
-        flex-direction: column;
-        align-items: flex-start;
-      }
-
-      .tabs {
-        top: 126px;
-      }
-
-      .app-main {
-        padding: var(--space-4);
-      }
-
-      .grid,
-      .grid-tight {
-        grid-template-columns: 1fr;
-      }
-
-      table {
-        min-width: 620px;
-      }
-
-      .header-auth {
-        width: 100%;
-        justify-content: flex-start;
-      }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      *,
-      *::before,
-      *::after {
-        animation: none !important;
-        transition: none !important;
-        scroll-behavior: auto !important;
-      }
-    }
-
-    @keyframes card-enter {
-      from {
-        opacity: 0;
-        transform: translateY(8px);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
-    }
-
-    @keyframes panel-enter {
-      from {
-        opacity: 0;
-        transform: translateY(5px);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
-    }
-  </style>
+  <title>{{ title | default("PMBot — Control Plane") }}</title>
+  <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
-  <a href="#main-content" class="skip-link">Skip to main content</a>
-  <div class="app-shell">
-  <header class="app-header">
-    <div class="brand">
-      <div class="brand-title">Prediction Market Bot</div>
-      <div class="brand-subtitle">Operator Control Plane</div>
-    </div>
-    <div class="header-auth">
-      {% if auth_enabled and auth_user and auth_user.username %}
-      <span class="meta-chip">user=<strong>{{ auth_user.username }}</strong></span>
-      <span class="meta-chip meta-chip--role">role=<strong>{{ auth_user.role }}</strong></span>
-      {% if auth_user.role == "viewer" %}
-      <span class="meta-chip meta-chip--readonly">access=observe_only</span>
-      {% endif %}
-      {% if auth_user.session_expires_at %}
-      <span class="meta-chip">session_expires=<strong>{{ auth_user.session_expires_at }}</strong></span>
-      {% endif %}
-      <form method="post" action="/logout" class="form-reset">
-        <button type="submit" class="btn">Logout</button>
-      </form>
-      {% elif auth_enabled %}
-      <span class="meta-chip">not authenticated</span>
-      {% else %}
-      <span class="meta-chip">auth=disabled</span>
-      {% endif %}
-    </div>
-  </header>
-  <main id="main-content" class="app-main">
-    {% block content %}{% endblock %}
-  </main>
-  </div>
-  <script>
-    const tabButtons = [...document.querySelectorAll("[data-tab-btn]")];
-    const tabPanels = [...document.querySelectorAll("[data-tab-panel]")];
-    const tabByName = new Map(tabButtons.map((btn) => [btn.dataset.tabBtn, btn]));
-    const panelByName = new Map(tabPanels.map((panel) => [panel.dataset.tabPanel, panel]));
+<body data-section="{{ active_tab | default('overview') }}">
+  <a class="skip-link" href="#main-content">Skip to content</a>
 
-    tabButtons.forEach((btn, index) => {
-      const tabName = btn.dataset.tabBtn;
-      const panel = panelByName.get(tabName);
-      if (!tabName || !panel) return;
-      btn.setAttribute("role", "tab");
-      btn.id = `tab-${tabName}`;
-      btn.setAttribute("aria-controls", `panel-${tabName}`);
-      btn.setAttribute("aria-selected", "false");
-      btn.tabIndex = index === 0 ? 0 : -1;
-      panel.setAttribute("role", "tabpanel");
-      panel.id = `panel-${tabName}`;
-      panel.setAttribute("aria-labelledby", btn.id);
-      panel.hidden = true;
-    });
+  <div class="app-shell" id="app-shell">
 
-    const activate = (name, opts = {}) => {
-      tabButtons.forEach((btn) => {
-        const active = btn.dataset.tabBtn === name;
-        btn.classList.toggle("active", active);
-        btn.setAttribute("aria-selected", active ? "true" : "false");
-        btn.tabIndex = active ? 0 : -1;
-      });
-      tabPanels.forEach((panel) => {
-        const active = panel.dataset.tabPanel === name;
-        panel.classList.toggle("active", active);
-        panel.hidden = !active;
-      });
-      if (opts.focus === true) {
-        const btn = tabByName.get(name);
-        if (btn) btn.focus();
-      }
-    };
+    <!-- ── SIDEBAR ─────────────────────────────────────────── -->
+    <aside class="sidebar" id="sidebar" aria-label="Navigation">
+      <div class="sidebar__brand">
+        <!-- Neural network logo SVG -->
+        <div class="sidebar__logo" aria-hidden="true">
+          <svg viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="3"  cy="9"  r="2" fill="white" opacity=".9"/>
+            <circle cx="9"  cy="3"  r="2" fill="white" opacity=".9"/>
+            <circle cx="9"  cy="15" r="2" fill="white" opacity=".9"/>
+            <circle cx="15" cy="9"  r="2" fill="white" opacity=".9"/>
+            <circle cx="9"  cy="9"  r="1.5" fill="white"/>
+            <line x1="5"  y1="9"  x2="7.5" y2="9"   stroke="white" stroke-width=".9" opacity=".6"/>
+            <line x1="10.5" y1="9" x2="13" y2="9"   stroke="white" stroke-width=".9" opacity=".6"/>
+            <line x1="9"  y1="5"  x2="9"   y2="7.5" stroke="white" stroke-width=".9" opacity=".6"/>
+            <line x1="9"  y1="10.5" x2="9" y2="13"  stroke="white" stroke-width=".9" opacity=".6"/>
+            <line x1="4.4" y1="7.4" x2="7.5" y2="8" stroke="white" stroke-width=".6" opacity=".35"/>
+            <line x1="4.4" y1="10.6" x2="7.5" y2="10" stroke="white" stroke-width=".6" opacity=".35"/>
+            <line x1="13.6" y1="7.4" x2="10.5" y2="8" stroke="white" stroke-width=".6" opacity=".35"/>
+            <line x1="13.6" y1="10.6" x2="10.5" y2="10" stroke="white" stroke-width=".6" opacity=".35"/>
+          </svg>
+        </div>
+        <div class="sidebar__brand-text">
+          <span class="sidebar__title">PMBot</span>
+          <span class="sidebar__subtitle">Control Plane</span>
+        </div>
+        <button class="sidebar__collapse-btn" id="sidebar-toggle" aria-label="Toggle sidebar" title="Toggle sidebar">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+            <path d="M7.5 2L3.5 6L7.5 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </div>
 
-    tabButtons.forEach((btn, index) => {
-      btn.addEventListener("click", () => activate(btn.dataset.tabBtn, {focus: false}));
-      btn.addEventListener("keydown", (event) => {
-        if (!["ArrowRight", "ArrowLeft", "Home", "End"].includes(event.key)) return;
-        event.preventDefault();
-        let targetIndex = index;
-        if (event.key === "ArrowRight") targetIndex = (index + 1) % tabButtons.length;
-        if (event.key === "ArrowLeft") targetIndex = (index - 1 + tabButtons.length) % tabButtons.length;
-        if (event.key === "Home") targetIndex = 0;
-        if (event.key === "End") targetIndex = tabButtons.length - 1;
-        const target = tabButtons[targetIndex];
-        if (!target) return;
-        activate(target.dataset.tabBtn, {focus: true});
-      });
-    });
+      <nav class="sidebar__nav" role="navigation" aria-label="Main navigation">
 
-    const tabGroup = document.querySelector(".tabs");
-    if (tabGroup) {
-      tabGroup.setAttribute("role", "tablist");
-      tabGroup.setAttribute("aria-label", "Control plane tabs");
-    }
+        <span class="sidebar__section-label">Core</span>
 
-    const activeFromQuery = new URLSearchParams(window.location.search).get("active_tab");
-    if (tabButtons.length > 0) {
-      const exists = tabByName.has(activeFromQuery);
-      activate(exists ? activeFromQuery : tabButtons[0].dataset.tabBtn, {focus: false});
-    }
+        <button class="sidebar__nav-item" data-section="overview" data-tooltip="Overview" aria-current="false">
+          <svg class="sidebar__icon" viewBox="0 0 18 18" fill="none">
+            <rect x="2" y="2" width="6" height="6" rx="1.5" fill="currentColor" opacity=".9"/>
+            <rect x="10" y="2" width="6" height="6" rx="1.5" fill="currentColor" opacity=".6"/>
+            <rect x="2" y="10" width="6" height="6" rx="1.5" fill="currentColor" opacity=".6"/>
+            <rect x="10" y="10" width="6" height="6" rx="1.5" fill="currentColor" opacity=".4"/>
+          </svg>
+          <span class="sidebar__nav-label">Overview</span>
+        </button>
 
-    const setActionLog = (eventLog, message, state = "") => {
-      if (!eventLog) return;
-      eventLog.classList.remove("event-log--ok", "event-log--warn", "event-log--failed");
-      if (state === "ok") eventLog.classList.add("event-log--ok");
-      if (state === "warn") eventLog.classList.add("event-log--warn");
-      if (state === "failed") eventLog.classList.add("event-log--failed");
-      eventLog.textContent = message;
-    };
+        <span class="sidebar__section-label">Intelligence</span>
 
-    const callAction = async (path, payload = {}, logId = "action-log", options = {}) => {
-      const eventLog = document.getElementById(logId);
-      setActionLog(eventLog, "Processing action...", "warn");
-      try {
-        const response = await fetch(path, {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify(payload),
-        });
-        let data = {};
-        try {
-          data = await response.json();
-        } catch (_decodeError) {
-          data = {action: "unknown", status: "failed", message: "invalid_json_response"};
-        }
-        const target = data.queue_id || data.intent_id || data.run_id || "n/a";
-        const status = String(data.status || "unknown").toLowerCase();
-        let state = "ok";
-        if (!response.ok || status === "failed") state = "failed";
-        else if (status === "blocked") state = "warn";
-        setActionLog(eventLog, `${data.action}: ${data.status} (${data.message}) target=${target}`, state);
-        if (typeof options.onCompleted === "function") {
-          options.onCompleted(data, response);
-        }
-      } catch (_error) {
-        setActionLog(eventLog, "Action failed: backend_unavailable", "failed");
-      }
-    };
+        <button class="sidebar__nav-item" data-section="scanner" data-tooltip="Scanner Engine" aria-current="false">
+          <svg class="sidebar__icon" viewBox="0 0 18 18" fill="none">
+            <circle cx="8" cy="8" r="5" stroke="currentColor" stroke-width="1.5"/>
+            <line x1="12" y1="12" x2="16" y2="16" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          <span class="sidebar__nav-label">Scanner</span>
+        </button>
 
-    const runOnceBtn = document.getElementById("action-run-once");
-    if (runOnceBtn) {
-      runOnceBtn.addEventListener("click", () => {
-        if (runOnceBtn.disabled) return;
-        const runId = (document.getElementById("run-id-input") || {}).value || "";
-        callAction("/api/actions/run-once", {run_id: runId, force: false}, "action-log");
-      });
-    }
-    const pauseBtn = document.getElementById("action-pause");
-    if (pauseBtn) {
-      pauseBtn.addEventListener("click", () => {
-        if (pauseBtn.disabled) return;
-        const reason = (document.getElementById("pause-reason-input") || {}).value || "ui_operator_pause";
-        callAction("/api/actions/pause", {reason: reason}, "action-log");
-      });
-    }
-    const resumeBtn = document.getElementById("action-resume");
-    if (resumeBtn) {
-      resumeBtn.addEventListener("click", () => {
-        if (resumeBtn.disabled) return;
-        callAction("/api/actions/resume", {}, "action-log");
-      });
-    }
+        <button class="sidebar__nav-item" data-section="research" data-tooltip="Research Engine" aria-current="false">
+          <svg class="sidebar__icon" viewBox="0 0 18 18" fill="none">
+            <path d="M3 5h12M3 9h8M3 13h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          <span class="sidebar__nav-label">Research</span>
+        </button>
 
-    const reviewApproveBtn = document.getElementById("action-review-approve");
-    if (reviewApproveBtn) {
-      reviewApproveBtn.addEventListener("click", () => {
-        if (reviewApproveBtn.disabled) return;
-        const reviewLog = document.getElementById("review-action-log");
-        const queueId = ((document.getElementById("review-queue-id") || {}).value || "").toString().trim();
-        const operatorId = ((document.getElementById("review-operator-id") || {}).value || "").toString().trim();
-        const rationale = ((document.getElementById("review-rationale") || {}).value || "").toString().trim();
-        const note = ((document.getElementById("review-note") || {}).value || "").toString().trim();
-        const runId = ((document.getElementById("review-run-id") || {}).value || "").toString().trim();
-        const confirmed = Boolean((document.getElementById("review-confirm") || {}).checked);
-        if (!queueId) {
-          setActionLog(reviewLog, "Missing queue_id for review action.", "warn");
-          return;
-        }
-        if (!rationale) {
-          setActionLog(reviewLog, "Rationale is required for approve/reject decisions.", "warn");
-          return;
-        }
-        if (!confirmed) {
-          setActionLog(reviewLog, "Please confirm the decision checkbox before submitting.", "warn");
-          return;
-        }
-        if (!window.confirm(`Approve candidate ${queueId}?`)) return;
-        callAction(
-          "/api/actions/review-approve",
-          {queue_id: queueId, operator_id: operatorId, rationale: rationale, note: note, confirm: true},
-          "review-action-log",
-          {
-            onCompleted: (data) => {
-              if (String(data.status || "").toLowerCase() !== "completed") return;
-              const runToken = encodeURIComponent(runId);
-              const queueToken = encodeURIComponent(queueId);
-              window.setTimeout(() => {
-                window.location.href = `/?run_id=${runToken}&active_tab=review-queue&review_status=APPROVED&review_queue_id=${queueToken}`;
-              }, 350);
-            },
-          },
-        );
-      });
-    }
-    const reviewRejectBtn = document.getElementById("action-review-reject");
-    if (reviewRejectBtn) {
-      reviewRejectBtn.addEventListener("click", () => {
-        if (reviewRejectBtn.disabled) return;
-        const reviewLog = document.getElementById("review-action-log");
-        const queueId = ((document.getElementById("review-queue-id") || {}).value || "").toString().trim();
-        const operatorId = ((document.getElementById("review-operator-id") || {}).value || "").toString().trim();
-        const rationale = ((document.getElementById("review-rationale") || {}).value || "").toString().trim();
-        const note = ((document.getElementById("review-note") || {}).value || "").toString().trim();
-        const runId = ((document.getElementById("review-run-id") || {}).value || "").toString().trim();
-        const confirmed = Boolean((document.getElementById("review-confirm") || {}).checked);
-        if (!queueId) {
-          setActionLog(reviewLog, "Missing queue_id for review action.", "warn");
-          return;
-        }
-        if (!rationale) {
-          setActionLog(reviewLog, "Rationale is required for approve/reject decisions.", "warn");
-          return;
-        }
-        if (!confirmed) {
-          setActionLog(reviewLog, "Please confirm the decision checkbox before submitting.", "warn");
-          return;
-        }
-        if (!window.confirm(`Reject candidate ${queueId}?`)) return;
-        callAction(
-          "/api/actions/review-reject",
-          {queue_id: queueId, operator_id: operatorId, rationale: rationale, note: note, confirm: true},
-          "review-action-log",
-          {
-            onCompleted: (data) => {
-              if (String(data.status || "").toLowerCase() !== "completed") return;
-              const runToken = encodeURIComponent(runId);
-              const queueToken = encodeURIComponent(queueId);
-              window.setTimeout(() => {
-                window.location.href = `/?run_id=${runToken}&active_tab=review-queue&review_status=REJECTED&review_queue_id=${queueToken}`;
-              }, 350);
-            },
-          },
-        );
-      });
-    }
+        <button class="sidebar__nav-item" data-section="prediction" data-tooltip="Prediction Engine" aria-current="false">
+          <svg class="sidebar__icon" viewBox="0 0 18 18" fill="none">
+            <polyline points="2,14 6,8 9,11 13,5 16,7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+          </svg>
+          <span class="sidebar__nav-label">Prediction</span>
+        </button>
 
-    const txReconcileBtn = document.getElementById("action-tx-reconcile");
-    if (txReconcileBtn) {
-      txReconcileBtn.addEventListener("click", () => {
-        if (txReconcileBtn.disabled) return;
-        const runId = (document.getElementById("tx-run-id") || {}).value || "";
-        const intentId = (document.getElementById("tx-intent-id") || {}).value || "";
-        const limit = Number((document.getElementById("tx-limit") || {}).value || "100");
-        callAction(
-          "/api/actions/tx-reconcile",
-          {run_id: runId, intent_id: intentId, limit: Number.isFinite(limit) ? limit : 100},
-          "tx-action-log",
-        );
-      });
-    }
-    const txResubmitBtn = document.getElementById("action-tx-resubmit-safe");
-    if (txResubmitBtn) {
-      txResubmitBtn.addEventListener("click", () => {
-        if (txResubmitBtn.disabled) return;
-        const intentId = (document.getElementById("tx-intent-id") || {}).value || "";
-        if (!window.confirm(`Safe resubmit intent ${intentId}?`)) return;
-        callAction(
-          "/api/actions/tx-resubmit-safe",
-          {intent_id: intentId, confirm: true},
-          "tx-action-log",
-        );
-      });
-    }
-  </script>
+        <button class="sidebar__nav-item" data-section="risk" data-tooltip="Risk Engine" aria-current="false">
+          <svg class="sidebar__icon" viewBox="0 0 18 18" fill="none">
+            <path d="M9 2L16 15H2L9 2Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+            <line x1="9" y1="8" x2="9" y2="11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <circle cx="9" cy="13" r=".8" fill="currentColor"/>
+          </svg>
+          <span class="sidebar__nav-label">Risk</span>
+        </button>
+
+        <span class="sidebar__section-label">Operations</span>
+
+        <button class="sidebar__nav-item" data-section="review-queue" data-tooltip="Review Queue" aria-current="false">
+          <svg class="sidebar__icon" viewBox="0 0 18 18" fill="none">
+            <rect x="2" y="2" width="14" height="14" rx="2.5" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M6 9l2 2 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span class="sidebar__nav-label">Review Queue</span>
+          <span class="sidebar__badge" id="badge-review"></span>
+        </button>
+
+        <button class="sidebar__nav-item" data-section="execution" data-tooltip="Execution Lane" aria-current="false">
+          <svg class="sidebar__icon" viewBox="0 0 18 18" fill="none">
+            <polygon points="4,3 14,9 4,15" fill="currentColor" opacity=".85"/>
+          </svg>
+          <span class="sidebar__nav-label">Execution</span>
+        </button>
+
+        <button class="sidebar__nav-item" data-section="sandbox-tx" data-tooltip="Sandbox TX" aria-current="false">
+          <svg class="sidebar__icon" viewBox="0 0 18 18" fill="none">
+            <rect x="2" y="5" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M6 5V4a3 3 0 016 0v1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          <span class="sidebar__nav-label">Sandbox TX</span>
+        </button>
+
+        <button class="sidebar__nav-item" data-section="positions" data-tooltip="Open Positions" aria-current="false">
+          <svg class="sidebar__icon" viewBox="0 0 18 18" fill="none">
+            <rect x="2" y="10" width="3" height="6" rx="1" fill="currentColor" opacity=".9"/>
+            <rect x="7" y="7"  width="3" height="9" rx="1" fill="currentColor" opacity=".7"/>
+            <rect x="12" y="4" width="3" height="12" rx="1" fill="currentColor" opacity=".5"/>
+          </svg>
+          <span class="sidebar__nav-label">Positions</span>
+        </button>
+
+        <button class="sidebar__nav-item" data-section="settlement" data-tooltip="Settlement Lane" aria-current="false">
+          <svg class="sidebar__icon" viewBox="0 0 18 18" fill="none">
+            <circle cx="9" cy="9" r="7" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M6 9h6M9 6v6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          <span class="sidebar__nav-label">Settlement</span>
+        </button>
+
+        <span class="sidebar__section-label">Reports & System</span>
+
+        <button class="sidebar__nav-item" data-section="reports" data-tooltip="Reports & Replay" aria-current="false">
+          <svg class="sidebar__icon" viewBox="0 0 18 18" fill="none">
+            <path d="M4 2h7l4 4v10a1 1 0 01-1 1H4a1 1 0 01-1-1V3a1 1 0 011-1z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+            <path d="M11 2v5h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <line x1="5" y1="10" x2="9"  y2="10" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+            <line x1="5" y1="13" x2="11" y2="13" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+          </svg>
+          <span class="sidebar__nav-label">Reports</span>
+        </button>
+
+        <button class="sidebar__nav-item" data-section="system" data-tooltip="System Health" aria-current="false">
+          <svg class="sidebar__icon" viewBox="0 0 18 18" fill="none">
+            <circle cx="9" cy="9" r="7" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M2 9h2l2-4 3 8 2-6 1.5 2H16" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span class="sidebar__nav-label">System</span>
+        </button>
+
+      </nav>
+
+      <!-- Footer: run selector + auth -->
+      <div class="sidebar__footer">
+        {% if run_selector and run_selector.runs %}
+        <div class="sidebar__run-selector">
+          <form method="get" action="/">
+            <label class="sr-only" for="run-id-select">Run</label>
+            <select id="run-id-select" name="run_id" onchange="this.form.submit()" title="Select run">
+              {% for r in run_selector.runs %}
+              <option value="{{ r.run_id }}"{% if r.run_id == run_selector.selected_run_id %} selected{% endif %}>
+                {{ r.label }}
+              </option>
+              {% endfor %}
+            </select>
+          </form>
+        </div>
+        {% endif %}
+
+        {% if auth_enabled and auth_user and auth_user.username %}
+        <div class="sidebar__user">
+          <span class="sidebar__user-name">{{ auth_user.username }}</span>
+          <span class="pill pill--{{ auth_user.role | lower | default('viewer') }}">{{ auth_user.role }}</span>
+        </div>
+        {% endif %}
+      </div>
+    </aside>
+
+    <!-- ── MAIN LAYOUT ─────────────────────────────────────── -->
+    <div class="app-layout">
+
+      <header class="topbar" role="banner">
+        <button class="topbar__menu-btn" id="mobile-menu-btn" aria-controls="sidebar" aria-label="Open navigation">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <line x1="2" y1="4"  x2="14" y2="4"  stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <line x1="2" y1="8"  x2="14" y2="8"  stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <line x1="2" y1="12" x2="14" y2="12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </button>
+
+        <span class="topbar__breadcrumb" id="topbar-breadcrumb">Overview</span>
+
+        <div class="topbar__status-row">
+          <span class="pulse-dot pulse-dot--live" title="Live data stream" aria-hidden="true"></span>
+          {% if overview and overview.runtime_mode %}
+          <span class="status-chip" id="global-mode">{{ overview.runtime_mode }}</span>
+          {% endif %}
+          {% if overview and overview.operator_paused %}
+          <span class="status-chip status-chip--warn">PAUSED</span>
+          {% endif %}
+        </div>
+
+        {% if auth_enabled and auth_user and auth_user.username %}
+        <div class="topbar__auth">
+          <form method="post" action="/logout">
+            <button type="submit" class="btn btn--ghost btn--sm">Logout</button>
+          </form>
+        </div>
+        {% endif %}
+      </header>
+
+      <main id="main-content" class="content-area" role="main" tabindex="-1">
+        {% block content %}{% endblock %}
+      </main>
+
+    </div><!-- /.app-layout -->
+  </div><!-- /.app-shell -->
+
+  <!-- Action log (toast notifications) -->
+  <div id="action-log" class="action-log" aria-live="polite" aria-atomic="false"></div>
+
+  <script src="/static/app.js"></script>
 </body>
 </html>

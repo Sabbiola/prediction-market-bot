@@ -6,6 +6,7 @@ from time import perf_counter
 from typing import Literal
 
 from fastapi import FastAPI, Request
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response
 from fastapi.templating import Jinja2Templates
@@ -123,14 +124,15 @@ def create_web_app(
             response.headers["Content-Security-Policy"] = (
                 "default-src 'self'; "
                 "script-src 'self' 'unsafe-inline'; "
-                "style-src 'self' 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
                 "img-src 'self' data:; "
-                "font-src 'self'; "
+                "font-src 'self' https://fonts.gstatic.com; "
                 "connect-src 'self'; "
                 "frame-ancestors 'none'"
             )
             return response
 
+    app.mount("/static", StaticFiles(directory=str(_static_dir())), name="static")
     app.include_router(api_router)
     app.include_router(pages_router)
     return app
@@ -138,6 +140,10 @@ def create_web_app(
 
 def _templates_dir() -> Path:
     return Path(__file__).resolve().parent / "templates"
+
+
+def _static_dir() -> Path:
+    return Path(__file__).resolve().parent / "static"
 
 
 def _cookie_samesite(value: str) -> Literal["lax", "strict", "none"]:
