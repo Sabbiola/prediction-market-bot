@@ -156,6 +156,27 @@ def build_runtime_prediction_features(candidate: MarketCandidate, research: Rese
     )
 
 
+def enrich_with_btc_features(
+    base: RuntimePredictionFeatures,
+    btc_features: dict[str, float],
+) -> RuntimePredictionFeatures:
+    """Overlay BTC technical features onto base features and switch schema to btc-v1.
+
+    Used when the prediction target is a BTC Up/Down market:
+      - Merges Binance-derived features into the values dict.
+      - Sets schema_version to "btc-v1" so the BTC model artifact loads correctly.
+    """
+    if not btc_features:
+        return base
+    merged = dict(base.values)
+    merged.update(btc_features)
+    return RuntimePredictionFeatures(
+        schema_version="btc-v1",
+        decision_timestamp_utc=base.decision_timestamp_utc,
+        values=merged,
+    )
+
+
 def build_alt_shadow_prediction_features(
     candidate: MarketCandidate,
     research: ResearchPacket,

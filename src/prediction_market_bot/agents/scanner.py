@@ -40,7 +40,7 @@ class ScanAgent:
     def _score_market(self, market: MarketSnapshot) -> tuple[float, tuple[str, ...]]:
         liquidity_score = min(market.liquidity_usd / (self.settings.min_liquidity_usd * 5.0), 1.0)
         spread_score = 1.0 - min(market.spread_bps / max(self.settings.max_spread_bps, 1), 1.0)
-        activity_score = min(market.volume_24h_usd / (self.settings.min_volume_24h_usd * 5.0), 1.0)
+        activity_score = min(market.volume_24h_usd / max(self.settings.min_volume_24h_usd * 5.0, 1.0), 1.0)
         time_score = min(self.settings.min_hours_to_resolution / max(market.hours_to_resolution, 1.0), 1.0)
 
         score = round(

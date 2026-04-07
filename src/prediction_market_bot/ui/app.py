@@ -132,7 +132,9 @@ def create_web_app(
             )
             return response
 
-    app.mount("/static", StaticFiles(directory=str(_static_dir())), name="static")
+    static_dir = _static_dir()
+    if static_dir.exists():
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
     app.include_router(api_router)
     app.include_router(pages_router)
     return app

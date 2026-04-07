@@ -45,13 +45,16 @@ class HistoricalResolvedMarketProvider:
         date_from: date | None,
         date_to: date | None,
     ) -> HistoricalMarketPage:
+        effective_page_size = max(page_size if page_size is not None else self.page_size, 1)
+        # Gamma API uses numeric offset; cursor encodes next-page offset as decimal string.
+        offset = int(cursor) if cursor and cursor.isdigit() else 0
         params: dict[str, str] = {
             "closed": "true",
             "resolved": "true",
-            "limit": str(max(page_size if page_size is not None else self.page_size, 1)),
+            "limit": str(effective_page_size),
         }
-        if cursor:
-            params["cursor"] = cursor
+        if offset > 0:
+            params["offset"] = str(offset)
         if date_from is not None:
             params["date_from"] = date_from.isoformat()
         if date_to is not None:
@@ -63,8 +66,10 @@ class HistoricalResolvedMarketProvider:
         )
         payload = response.payload
         if isinstance(payload, list):
+            # Gamma API returns a bare list — synthesise a cursor for the next page.
             markets = tuple(row for row in payload if isinstance(row, Mapping))
-            return HistoricalMarketPage(markets=markets, next_cursor=None, retries_used=response.retries_used)
+            next_cursor = str(offset + effective_page_size) if markets else None
+            return HistoricalMarketPage(markets=markets, next_cursor=next_cursor, retries_used=response.retries_used)
         if not isinstance(payload, Mapping):
             raise RuntimeError("historical_markets_payload_not_list_or_mapping")
         raw_markets = payload.get("markets")

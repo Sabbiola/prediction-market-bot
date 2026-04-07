@@ -185,7 +185,7 @@ alt_data:
 
 strategy_research:
   historical_data_ingest:
-    base_dir: C:\pmdata\sr
+    base_dir: data/strategy-research
     default_dataset_id: historical-markets
     markets_endpoint_url: https://gamma-api.polymarket.com/markets
     events_endpoint_url: https://gamma-api.polymarket.com/events/{event_id}

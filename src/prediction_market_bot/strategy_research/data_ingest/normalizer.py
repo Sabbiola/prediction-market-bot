@@ -68,6 +68,32 @@ def _extract_yes_price(payload: Mapping[str, Any]) -> float | None:
     return None
 
 
+def _extract_yes_price_midmarket(payload: Mapping[str, Any]) -> float | None:
+    """Extract a pre-resolution yes price, excluding terminal settlement prices (0 or 1).
+
+    Polymarket Gamma API sets outcomePrices to ["1","0"] or ["0","1"] after settlement.
+    Using those as the decision-time market price would make every label trivially predictable.
+    We exclude prices that are ≥0.99 or ≤0.01 (settled), and fall back to None so the label
+    builder can apply its own default (0.5).
+    """
+    # lastTradePrice reflects the final trade before close — skip if it looks settled
+    last_trade = _to_float(payload.get("lastTradePrice"))
+    if last_trade is not None and 0.02 <= last_trade <= 0.98:
+        return last_trade
+    outcome_prices = payload.get("outcomePrices")
+    if isinstance(outcome_prices, str):
+        import json as _json
+        try:
+            outcome_prices = _json.loads(outcome_prices)
+        except Exception:
+            outcome_prices = None
+    if isinstance(outcome_prices, list) and outcome_prices:
+        parsed = _to_float(outcome_prices[0])
+        if parsed is not None and 0.02 <= parsed <= 0.98:
+            return parsed
+    return None
+
+
 def normalize_event(event_payload: Mapping[str, Any]) -> dict[str, Any]:
     event_id = str(event_payload.get("id") or event_payload.get("event_id") or "").strip()
     return {
@@ -123,9 +149,10 @@ def normalize_market(market_payload: Mapping[str, Any], *, event_id: str = "") -
             market_payload.get("resolved_at")
             or market_payload.get("resolutionDate")
             or market_payload.get("resolution_date")
+            or market_payload.get("closedTime")
         ),
         "close_at_utc": _parse_datetime(market_payload.get("endDate") or market_payload.get("closeDate")),
-        "yes_price_last": _extract_yes_price(market_payload),
+        "yes_price_last": _extract_yes_price_midmarket(market_payload),
         "liquidity_usd": _to_float(market_payload.get("liquidity")),
         "volume_24h_usd": _to_float(market_payload.get("volume24hr") or market_payload.get("volume24h")),
         "raw_source": "historical_market_metadata",

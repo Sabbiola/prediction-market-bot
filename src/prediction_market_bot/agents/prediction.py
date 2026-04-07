@@ -19,7 +19,9 @@ from prediction_market_bot.agents.prediction_model_runtime import (
 from prediction_market_bot.agents.prediction_runtime_features import (
     RuntimePredictionFeatures,
     build_runtime_prediction_features,
+    enrich_with_btc_features,
 )
+from prediction_market_bot.agents.btc_feature_enricher import BtcFeatureEnricher, is_btc_updown_market
 from prediction_market_bot.agents.prediction_shadow_engine import run_shadow_mode
 from prediction_market_bot.agents.prediction_alt_promoted_engine import run_alt_promoted_mode
 from prediction_market_bot.domain.models import MarketCandidate, PredictionResult, ResearchPacket
@@ -38,12 +40,20 @@ class PredictionAgent:
         self.last_shadow_comparison: dict[str, object] | None = None
         self.last_parity_warnings: tuple[str, ...] = ()
         self.last_runtime_features: dict[str, object] | None = None
+        self._btc_enricher: BtcFeatureEnricher = BtcFeatureEnricher()
         self._load_runtime_model()
 
     def run(self, candidate: MarketCandidate, research: ResearchPacket) -> PredictionResult:
         self.last_shadow_comparison = None
         self.last_parity_warnings = ()
         runtime_features = build_runtime_prediction_features(candidate, research)
+        # Enrich with live BTC technicals when this is a BTC Up/Down market
+        slug = str(getattr(candidate.market, "slug", "") or "").lower()
+        question = str(getattr(candidate.market, "question", "") or "").lower()
+        if is_btc_updown_market(slug, question):
+            btc_feats = self._btc_enricher.get_features()
+            if btc_feats:
+                runtime_features = enrich_with_btc_features(runtime_features, btc_feats)
         self.last_runtime_features = {
             "schema_version": runtime_features.schema_version,
             "decision_timestamp_utc": runtime_features.decision_timestamp_utc.isoformat(),

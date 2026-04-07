@@ -1,0 +1,84 @@
+{
+  "artifact_type": "prediction_model_v2",
+  "model_name": "btc_updown_5m_lr_v1",
+  "model_version": "v1.0.0",
+  "feature_schema_version": "btc-v1",
+  "description": "Logistic regression for Polymarket BTC Up/Down 5-minute markets. Features: Binance 5m OHLCV technical indicators.",
+  "training_samples": 207309,
+  "train_accuracy": 0.516235,
+  "val_accuracy": 0.520959,
+  "yes_rate": 0.499221,
+  "feature_columns": [
+    "f_btc_prev_return_1c",
+    "f_btc_prev_return_3c",
+    "f_btc_prev_return_12c",
+    "f_btc_prev_return_48c",
+    "f_btc_rsi_14",
+    "f_btc_volume_ratio",
+    "f_btc_volatility_12c",
+    "f_btc_bb_position",
+    "f_decision_hour_utc_sin",
+    "f_decision_hour_utc_cos"
+  ],
+  "required_features": [
+    "f_btc_prev_return_1c",
+    "f_btc_rsi_14"
+  ],
+  "algorithm_payload": {
+    "algorithm": "logistic_regression",
+    "feature_names": [
+      "f_btc_prev_return_1c",
+      "f_btc_prev_return_3c",
+      "f_btc_prev_return_12c",
+      "f_btc_prev_return_48c",
+      "f_btc_rsi_14",
+      "f_btc_volume_ratio",
+      "f_btc_volatility_12c",
+      "f_btc_bb_position",
+      "f_decision_hour_utc_sin",
+      "f_decision_hour_utc_cos"
+    ],
+    "means": [
+      1.57e-06,
+      3.15e-06,
+      1.751e-05,
+      7.591e-05,
+      0.00455371,
+      -0.1746168,
+      0.11668061,
+      0.00307216,
+      0.00021374,
+      9.405e-05
+    ],
+    "stds": [
+      0.00150489,
+      0.00212031,
+      0.00487112,
+      0.009943,
+      0.31250539,
+      0.61390235,
+      0.08514975,
+      0.30638041,
+      0.70705938,
+      0.70715414
+    ],
+    "weights": [
+      0.01835673,
+      -0.04446242,
+      -0.02350685,
+      -0.00660925,
+      -0.01878771,
+      -0.00029005,
+      0.01211839,
+      -0.03032989,
+      -0.01672984,
+      0.00958116
+    ],
+    "bias": -0.00049317
+  },
+  "calibration": {
+    "method": "none",
+    "calibration_version": "none",
+    "parameters": {}
+  }
+}
