@@ -497,7 +497,7 @@ def build_artifact(
         "feature_schema_version":  f"btc-{timeframe}",
         "description": (
             f"Logistic regression for Polymarket BTC Up/Down {timeframe.upper()} markets. "
-            f"Config: {feature_config['name']} | penalty={hp['penalty']} C={hp['C']} | "
+            f"Config: {feature_config['name']} | penalty={hp['penalty_name']} C={hp['C']} | "
             f"val_acc={cv_metrics['val_acc']:.4f} val_auc={cv_metrics['val_auc']:.4f}"
         ),
         "training_samples":  n_samples,
@@ -631,7 +631,7 @@ def run_search(
     # Retrain best config on full data
     print(f"\n  Retraining best config on full data ...")
     print(f"    feature_config={best_result['fc']['name']}  "
-          f"penalty={best_result['hp']['penalty']}  C={best_result['hp']['C']}")
+          f"penalty={best_result['hp']['penalty_name']}  C={best_result['hp']['C']}")
 
     X_best, y_best = best_result["X"], best_result["y"]
     scaler, clf = retrain_full(X_best, y_best, penalty=best_result["hp"]["l1_ratio"], C=best_result["hp"]["C"])
