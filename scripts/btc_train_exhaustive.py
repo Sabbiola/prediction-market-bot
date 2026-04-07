@@ -25,16 +25,19 @@ from __future__ import annotations
 import json
 import math
 import time
+import warnings
 from itertools import product
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-from sklearn.calibration import CalibratedClassifierCV
-from sklearn.linear_model import LogisticRegression, SGDClassifier
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import StandardScaler
+
+# sklearn 1.8 deprecated penalty/n_jobs in LogisticRegression
+warnings.filterwarnings("ignore", category=FutureWarning, module="sklearn")
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -389,12 +392,12 @@ FEATURE_CONFIGS: list[dict[str, Any]] = [
 # C = inverse regularisation strength (higher = less regularisation).
 
 HP_GRID: list[dict[str, Any]] = [
-    {"penalty": pen, "C": c}
-    for pen, c in product(
-        ["l1", "l2"],
+    {"l1_ratio": ratio, "penalty_name": name, "C": c}
+    for (ratio, name), c in product(
+        [(0.0, "l2"), (0.5, "elasticnet"), (1.0, "l1")],
         [0.001, 0.01, 0.1, 0.5, 1.0, 5.0, 10.0, 100.0],
     )
-]  # 16 combos
+]  # 24 combos (L1, L2, ElasticNet x 8 C values)
 
 
 # ---------------------------------------------------------------------------
@@ -405,7 +408,7 @@ def fit_and_evaluate(
     X: np.ndarray,
     y: np.ndarray,
     *,
-    penalty: str,
+    penalty: float,   # l1_ratio: 0.0=L2, 0.5=ElasticNet, 1.0=L1
     C: float,
     n_splits: int = 3,
 ) -> dict[str, float]:
@@ -422,12 +425,11 @@ def fit_and_evaluate(
         X_va_s = scaler.transform(X_va)
 
         clf = LogisticRegression(
-            penalty=penalty,
+            l1_ratio=penalty,
             C=C,
             solver="saga",
             max_iter=500,
             random_state=42,
-            n_jobs=1,
         )
         clf.fit(X_tr_s, y_tr)
 
@@ -452,15 +454,15 @@ def retrain_full(
     X: np.ndarray,
     y: np.ndarray,
     *,
-    penalty: str,
+    penalty: float,   # l1_ratio: 0.0=L2, 0.5=ElasticNet, 1.0=L1
     C: float,
 ) -> tuple[StandardScaler, LogisticRegression]:
     """Retrain on the full dataset with the best config."""
     scaler = StandardScaler()
     X_s = scaler.fit_transform(X)
     clf = LogisticRegression(
-        penalty=penalty, C=C, solver="saga",
-        max_iter=1000, random_state=42, n_jobs=1,
+        l1_ratio=penalty, C=C, solver="saga",
+        max_iter=1000, random_state=42,
     )
     clf.fit(X_s, y)
     return scaler, clf
@@ -584,7 +586,7 @@ def run_search(
             run_idx += 1
             t0_hp = time.time()
             try:
-                metrics = fit_and_evaluate(X, y, penalty=hp["penalty"], C=hp["C"], n_splits=n_cv_splits)
+                metrics = fit_and_evaluate(X, y, penalty=hp["l1_ratio"], C=hp["C"], n_splits=n_cv_splits)
             except Exception as exc:
                 print(f"    [{run_idx:>3}/{total_configs}] {hp} ERROR: {exc}")
                 continue
@@ -593,7 +595,7 @@ def run_search(
             marker = " <-- BEST" if metrics["val_auc"] > best_auc else ""
             print(
                 f"    [{run_idx:>3}/{total_configs}]  "
-                f"pen={hp['penalty']:2}  C={hp['C']:>7}  "
+                f"pen={hp['penalty_name']:>11}  C={hp['C']:>7}  "
                 f"acc={metrics['val_acc']:.4f}(±{metrics['val_acc_std']:.4f})  "
                 f"auc={metrics['val_auc']:.4f}  "
                 f"brier={metrics['val_brier']:.4f}  "
@@ -603,7 +605,8 @@ def run_search(
             result_entry: dict[str, Any] = {
                 "timeframe": timeframe,
                 "feature_config": fc["name"],
-                "penalty":  hp["penalty"],
+                "penalty":  hp["penalty_name"],
+                "l1_ratio": hp["l1_ratio"],
                 "C":        hp["C"],
                 "n_features": X.shape[1],
                 "n_samples":  len(X),
@@ -631,7 +634,7 @@ def run_search(
           f"penalty={best_result['hp']['penalty']}  C={best_result['hp']['C']}")
 
     X_best, y_best = best_result["X"], best_result["y"]
-    scaler, clf = retrain_full(X_best, y_best, penalty=best_result["hp"]["penalty"], C=best_result["hp"]["C"])
+    scaler, clf = retrain_full(X_best, y_best, penalty=best_result["hp"]["l1_ratio"], C=best_result["hp"]["C"])
 
     X_s = scaler.transform(X_best)
     train_acc = float((clf.predict(X_s) == y_best).mean())
