@@ -86,6 +86,7 @@ def fetch_long_short_ratio(start_ms: int, end_ms: int, out_path: Path, period: s
     print(f"\n[2/3] Long/short account ratio ({SYMBOL}, period={period}) ...")
     total = 0
     cursor_ms = start_ms
+    retries = 0
     with out_path.open("w", encoding="utf-8") as fh:
         while cursor_ms < end_ms:
             url = (
@@ -94,7 +95,12 @@ def fetch_long_short_ratio(start_ms: int, end_ms: int, out_path: Path, period: s
             )
             try:
                 rows = _fetch_json(url)
+                retries = 0
             except Exception as exc:
+                retries += 1
+                if retries >= 3:
+                    print(f"  Giving up after {retries} retries: {exc}")
+                    break
                 print(f"  Error: {exc}. Retrying in 2s...")
                 time.sleep(2)
                 continue
@@ -132,6 +138,7 @@ def fetch_taker_ratio(start_ms: int, end_ms: int, out_path: Path, period: str = 
     print(f"\n[3/3] Taker buy/sell ratio ({SYMBOL}, period={period}) ...")
     total = 0
     cursor_ms = start_ms
+    retries = 0
     with out_path.open("w", encoding="utf-8") as fh:
         while cursor_ms < end_ms:
             url = (
@@ -140,7 +147,12 @@ def fetch_taker_ratio(start_ms: int, end_ms: int, out_path: Path, period: str = 
             )
             try:
                 rows = _fetch_json(url)
+                retries = 0
             except Exception as exc:
+                retries += 1
+                if retries >= 3:
+                    print(f"  Giving up after {retries} retries: {exc}")
+                    break
                 print(f"  Error: {exc}. Retrying in 2s...")
                 time.sleep(2)
                 continue
@@ -187,14 +199,18 @@ def main() -> None:
     now_ms = int(datetime.now(UTC).timestamp() * 1000)
     start_ms = int((datetime.now(UTC) - timedelta(days=30 * args.months)).timestamp() * 1000)
 
+    # Binance Futures data endpoints (LS ratio, taker ratio) only support last 30 days.
+    # Funding rate supports full history.
+    ls_taker_start_ms = int((datetime.now(UTC) - timedelta(days=29)).timestamp() * 1000)
+
     print(f"Fetching BTC derivatives data")
-    print(f"  from  : {datetime.fromtimestamp(start_ms / 1000, UTC).strftime('%Y-%m-%d')}")
-    print(f"  to    : {datetime.fromtimestamp(now_ms / 1000, UTC).strftime('%Y-%m-%d')}")
-    print(f"  period: {args.period}")
+    print(f"  funding rate : {datetime.fromtimestamp(start_ms / 1000, UTC).strftime('%Y-%m-%d')} to now (full history)")
+    print(f"  ls/taker     : {datetime.fromtimestamp(ls_taker_start_ms / 1000, UTC).strftime('%Y-%m-%d')} to now (API limit: 30d)")
+    print(f"  period       : {args.period}")
 
     n1 = fetch_funding_rate(start_ms, now_ms, out_dir / "funding_rate.jsonl")
-    n2 = fetch_long_short_ratio(start_ms, now_ms, out_dir / "long_short_ratio.jsonl", period=args.period)
-    n3 = fetch_taker_ratio(start_ms, now_ms, out_dir / "taker_ratio.jsonl", period=args.period)
+    n2 = fetch_long_short_ratio(ls_taker_start_ms, now_ms, out_dir / "long_short_ratio.jsonl", period=args.period)
+    n3 = fetch_taker_ratio(ls_taker_start_ms, now_ms, out_dir / "taker_ratio.jsonl", period=args.period)
 
     print(f"\nAll done: funding_rate={n1}, long_short={n2}, taker={n3}")
 
