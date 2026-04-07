@@ -51,6 +51,15 @@ class _RuntimeBinaryModel(Protocol):
         ...
 
 
+def _try_import_xgboost() -> Any:
+    """Lazy-import xgboost. Returns the module or None."""
+    try:
+        import xgboost  # type: ignore[import-untyped]
+        return xgboost
+    except ImportError:
+        return None
+
+
 @dataclass(slots=True, frozen=True)
 class _LogisticRegressionRuntimeModel:
     feature_names: tuple[str, ...]
@@ -87,6 +96,38 @@ class _DecisionStumpRuntimeModel:
         if value <= self.threshold:
             return _clamp_probability(self.left_probability)
         return _clamp_probability(self.right_probability)
+
+
+class _XGBoostRuntimeModel:
+    """Runtime model that wraps a saved XGBoost JSON model file."""
+
+    def __init__(self, feature_names: tuple[str, ...], model_path: Path) -> None:
+        self._feature_names = feature_names
+        xgb = _try_import_xgboost()
+        if xgb is None:
+            raise PredictionModelArtifactError(
+                f"xgboost_not_installed model_path={model_path} "
+                "install with: pip install xgboost"
+            )
+        if not model_path.exists():
+            raise PredictionModelArtifactError(f"xgb_model_not_found path={model_path}")
+        self._booster = xgb.Booster()
+        self._booster.load_model(str(model_path))
+        self._DMatrix = xgb.DMatrix
+
+    @property
+    def feature_names(self) -> tuple[str, ...]:
+        return self._feature_names
+
+    def predict_proba(self, features: Mapping[str, float]) -> float:
+        import numpy as np  # noqa: F811 — local import to keep module lightweight
+        row = np.array(
+            [[float(features.get(name, 0.0)) for name in self._feature_names]],
+            dtype=np.float32,
+        )
+        dm = self._DMatrix(row, feature_names=list(self._feature_names))
+        prob = float(self._booster.predict(dm)[0])
+        return _clamp_probability(prob)
 
 
 @dataclass(slots=True, frozen=True)
@@ -288,6 +329,13 @@ class PredictionModelArtifactLoader:
                 right_probability=_as_float(payload.get("right_probability"), default=0.5),
                 global_probability=_as_float(payload.get("global_probability"), default=0.5),
             )
+        if algorithm == "xgboost":
+            feature_names = _as_str_tuple(payload.get("feature_names")) or feature_columns
+            xgb_model_rel = str(payload.get("xgb_model_path") or "").strip()
+            if not xgb_model_rel:
+                raise PredictionModelArtifactError(f"missing_xgb_model_path path={path}")
+            xgb_model_path = path.parent / xgb_model_rel
+            return _XGBoostRuntimeModel(feature_names=feature_names, model_path=xgb_model_path)
         if algorithm == "xgboost_candidate":
             raise PredictionModelArtifactError(
                 "unsupported_runtime_algorithm=xgboost_candidate "
