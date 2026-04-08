@@ -320,13 +320,16 @@ class BtcFeatureEnricher:
         atr_ratio = _clamp(atr / max(closes[-1], 1e-8) * 100, 0.0, 5.0)
 
         # Hour of day (cyclic)
-        now_utc = datetime.now(UTC)
-        hour_frac = now_utc.hour + now_utc.minute / 60.0
+        # Use the open timestamp of the last COMPLETED candle — matches training
+        # which uses candles[idx]["open_time_ms"]/1000, not datetime.now().
+        last_completed = completed[-1] if completed else candles[-1]
+        open_time_sec = last_completed.get("open_time_ms", 0) / 1000
+        hour_frac = (open_time_sec % 86400) / 3600
         f_hour_sin = math.sin(2 * math.pi * hour_frac / 24)
         f_hour_cos = math.cos(2 * math.pi * hour_frac / 24)
 
-        # Weekday (cyclic)
-        dow = now_utc.weekday()  # 0=Mon
+        # Weekday (cyclic) — derived from same candle timestamp for consistency
+        dow = int(open_time_sec // 86400 + 4) % 7  # 0=Mon (Unix epoch was Thu, +4 aligns)
         f_weekday_sin = math.sin(2 * math.pi * dow / 7)
         f_weekday_cos = math.cos(2 * math.pi * dow / 7)
 

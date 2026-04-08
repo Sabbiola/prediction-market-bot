@@ -239,20 +239,32 @@ def main() -> None:
 
     print(f"Dataset: {len(X_raw)} samples ({skipped} skipped), YES rate: {sum(y_all)/len(y_all):.3f}")
 
-    # Standardise features
-    n, d = len(X_raw), N_FEATURES
-    means = [sum(X_raw[i][j] for i in range(n)) / n for j in range(d)]
+    # --- Temporal split BEFORE standardisation (no leakage) ---
+    # 70% train / 15% val / 15% test (test is BLINDATO — only for final report)
+    n = len(X_raw)
+    d = N_FEATURES
+    n_test  = int(n * 0.15)
+    n_val   = int(n * 0.15)
+    n_train = n - n_val - n_test
+
+    X_raw_train = X_raw[:n_train]
+    X_raw_val   = X_raw[n_train: n_train + n_val]
+    X_raw_test  = X_raw[n_train + n_val:]
+    y_train = y_all[:n_train]
+    y_val   = y_all[n_train: n_train + n_val]
+    y_test  = y_all[n_train + n_val:]
+
+    # Standardise using ONLY training set statistics (prevents val/test leakage)
+    means = [sum(row[j] for row in X_raw_train) / n_train for j in range(d)]
     stds  = [
-        max(math.sqrt(sum((X_raw[i][j] - means[j]) ** 2 for i in range(n)) / n), 1e-8)
+        max(math.sqrt(sum((row[j] - means[j]) ** 2 for row in X_raw_train) / n_train), 1e-8)
         for j in range(d)
     ]
-    X = [[(X_raw[i][j] - means[j]) / stds[j] for j in range(d)] for i in range(n)]
+    X_train = [[(r[j] - means[j]) / stds[j] for j in range(d)] for r in X_raw_train]
+    X_val   = [[(r[j] - means[j]) / stds[j] for j in range(d)] for r in X_raw_val]
+    X_test  = [[(r[j] - means[j]) / stds[j] for j in range(d)] for r in X_raw_test]
 
-    # Train / validation split (last 20% as val, time-ordered)
-    split = int(n * 0.80)
-    X_train, y_train = X[:split], y_all[:split]
-    X_val,   y_val   = X[split:], y_all[split:]
-    print(f"Train: {len(X_train)}, Val: {len(X_val)}")
+    print(f"Train: {len(X_train)}, Val: {len(X_val)}, Test (blindato): {len(X_test)}")
 
     print("Training logistic regression ...")
     weights, bias = train_lr(X_train, y_train, lr=0.05, epochs=100, l2=1e-4, batch_size=512)
@@ -267,7 +279,8 @@ def main() -> None:
 
     acc_train = accuracy(X_train, y_train)
     acc_val   = accuracy(X_val,   y_val)
-    print(f"\nTrain accuracy: {acc_train:.4f}  Val accuracy: {acc_val:.4f}")
+    acc_test  = accuracy(X_test,  y_test)   # blindato — non usato per selezione
+    print(f"\nTrain accuracy: {acc_train:.4f}  Val accuracy: {acc_val:.4f}  Test (holdout): {acc_test:.4f}")
 
     # Feature importances
     print("\nFeature weights (top by |weight|):")
@@ -285,9 +298,10 @@ def main() -> None:
         "feature_schema_version": "btc-v1",
         "description": "Logistic regression for Polymarket BTC Up/Down 5-minute markets. "
                        "Features: Binance 5m OHLCV technical indicators.",
-        "training_samples": n,
+        "training_samples": n_train,
         "train_accuracy": round(acc_train, 6),
         "val_accuracy": round(acc_val, 6),
+        "test_accuracy": round(acc_test, 6),
         "yes_rate": round(sum(y_all) / len(y_all), 6),
         "feature_columns": FEATURES,
         "required_features": ["f_btc_prev_return_1c", "f_btc_rsi_14"],
@@ -307,7 +321,7 @@ def main() -> None:
     }
     out_path.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
     print(f"\nArtifact saved: {out_path}")
-    print(f"  train_acc={acc_train:.4f}  val_acc={acc_val:.4f}  n={n}")
+    print(f"  train_acc={acc_train:.4f}  val_acc={acc_val:.4f}  test_acc={acc_test:.4f}  n_train={n_train}")
 
 
 if __name__ == "__main__":
