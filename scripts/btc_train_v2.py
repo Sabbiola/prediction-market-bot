@@ -76,6 +76,19 @@ except ImportError:
     sys.exit(1)
 
 try:
+    import optuna
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    HAS_OPTUNA = True
+except ImportError:
+    HAS_OPTUNA = False
+
+try:
+    import catboost as cb_lib
+    HAS_CATBOOST = True
+except ImportError:
+    HAS_CATBOOST = False
+
+try:
     import torch
     import torch.nn as nn
     import torch.optim as optim
@@ -134,6 +147,9 @@ FEATURE_NAMES = [
     "f_btc_ls_ratio_log",
     "f_btc_taker_ratio_log",
     "f_btc_oi_change_pct",
+    # Cross-timeframe & gap features [NEW]
+    "f_btc_gap_open",       # (curr_open - prev_close) / prev_close — known at candle start
+    "f_btc_rsi_1h",         # RSI(14) on 1h bars (resampled from 5m, no extra data)
 ]
 N_FEATURES = len(FEATURE_NAMES)
 
@@ -337,6 +353,20 @@ def compute_features(
     taker_log= _clamp(float(deriv.get("taker_ratio_log",0.0)), -2.0, 2.0)      if deriv else 0.0
     oi_chg   = _clamp(float(deriv.get("oi_change_pct",  0.0)), -5.0, 5.0)      if deriv else 0.0
 
+    # --- Gap open: (curr_open - prev_close) / prev_close [NEW] ---
+    # Known at t=0 of the candle — no lookahead. Strong momentum signal.
+    curr_open = candles[idx]["open"]
+    gap_open  = _clamp((curr_open - prev["close"]) / max(prev["close"], 1e-8), -0.05, 0.05)
+
+    # --- RSI on 1h bars (resample: take close of last candle each hour) [NEW] ---
+    # We have up to 60 5m candles in hist. Group every 12 to get 1h bars.
+    hourly_closes: list[float] = []
+    step = 12  # 12 × 5m = 1h (or 12 × 15m = 3h for 15m interval — still useful)
+    for k in range(step - 1, len(hist), step):
+        hourly_closes.append(hist[k]["close"])
+    rsi_1h_raw = _rsi(hourly_closes, min(14, max(len(hourly_closes) - 1, 1)))
+    f_rsi_1h = _clamp((rsi_1h_raw - 0.5) * 2.0, -1.0, 1.0)
+
     return [
         _clamp(r1,  -0.10, 0.10),
         _clamp(r3,  -0.15, 0.15),
@@ -356,6 +386,7 @@ def compute_features(
         cb_r1, cb_r3,
         cb_bn_spread1, cb_bn_spread3, cb_vol_dom, cb_mom_lead,
         funding, ls_log, taker_log, oi_chg,
+        gap_open, f_rsi_1h,  # NEW
     ]
 
 
@@ -454,11 +485,44 @@ def scale(X: np.ndarray, means: np.ndarray, stds: np.ndarray) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# LightGBM
+# Walk-forward cross-validation helper (used inside Optuna objectives)
 # ---------------------------------------------------------------------------
 
+def _wf_cv_eval(
+    predict_fn: Any,   # (X_tr_scaled, y_tr, X_va_scaled) → np.ndarray of probs
+    X_raw: np.ndarray,
+    y: np.ndarray,
+    n_folds: int = 3,
+) -> float:
+    """Temporal walk-forward CV: train on expanding window, evaluate on next slice.
+
+    Returns mean pnl_sharpe across folds — far more honest than a single val split.
+    Scales within each fold independently (no leakage).
+    """
+    n = len(X_raw)
+    min_train = max(500, n // (n_folds + 2))
+    fold_size = max(200, n // (n_folds + 2))
+    sharpes: list[float] = []
+
+    for i in range(n_folds):
+        tr_end  = min_train + i * fold_size
+        va_end  = tr_end + fold_size
+        if va_end > n:
+            break
+        X_tr, y_tr = X_raw[:tr_end], y[:tr_end]
+        X_va, y_va = X_raw[tr_end:va_end], y[tr_end:va_end]
+        m, s = X_tr.mean(0), np.maximum(X_tr.std(0), 1e-8)
+        try:
+            probs = predict_fn((X_tr - m) / s, y_tr, (X_va - m) / s)
+            sharpes.append(compute_pnl_metrics(probs, y_va)["sharpe"])
+        except Exception:
+            sharpes.append(-99.0)
+
+    return float(np.mean(sharpes)) if sharpes else -99.0
+
+
 # ---------------------------------------------------------------------------
-# Hyperparameter grids (searched by pnl_sharpe on val set)
+# Hyperparameter grids (fallback when Optuna not installed)
 # ---------------------------------------------------------------------------
 
 _LGBM_GRID = [
@@ -486,35 +550,71 @@ _LR_GRID = [
 ]
 
 
+def _lgbm_train_params(params: dict, X_tr: np.ndarray, y_tr: np.ndarray,
+                        X_va: np.ndarray, y_va: np.ndarray) -> Any:
+    dt = lgb.Dataset(X_tr, label=y_tr)
+    dv = lgb.Dataset(X_va, label=y_va, reference=dt)
+    full = {"objective": "binary", "metric": "binary_logloss", "verbose": -1, "random_state": 42, **params}
+    cb = [lgb.early_stopping(50, verbose=False), lgb.log_evaluation(period=-1)]
+    return lgb.train(full, dt, num_boost_round=500, valid_sets=[dv], callbacks=cb)
+
+
 def train_lgbm(
     X_train: np.ndarray, y_train: np.ndarray,
     X_val:   np.ndarray, y_val:   np.ndarray,
+    X_train_raw: np.ndarray | None = None,
+    n_optuna_trials: int = 50,
 ) -> tuple[Any, np.ndarray]:
     if not HAS_LGBM:
         return None, np.full(len(y_val), 0.5)
 
-    best_model, best_probs, best_sharpe = None, np.full(len(y_val), 0.5), -999.0
+    if HAS_OPTUNA and X_train_raw is not None:
+        # --- Bayesian search with walk-forward CV ---
+        def objective(trial: Any) -> float:
+            p = {
+                "num_leaves":        trial.suggest_int("num_leaves", 15, 200),
+                "learning_rate":     trial.suggest_float("lr", 0.005, 0.15, log=True),
+                "min_child_samples": trial.suggest_int("mcs", 5, 100),
+                "subsample":         trial.suggest_float("sub", 0.5, 1.0),
+                "colsample_bytree":  trial.suggest_float("cbt", 0.5, 1.0),
+                "reg_alpha":         trial.suggest_float("ra", 0.0, 2.0),
+                "reg_lambda":        trial.suggest_float("rl", 0.0, 2.0),
+            }
+            def _pred(X_tr: np.ndarray, y_tr: np.ndarray, X_va: np.ndarray) -> np.ndarray:
+                dt = lgb.Dataset(X_tr, label=y_tr)
+                full = {"objective": "binary", "metric": "binary_logloss", "verbose": -1, "random_state": 42, **p}
+                m = lgb.train(full, dt, num_boost_round=200,
+                              callbacks=[lgb.log_evaluation(period=-1)])
+                return m.predict(X_va)
+            return _wf_cv_eval(_pred, X_train_raw, y_train, n_folds=3)
 
-    for i, grid_params in enumerate(_LGBM_GRID):
-        dtrain = lgb.Dataset(X_train, label=y_train)
-        dval   = lgb.Dataset(X_val,   label=y_val,   reference=dtrain)
-        params = {
-            "objective": "binary", "metric": "binary_logloss",
-            "n_estimators": 500, "verbose": -1, "random_state": 42,
-            **grid_params,
-        }
-        callbacks = [lgb.early_stopping(50, verbose=False), lgb.log_evaluation(period=-1)]
-        model = lgb.train(params, dtrain, num_boost_round=params["n_estimators"],
-                          valid_sets=[dval], callbacks=callbacks)
+        study = optuna.create_study(direction="maximize",
+                                    sampler=optuna.samplers.TPESampler(seed=42))
+        study.optimize(objective, n_trials=n_optuna_trials, show_progress_bar=False)
+        best_p = study.best_params
+        print(f"    LGBM Optuna best CV sharpe={study.best_value:.3f}  params={best_p}", flush=True)
+        model = _lgbm_train_params(
+            {"num_leaves": best_p["num_leaves"], "learning_rate": best_p["lr"],
+             "min_child_samples": best_p["mcs"], "subsample": best_p["sub"],
+             "colsample_bytree": best_p["cbt"], "reg_alpha": best_p["ra"],
+             "reg_lambda": best_p["rl"]},
+            X_train, y_train, X_val, y_val,
+        )
         probs = model.predict(X_val)
-        m = compute_pnl_metrics(probs, y_val)
-        if m["sharpe"] > best_sharpe:
-            best_sharpe, best_model, best_probs = m["sharpe"], model, probs
-            print(f"    LGBM [{i+1}/{len(_LGBM_GRID)}] pnl_sharpe={m['sharpe']:.3f} n_trades={m['n_trades']} leaves={grid_params['num_leaves']} lr={grid_params['learning_rate']}  ← best", flush=True)
-        else:
-            print(f"    LGBM [{i+1}/{len(_LGBM_GRID)}] pnl_sharpe={m['sharpe']:.3f} n_trades={m['n_trades']} leaves={grid_params['num_leaves']} lr={grid_params['learning_rate']}", flush=True)
-
-    return best_model, best_probs
+        return model, probs
+    else:
+        # --- Grid fallback ---
+        best_model, best_probs, best_sharpe = None, np.full(len(y_val), 0.5), -999.0
+        for i, grid_params in enumerate(_LGBM_GRID):
+            model = _lgbm_train_params(grid_params, X_train, y_train, X_val, y_val)
+            probs = model.predict(X_val)
+            m = compute_pnl_metrics(probs, y_val)
+            marker = "  ← best" if m["sharpe"] > best_sharpe else ""
+            if m["sharpe"] > best_sharpe:
+                best_sharpe, best_model, best_probs = m["sharpe"], model, probs
+            print(f"    LGBM [{i+1}/{len(_LGBM_GRID)}] sharpe={m['sharpe']:.3f} "
+                  f"n={m['n_trades']} leaves={grid_params['num_leaves']}{marker}", flush=True)
+        return best_model, best_probs
 
 
 # ---------------------------------------------------------------------------
@@ -524,34 +624,69 @@ def train_lgbm(
 def train_xgb(
     X_train: np.ndarray, y_train: np.ndarray,
     X_val:   np.ndarray, y_val:   np.ndarray,
+    X_train_raw: np.ndarray | None = None,
+    n_optuna_trials: int = 50,
 ) -> tuple[Any, np.ndarray]:
     if not HAS_XGB:
         return None, np.full(len(y_val), 0.5)
 
-    best_model, best_probs, best_sharpe = None, np.full(len(y_val), 0.5), -999.0
+    def _xgb_fit(p: dict, X_tr: np.ndarray, y_tr: np.ndarray,
+                 X_va: np.ndarray, y_va: np.ndarray, rounds: int = 500) -> Any:
+        dt = xgb.DMatrix(X_tr, label=y_tr, feature_names=FEATURE_NAMES)
+        dv = xgb.DMatrix(X_va, label=y_va, feature_names=FEATURE_NAMES)
+        base = {"objective": "binary:logistic", "eval_metric": "logloss",
+                "seed": 42, "verbosity": 0}
+        return xgb.train({**base, **p}, dt, num_boost_round=rounds,
+                         evals=[(dv, "val")], early_stopping_rounds=50, verbose_eval=False)
 
-    for i, grid_params in enumerate(_XGB_GRID):
-        dtrain = xgb.DMatrix(X_train, label=y_train, feature_names=FEATURE_NAMES)
-        dval   = xgb.DMatrix(X_val,   label=y_val,   feature_names=FEATURE_NAMES)
-        params = {
-            "objective": "binary:logistic", "eval_metric": "logloss",
-            "seed": 42, "verbosity": 0, "subsample": grid_params["subsample"],
-            "colsample_bytree": grid_params["colsample_bytree"],
-            "max_depth": grid_params["max_depth"],
-            "learning_rate": grid_params["learning_rate"],
-            "min_child_weight": grid_params["min_child_weight"],
-        }
-        model = xgb.train(params, dtrain, num_boost_round=500,
-                          evals=[(dval, "val")], early_stopping_rounds=50, verbose_eval=False)
-        probs = model.predict(dval)
-        m = compute_pnl_metrics(probs, y_val)
-        if m["sharpe"] > best_sharpe:
-            best_sharpe, best_model, best_probs = m["sharpe"], model, probs
-            print(f"    XGB  [{i+1}/{len(_XGB_GRID)}] pnl_sharpe={m['sharpe']:.3f} n_trades={m['n_trades']} depth={grid_params['max_depth']} lr={grid_params['learning_rate']}  ← best", flush=True)
-        else:
-            print(f"    XGB  [{i+1}/{len(_XGB_GRID)}] pnl_sharpe={m['sharpe']:.3f} n_trades={m['n_trades']} depth={grid_params['max_depth']} lr={grid_params['learning_rate']}", flush=True)
+    if HAS_OPTUNA and X_train_raw is not None:
+        def objective(trial: Any) -> float:
+            p = {
+                "max_depth":        trial.suggest_int("max_depth", 3, 8),
+                "learning_rate":    trial.suggest_float("lr", 0.005, 0.15, log=True),
+                "subsample":        trial.suggest_float("sub", 0.5, 1.0),
+                "colsample_bytree": trial.suggest_float("cbt", 0.5, 1.0),
+                "min_child_weight": trial.suggest_int("mcw", 1, 20),
+                "reg_alpha":        trial.suggest_float("ra", 0.0, 2.0),
+                "reg_lambda":       trial.suggest_float("rl", 0.0, 2.0),
+                "gamma":            trial.suggest_float("gamma", 0.0, 1.0),
+            }
+            def _pred(X_tr: np.ndarray, y_tr: np.ndarray, X_va: np.ndarray) -> np.ndarray:
+                dt = xgb.DMatrix(X_tr, label=y_tr, feature_names=FEATURE_NAMES)
+                dv = xgb.DMatrix(X_va, feature_names=FEATURE_NAMES)
+                base = {"objective": "binary:logistic", "eval_metric": "logloss",
+                        "seed": 42, "verbosity": 0}
+                m = xgb.train({**base, **p}, dt, num_boost_round=200, verbose_eval=False)
+                return m.predict(dv)
+            return _wf_cv_eval(_pred, X_train_raw, y_train, n_folds=3)
 
-    return best_model, best_probs
+        study = optuna.create_study(direction="maximize",
+                                    sampler=optuna.samplers.TPESampler(seed=42))
+        study.optimize(objective, n_trials=n_optuna_trials, show_progress_bar=False)
+        bp = study.best_params
+        print(f"    XGB  Optuna best CV sharpe={study.best_value:.3f}  params={bp}", flush=True)
+        model = _xgb_fit(
+            {"max_depth": bp["max_depth"], "learning_rate": bp["lr"],
+             "subsample": bp["sub"], "colsample_bytree": bp["cbt"],
+             "min_child_weight": bp["mcw"], "reg_alpha": bp["ra"],
+             "reg_lambda": bp["rl"], "gamma": bp["gamma"]},
+            X_train, y_train, X_val, y_val,
+        )
+        dv = xgb.DMatrix(X_val, feature_names=FEATURE_NAMES)
+        return model, model.predict(dv)
+    else:
+        best_model, best_probs, best_sharpe = None, np.full(len(y_val), 0.5), -999.0
+        for i, gp in enumerate(_XGB_GRID):
+            model = _xgb_fit(gp, X_train, y_train, X_val, y_val)
+            dv = xgb.DMatrix(X_val, feature_names=FEATURE_NAMES)
+            probs = model.predict(dv)
+            m = compute_pnl_metrics(probs, y_val)
+            marker = "  ← best" if m["sharpe"] > best_sharpe else ""
+            if m["sharpe"] > best_sharpe:
+                best_sharpe, best_model, best_probs = m["sharpe"], model, probs
+            print(f"    XGB  [{i+1}/{len(_XGB_GRID)}] sharpe={m['sharpe']:.3f} "
+                  f"n={m['n_trades']} depth={gp['max_depth']}{marker}", flush=True)
+        return best_model, best_probs
 
 
 # ---------------------------------------------------------------------------
@@ -561,21 +696,180 @@ def train_xgb(
 def train_lr_sklearn(
     X_train: np.ndarray, y_train: np.ndarray,
     X_val:   np.ndarray, y_val:   np.ndarray,
+    X_train_raw: np.ndarray | None = None,
+    n_optuna_trials: int = 30,
 ) -> tuple[Any, np.ndarray]:
-    best_model, best_probs, best_sharpe = None, np.full(len(y_val), 0.5), -999.0
+    if HAS_OPTUNA and X_train_raw is not None:
+        def objective(trial: Any) -> float:
+            C = trial.suggest_float("C", 1e-3, 100.0, log=True)
+            penalty = trial.suggest_categorical("penalty", ["l1", "l2"])
+            def _pred(X_tr: np.ndarray, y_tr: np.ndarray, X_va: np.ndarray) -> np.ndarray:
+                m = LogisticRegression(C=C, penalty=penalty, solver="saga",
+                                       max_iter=500, random_state=42)
+                m.fit(X_tr, y_tr)
+                return m.predict_proba(X_va)[:, 1]
+            return _wf_cv_eval(_pred, X_train_raw, y_train, n_folds=3)
 
-    for i, grid_params in enumerate(_LR_GRID):
-        model = LogisticRegression(solver="saga", max_iter=500, random_state=42, **grid_params)
+        study = optuna.create_study(direction="maximize",
+                                    sampler=optuna.samplers.TPESampler(seed=42))
+        study.optimize(objective, n_trials=n_optuna_trials, show_progress_bar=False)
+        bp = study.best_params
+        print(f"    LR   Optuna best CV sharpe={study.best_value:.3f}  C={bp['C']:.4f} penalty={bp['penalty']}", flush=True)
+        model = LogisticRegression(C=bp["C"], penalty=bp["penalty"], solver="saga",
+                                    max_iter=500, random_state=42)
         model.fit(X_train, y_train)
+        return model, model.predict_proba(X_val)[:, 1]
+    else:
+        best_model, best_probs, best_sharpe = None, np.full(len(y_val), 0.5), -999.0
+        for i, gp in enumerate(_LR_GRID):
+            model = LogisticRegression(solver="saga", max_iter=500, random_state=42, **gp)
+            model.fit(X_train, y_train)
+            probs = model.predict_proba(X_val)[:, 1]
+            m = compute_pnl_metrics(probs, y_val)
+            marker = "  ← best" if m["sharpe"] > best_sharpe else ""
+            if m["sharpe"] > best_sharpe:
+                best_sharpe, best_model, best_probs = m["sharpe"], model, probs
+            print(f"    LR   [{i+1}/{len(_LR_GRID)}] sharpe={m['sharpe']:.3f} n={m['n_trades']} C={gp['C']}{marker}", flush=True)
+        return best_model, best_probs
+
+
+# ---------------------------------------------------------------------------
+# CatBoost
+# ---------------------------------------------------------------------------
+
+def train_catboost(
+    X_train: np.ndarray, y_train: np.ndarray,
+    X_val:   np.ndarray, y_val:   np.ndarray,
+    X_train_raw: np.ndarray | None = None,
+    n_optuna_trials: int = 40,
+) -> tuple[Any, np.ndarray]:
+    if not HAS_CATBOOST:
+        return None, np.full(len(y_val), 0.5)
+
+    def _cb_fit(p: dict, X_tr: np.ndarray, y_tr: np.ndarray,
+                X_va: np.ndarray, y_va: np.ndarray) -> Any:
+        pool_tr = cb_lib.Pool(X_tr, label=y_tr, feature_names=FEATURE_NAMES)
+        pool_va = cb_lib.Pool(X_va, label=y_va, feature_names=FEATURE_NAMES)
+        model = cb_lib.CatBoostClassifier(
+            iterations=500, verbose=0, random_seed=42,
+            early_stopping_rounds=50, eval_metric="Logloss",
+            **p,
+        )
+        model.fit(pool_tr, eval_set=pool_va, use_best_model=True)
+        return model
+
+    if HAS_OPTUNA and X_train_raw is not None:
+        def objective(trial: Any) -> float:
+            p = {
+                "depth":          trial.suggest_int("depth", 4, 10),
+                "learning_rate":  trial.suggest_float("lr", 0.01, 0.15, log=True),
+                "l2_leaf_reg":    trial.suggest_float("l2", 1.0, 10.0),
+                "subsample":      trial.suggest_float("sub", 0.5, 1.0),
+                "colsample_bylevel": trial.suggest_float("cbl", 0.5, 1.0),
+                "min_data_in_leaf": trial.suggest_int("mdl", 5, 50),
+            }
+            def _pred(X_tr: np.ndarray, y_tr: np.ndarray, X_va: np.ndarray) -> np.ndarray:
+                pool_tr = cb_lib.Pool(X_tr, label=y_tr, feature_names=FEATURE_NAMES)
+                m = cb_lib.CatBoostClassifier(iterations=200, verbose=0, random_seed=42, **p)
+                m.fit(pool_tr)
+                return m.predict_proba(X_va)[:, 1]
+            return _wf_cv_eval(_pred, X_train_raw, y_train, n_folds=3)
+
+        study = optuna.create_study(direction="maximize",
+                                    sampler=optuna.samplers.TPESampler(seed=42))
+        study.optimize(objective, n_trials=n_optuna_trials, show_progress_bar=False)
+        bp = study.best_params
+        print(f"    CB   Optuna best CV sharpe={study.best_value:.3f}  params={bp}", flush=True)
+        model = _cb_fit(
+            {"depth": bp["depth"], "learning_rate": bp["lr"], "l2_leaf_reg": bp["l2"],
+             "subsample": bp["sub"], "colsample_bylevel": bp["cbl"],
+             "min_data_in_leaf": bp["mdl"]},
+            X_train, y_train, X_val, y_val,
+        )
+        return model, model.predict_proba(X_val)[:, 1]
+    else:
+        # Default CatBoost params (no grid for brevity — CB default is already well-tuned)
+        model = _cb_fit({"depth": 6, "learning_rate": 0.05, "l2_leaf_reg": 3.0},
+                        X_train, y_train, X_val, y_val)
         probs = model.predict_proba(X_val)[:, 1]
         m = compute_pnl_metrics(probs, y_val)
-        if m["sharpe"] > best_sharpe:
-            best_sharpe, best_model, best_probs = m["sharpe"], model, probs
-            print(f"    LR   [{i+1}/{len(_LR_GRID)}] pnl_sharpe={m['sharpe']:.3f} n_trades={m['n_trades']} C={grid_params['C']}  ← best", flush=True)
-        else:
-            print(f"    LR   [{i+1}/{len(_LR_GRID)}] pnl_sharpe={m['sharpe']:.3f} n_trades={m['n_trades']} C={grid_params['C']}", flush=True)
+        print(f"    CB   sharpe={m['sharpe']:.3f} n_trades={m['n_trades']}", flush=True)
+        return model, probs
 
-    return best_model, best_probs
+
+# ---------------------------------------------------------------------------
+# Stacking ensemble (OOF meta-learner)
+# ---------------------------------------------------------------------------
+
+def train_stacking(
+    base_results: dict[str, dict],   # algo → {"probs_val": ..., "model": ...}
+    X_train: np.ndarray, y_train: np.ndarray,
+    X_val:   np.ndarray, y_val:   np.ndarray,
+    models: dict[str, Any],
+    n_folds: int = 5,
+) -> np.ndarray:
+    """OOF stacking: generate out-of-fold predictions from each base model,
+    train a meta-LR on them, predict on val set.
+
+    Systematically better than weighted average — the meta-learner learns
+    WHEN to trust each model.
+    """
+    base_algos = [k for k in base_results if k != "ensemble" and models.get(k) is not None]
+    if len(base_algos) < 2:
+        return np.full(len(y_val), 0.5)
+
+    n_tr = len(X_train)
+    fold_size = n_tr // n_folds
+    oof_preds = np.full((n_tr, len(base_algos)), 0.5)
+
+    for fold_i in range(n_folds):
+        va_start = fold_i * fold_size
+        va_end   = va_start + fold_size if fold_i < n_folds - 1 else n_tr
+        tr_idx   = list(range(0, va_start)) + list(range(va_end, n_tr))
+        va_idx   = list(range(va_start, va_end))
+
+        X_f_tr, y_f_tr = X_train[tr_idx], y_train[tr_idx]
+        X_f_va = X_train[va_idx]
+
+        for j, algo in enumerate(base_algos):
+            try:
+                if algo == "lgbm" and HAS_LGBM:
+                    dt = lgb.Dataset(X_f_tr, label=y_f_tr)
+                    p = {"objective": "binary", "metric": "binary_logloss",
+                         "verbose": -1, "random_state": 42, "num_leaves": 31,
+                         "learning_rate": 0.05, "n_estimators": 200}
+                    m = lgb.train(p, dt, num_boost_round=200,
+                                  callbacks=[lgb.log_evaluation(period=-1)])
+                    oof_preds[va_idx, j] = m.predict(X_f_va)
+                elif algo == "xgb" and HAS_XGB:
+                    dt = xgb.DMatrix(X_f_tr, label=y_f_tr, feature_names=FEATURE_NAMES)
+                    dv = xgb.DMatrix(X_f_va, feature_names=FEATURE_NAMES)
+                    p = {"objective": "binary:logistic", "eval_metric": "logloss",
+                         "seed": 42, "verbosity": 0, "max_depth": 5, "learning_rate": 0.05}
+                    m = xgb.train(p, dt, num_boost_round=200, verbose_eval=False)
+                    oof_preds[va_idx, j] = m.predict(dv)
+                elif algo == "catboost" and HAS_CATBOOST:
+                    pool = cb_lib.Pool(X_f_tr, label=y_f_tr, feature_names=FEATURE_NAMES)
+                    m = cb_lib.CatBoostClassifier(iterations=200, verbose=0, random_seed=42)
+                    m.fit(pool)
+                    oof_preds[va_idx, j] = m.predict_proba(X_f_va)[:, 1]
+                elif algo == "lr":
+                    m = LogisticRegression(C=1.0, solver="saga", max_iter=300, random_state=42)
+                    m.fit(X_f_tr, y_f_tr)
+                    oof_preds[va_idx, j] = m.predict_proba(X_f_va)[:, 1]
+            except Exception:
+                pass  # leave 0.5 default
+
+    # Meta-LR trained on OOF predictions
+    meta = LogisticRegression(C=1.0, solver="lbfgs", max_iter=200, random_state=42)
+    meta.fit(oof_preds, y_train)
+
+    # Val predictions: stack each base model's val probs
+    val_stack = np.column_stack([base_results[a]["probs_val"] for a in base_algos])
+    stack_probs = meta.predict_proba(val_stack)[:, 1]
+    m = compute_pnl_metrics(stack_probs, y_val)
+    print(f"    STACK ({'+'.join(base_algos)}) sharpe={m['sharpe']:.3f} n_trades={m['n_trades']}", flush=True)
+    return stack_probs
 
 
 # ---------------------------------------------------------------------------
@@ -948,6 +1242,7 @@ def train_interval(
     lookback_months: int,
     algorithms: list[str],
     export_dir: Path,
+    n_optuna_trials: int = 50,
 ) -> dict[str, Any]:
     print(f"\n{'='*60}")
     print(f"  Training BTC Up/Down {interval} | lookback={lookback_months}mo")
@@ -990,16 +1285,18 @@ def train_interval(
     X_val   = scale(X_val_raw,   means, stds)
     X_test  = scale(X_test_raw,  means, stds)
 
-    print(f"  Split: train={n_train}  val={len(y_val)}  test={len(y_test)} (blindato)")
+    opt_mode = "Optuna" if HAS_OPTUNA else "grid"
+    print(f"  Split: train={n_train}  val={len(y_val)}  test={len(y_test)} (blindato)  search={opt_mode}")
 
     # Train each algorithm
     results: dict[str, dict] = {}
     models:  dict[str, Any]  = {}
 
     if "lgbm" in algorithms and HAS_LGBM:
-        print("  Training LightGBM ...")
+        print(f"  Training LightGBM ({opt_mode}, {n_optuna_trials} trials) ...")
         t0 = time.time()
-        m, probs_val = train_lgbm(X_train, y_train, X_val, y_val)
+        m, probs_val = train_lgbm(X_train, y_train, X_val, y_val,
+                                   X_train_raw=X_train_raw, n_optuna_trials=n_optuna_trials)
         models["lgbm"] = m
         pnl = compute_pnl_metrics(probs_val, y_val)
         acc = float(((probs_val > 0.5) == y_val).mean())
@@ -1011,9 +1308,10 @@ def train_interval(
         print("  LGBM: skipped (lightgbm not installed — pip install lightgbm)")
 
     if "xgb" in algorithms and HAS_XGB:
-        print("  Training XGBoost ...")
+        print(f"  Training XGBoost ({opt_mode}, {n_optuna_trials} trials) ...")
         t0 = time.time()
-        m, probs_val = train_xgb(X_train, y_train, X_val, y_val)
+        m, probs_val = train_xgb(X_train, y_train, X_val, y_val,
+                                  X_train_raw=X_train_raw, n_optuna_trials=n_optuna_trials)
         models["xgb"] = m
         pnl = compute_pnl_metrics(probs_val, y_val)
         acc = float(((probs_val > 0.5) == y_val).mean())
@@ -1024,10 +1322,26 @@ def train_interval(
     elif "xgb" in algorithms:
         print("  XGB: skipped (xgboost not installed — pip install xgboost)")
 
-    if "lr" in algorithms:
-        print("  Training Logistic Regression ...")
+    if "catboost" in algorithms and HAS_CATBOOST:
+        print(f"  Training CatBoost ({opt_mode}, {n_optuna_trials} trials) ...")
         t0 = time.time()
-        m, probs_val = train_lr_sklearn(X_train, y_train, X_val, y_val)
+        m, probs_val = train_catboost(X_train, y_train, X_val, y_val,
+                                       X_train_raw=X_train_raw, n_optuna_trials=n_optuna_trials)
+        models["catboost"] = m
+        pnl = compute_pnl_metrics(probs_val, y_val)
+        acc = float(((probs_val > 0.5) == y_val).mean())
+        results["catboost"] = {"probs_val": probs_val, "pnl": pnl, "val_acc": acc,
+                                "elapsed_s": round(time.time() - t0, 1)}
+        print(f"    CB:   val_acc={acc:.4f}  pnl_sharpe={pnl['sharpe']:.3f}  "
+              f"n_trades={pnl['n_trades']}  ({results['catboost']['elapsed_s']}s)")
+    elif "catboost" in algorithms and not HAS_CATBOOST:
+        print("  CatBoost: skipped (catboost not installed — pip install catboost)")
+
+    if "lr" in algorithms:
+        print(f"  Training Logistic Regression ({opt_mode}) ...")
+        t0 = time.time()
+        m, probs_val = train_lr_sklearn(X_train, y_train, X_val, y_val,
+                                         X_train_raw=X_train_raw, n_optuna_trials=30)
         models["lr"] = m
         pnl = compute_pnl_metrics(probs_val, y_val)
         acc = float(((probs_val > 0.5) == y_val).mean())
@@ -1068,7 +1382,19 @@ def train_interval(
         print("  ERROR: no algorithms produced results.")
         return {}
 
-    # Ensemble (weighted average by PnL Sharpe, clipped to >=0)
+    # --- Stacking ensemble (OOF meta-learner) ---
+    if len(results) >= 2 and "stacking" in algorithms:
+        print("  Training Stacking ensemble ...")
+        t0 = time.time()
+        stack_probs = train_stacking(results, X_train, y_train, X_val, y_val, models)
+        pnl = compute_pnl_metrics(stack_probs, y_val)
+        acc = float(((stack_probs > 0.5) == y_val).mean())
+        results["stacking"] = {"probs_val": stack_probs, "pnl": pnl, "val_acc": acc,
+                                "elapsed_s": round(time.time() - t0, 1)}
+        print(f"    STACK: val_acc={acc:.4f}  pnl_sharpe={pnl['sharpe']:.3f}  "
+              f"n_trades={pnl['n_trades']}  ({results['stacking']['elapsed_s']}s)")
+
+    # Weighted-average ensemble (by PnL Sharpe, clipped to >=0)
     if len(results) > 1 and "ensemble" in algorithms:
         sharpes = np.array([max(r["pnl"]["sharpe"], 0.0) for r in results.values()])
         total = sharpes.sum()
@@ -1241,8 +1567,12 @@ def main() -> None:
         help="Sliding-window lookback in months (default: 6)"
     )
     parser.add_argument(
-        "--algorithms", default="lgbm,xgb,lr,lstm,tcn,ensemble",
-        help="Comma-separated list: lgbm,xgb,lr,lstm,tcn,ensemble (default: all)"
+        "--algorithms", default="lgbm,xgb,catboost,lr,lstm,tcn,stacking,ensemble",
+        help="Comma-separated list: lgbm,xgb,catboost,lr,lstm,tcn,stacking,ensemble (default: all)"
+    )
+    parser.add_argument(
+        "--optuna-trials", type=int, default=50,
+        help="Number of Optuna trials per algorithm (default: 50, requires: pip install optuna)"
     )
     parser.add_argument(
         "--export-path", default="data/models/v4",
@@ -1265,6 +1595,8 @@ def main() -> None:
     print(f"  Algorithms:      {', '.join(algos)}")
     print(f"  LGBM available:  {HAS_LGBM}")
     print(f"  XGB  available:  {HAS_XGB}")
+    print(f"  CatBoost avail.: {HAS_CATBOOST}")
+    print(f"  Optuna avail.:   {HAS_OPTUNA} ({'%d trials' % args.optuna_trials if HAS_OPTUNA else 'fallback to grid'})")
     print(f"  PyTorch avail.:  {HAS_TORCH}")
     print(f"  Export path:     {export_dir}")
     if args.live:
@@ -1276,6 +1608,7 @@ def main() -> None:
             lookback_months=args.lookback_months,
             algorithms=algos,
             export_dir=export_dir,
+            n_optuna_trials=args.optuna_trials,
         )
         if metrics and args.live:
             check_promotion(metrics, interval, export_dir)
