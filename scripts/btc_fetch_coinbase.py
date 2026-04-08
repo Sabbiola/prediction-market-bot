@@ -24,10 +24,16 @@ from __future__ import annotations
 import argparse
 import json
 import time
-import urllib.request
 import urllib.parse
+import urllib.request
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+
+try:
+    import requests as _requests
+    _HAS_REQUESTS = True
+except ImportError:
+    _HAS_REQUESTS = False
 
 COINBASE_CANDLES_URL = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
 CANDLES_PER_REQUEST = 300   # Coinbase limit
@@ -44,23 +50,35 @@ _INTERVAL_GRANULARITY: dict[str, int] = {
 }
 
 
+_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
 def _fetch_candles(granularity: int, start_iso: str, end_iso: str) -> list[list]:
     """Fetch up to 300 candles from Coinbase between start and end (ISO 8601)."""
-    params = urllib.parse.urlencode({
+    params = {
         "granularity": str(granularity),
         "start": start_iso,
         "end":   end_iso,
-    })
-    url = f"{COINBASE_CANDLES_URL}?{params}"
-    req = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": "Mozilla/5.0",
-            "Accept": "application/json",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        data = json.loads(resp.read())
+    }
+    url = f"{COINBASE_CANDLES_URL}?{urllib.parse.urlencode(params)}"
+
+    if _HAS_REQUESTS:
+        resp = _requests.get(url, headers=_HEADERS, timeout=20)
+        resp.raise_for_status()
+        data = resp.json()
+    else:
+        req = urllib.request.Request(url, headers=_HEADERS)
+        with urllib.request.urlopen(req, timeout=20) as r:
+            data = json.loads(r.read())
+
     # Coinbase returns newest-first — reverse to chronological order
     return list(reversed(data))
 
