@@ -457,6 +457,35 @@ def scale(X: np.ndarray, means: np.ndarray, stds: np.ndarray) -> np.ndarray:
 # LightGBM
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Hyperparameter grids (searched by pnl_sharpe on val set)
+# ---------------------------------------------------------------------------
+
+_LGBM_GRID = [
+    {"num_leaves": 15,  "learning_rate": 0.05,  "min_child_samples": 30, "subsample": 0.8, "colsample_bytree": 0.8},
+    {"num_leaves": 31,  "learning_rate": 0.05,  "min_child_samples": 20, "subsample": 0.8, "colsample_bytree": 0.8},
+    {"num_leaves": 63,  "learning_rate": 0.03,  "min_child_samples": 20, "subsample": 0.7, "colsample_bytree": 0.7},
+    {"num_leaves": 127, "learning_rate": 0.02,  "min_child_samples": 10, "subsample": 0.7, "colsample_bytree": 0.7},
+    {"num_leaves": 31,  "learning_rate": 0.01,  "min_child_samples": 50, "subsample": 0.9, "colsample_bytree": 0.9},
+    {"num_leaves": 63,  "learning_rate": 0.05,  "min_child_samples": 10, "subsample": 0.6, "colsample_bytree": 0.8},
+]
+
+_XGB_GRID = [
+    {"max_depth": 3, "learning_rate": 0.05, "subsample": 0.8, "colsample_bytree": 0.8, "min_child_weight": 5},
+    {"max_depth": 5, "learning_rate": 0.05, "subsample": 0.8, "colsample_bytree": 0.8, "min_child_weight": 3},
+    {"max_depth": 6, "learning_rate": 0.03, "subsample": 0.7, "colsample_bytree": 0.7, "min_child_weight": 3},
+    {"max_depth": 4, "learning_rate": 0.02, "subsample": 0.9, "colsample_bytree": 0.9, "min_child_weight": 10},
+    {"max_depth": 5, "learning_rate": 0.01, "subsample": 0.7, "colsample_bytree": 0.8, "min_child_weight": 5},
+]
+
+_LR_GRID = [
+    {"C": 0.01},
+    {"C": 0.1},
+    {"C": 1.0},
+    {"C": 10.0},
+]
+
+
 def train_lgbm(
     X_train: np.ndarray, y_train: np.ndarray,
     X_val:   np.ndarray, y_val:   np.ndarray,
@@ -464,30 +493,28 @@ def train_lgbm(
     if not HAS_LGBM:
         return None, np.full(len(y_val), 0.5)
 
-    dtrain = lgb.Dataset(X_train, label=y_train)
-    dval   = lgb.Dataset(X_val,   label=y_val,   reference=dtrain)
+    best_model, best_probs, best_sharpe = None, np.full(len(y_val), 0.5), -999.0
 
-    params = {
-        "objective":        "binary",
-        "metric":           "binary_logloss",
-        "num_leaves":       31,
-        "learning_rate":    0.05,
-        "n_estimators":     500,
-        "min_child_samples":20,
-        "subsample":        0.8,
-        "colsample_bytree": 0.8,
-        "verbose":          -1,
-        "random_state":     42,
-    }
-    callbacks = [lgb.early_stopping(50, verbose=False), lgb.log_evaluation(period=-1)]
-    model = lgb.train(
-        params, dtrain,
-        num_boost_round=params["n_estimators"],
-        valid_sets=[dval],
-        callbacks=callbacks,
-    )
-    probs = model.predict(X_val)
-    return model, probs
+    for i, grid_params in enumerate(_LGBM_GRID):
+        dtrain = lgb.Dataset(X_train, label=y_train)
+        dval   = lgb.Dataset(X_val,   label=y_val,   reference=dtrain)
+        params = {
+            "objective": "binary", "metric": "binary_logloss",
+            "n_estimators": 500, "verbose": -1, "random_state": 42,
+            **grid_params,
+        }
+        callbacks = [lgb.early_stopping(50, verbose=False), lgb.log_evaluation(period=-1)]
+        model = lgb.train(params, dtrain, num_boost_round=params["n_estimators"],
+                          valid_sets=[dval], callbacks=callbacks)
+        probs = model.predict(X_val)
+        m = compute_pnl_metrics(probs, y_val)
+        if m["sharpe"] > best_sharpe:
+            best_sharpe, best_model, best_probs = m["sharpe"], model, probs
+            print(f"    LGBM [{i+1}/{len(_LGBM_GRID)}] pnl_sharpe={m['sharpe']:.3f} n_trades={m['n_trades']} leaves={grid_params['num_leaves']} lr={grid_params['learning_rate']}  ← best", flush=True)
+        else:
+            print(f"    LGBM [{i+1}/{len(_LGBM_GRID)}] pnl_sharpe={m['sharpe']:.3f} n_trades={m['n_trades']} leaves={grid_params['num_leaves']} lr={grid_params['learning_rate']}", flush=True)
+
+    return best_model, best_probs
 
 
 # ---------------------------------------------------------------------------
@@ -501,42 +528,54 @@ def train_xgb(
     if not HAS_XGB:
         return None, np.full(len(y_val), 0.5)
 
-    dtrain = xgb.DMatrix(X_train, label=y_train, feature_names=FEATURE_NAMES)
-    dval   = xgb.DMatrix(X_val,   label=y_val,   feature_names=FEATURE_NAMES)
+    best_model, best_probs, best_sharpe = None, np.full(len(y_val), 0.5), -999.0
 
-    params = {
-        "objective":        "binary:logistic",
-        "eval_metric":      "logloss",
-        "max_depth":        5,
-        "learning_rate":    0.05,
-        "subsample":        0.8,
-        "colsample_bytree": 0.8,
-        "seed":             42,
-        "verbosity":        0,
-    }
-    model = xgb.train(
-        params, dtrain,
-        num_boost_round=500,
-        evals=[(dval, "val")],
-        early_stopping_rounds=50,
-        verbose_eval=False,
-    )
-    probs = model.predict(dval)
-    return model, probs
+    for i, grid_params in enumerate(_XGB_GRID):
+        dtrain = xgb.DMatrix(X_train, label=y_train, feature_names=FEATURE_NAMES)
+        dval   = xgb.DMatrix(X_val,   label=y_val,   feature_names=FEATURE_NAMES)
+        params = {
+            "objective": "binary:logistic", "eval_metric": "logloss",
+            "seed": 42, "verbosity": 0, "subsample": grid_params["subsample"],
+            "colsample_bytree": grid_params["colsample_bytree"],
+            "max_depth": grid_params["max_depth"],
+            "learning_rate": grid_params["learning_rate"],
+            "min_child_weight": grid_params["min_child_weight"],
+        }
+        model = xgb.train(params, dtrain, num_boost_round=500,
+                          evals=[(dval, "val")], early_stopping_rounds=50, verbose_eval=False)
+        probs = model.predict(dval)
+        m = compute_pnl_metrics(probs, y_val)
+        if m["sharpe"] > best_sharpe:
+            best_sharpe, best_model, best_probs = m["sharpe"], model, probs
+            print(f"    XGB  [{i+1}/{len(_XGB_GRID)}] pnl_sharpe={m['sharpe']:.3f} n_trades={m['n_trades']} depth={grid_params['max_depth']} lr={grid_params['learning_rate']}  ← best", flush=True)
+        else:
+            print(f"    XGB  [{i+1}/{len(_XGB_GRID)}] pnl_sharpe={m['sharpe']:.3f} n_trades={m['n_trades']} depth={grid_params['max_depth']} lr={grid_params['learning_rate']}", flush=True)
+
+    return best_model, best_probs
 
 
 # ---------------------------------------------------------------------------
-# Logistic Regression (sklearn fallback)
+# Logistic Regression (sklearn)
 # ---------------------------------------------------------------------------
 
 def train_lr_sklearn(
     X_train: np.ndarray, y_train: np.ndarray,
     X_val:   np.ndarray, y_val:   np.ndarray,
 ) -> tuple[Any, np.ndarray]:
-    model = LogisticRegression(C=1.0, solver="saga", max_iter=500, random_state=42)
-    model.fit(X_train, y_train)
-    probs = model.predict_proba(X_val)[:, 1]
-    return model, probs
+    best_model, best_probs, best_sharpe = None, np.full(len(y_val), 0.5), -999.0
+
+    for i, grid_params in enumerate(_LR_GRID):
+        model = LogisticRegression(solver="saga", max_iter=500, random_state=42, **grid_params)
+        model.fit(X_train, y_train)
+        probs = model.predict_proba(X_val)[:, 1]
+        m = compute_pnl_metrics(probs, y_val)
+        if m["sharpe"] > best_sharpe:
+            best_sharpe, best_model, best_probs = m["sharpe"], model, probs
+            print(f"    LR   [{i+1}/{len(_LR_GRID)}] pnl_sharpe={m['sharpe']:.3f} n_trades={m['n_trades']} C={grid_params['C']}  ← best", flush=True)
+        else:
+            print(f"    LR   [{i+1}/{len(_LR_GRID)}] pnl_sharpe={m['sharpe']:.3f} n_trades={m['n_trades']} C={grid_params['C']}", flush=True)
+
+    return best_model, best_probs
 
 
 # ---------------------------------------------------------------------------
