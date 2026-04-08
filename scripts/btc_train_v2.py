@@ -82,6 +82,14 @@ try:
     HAS_TORCH = True
 except ImportError:
     HAS_TORCH = False
+    # Stub so module-level class definitions with nn.Module don't crash at import
+    class _NnStub:
+        Module = object
+        def __getattr__(self, name: str) -> Any:
+            return lambda *a, **kw: None
+    nn = _NnStub()  # type: ignore[assignment]
+    torch = None    # type: ignore[assignment]
+    optim = None    # type: ignore[assignment]
 
 # ---------------------------------------------------------------------------
 # Constants
