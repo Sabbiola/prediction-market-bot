@@ -580,6 +580,49 @@ Se emerge un dubbio di progettazione, scegliere sempre la soluzione che:
 
 ---
 
+## 17b. BTC Up/Down Agent — mandato e vincoli
+
+### BtcFeatureEnricher (`src/prediction_market_bot/agents/btc_feature_enricher.py`)
+
+Responsabilita:
+- calcolare le 32 feature v2 (`feature_schema_version: btc-v2-5m/15m`) per la predizione BTC Up/Down
+- usare SOLO candle completate (no lookahead sulla candela in formazione)
+- allineare timestamp feature con il training: usare `open_time_ms` dell'ultima candela completata,
+  mai `datetime.now()` (causa distribution shift fino a 5 minuti)
+
+Non fa:
+- training o auto-tuning
+- accesso a venue execution
+- lettura config runtime da file durante l'inferenza (usa artifact serializzato)
+
+### PredictionModelRuntime (`src/prediction_market_bot/agents/prediction_model_runtime.py`)
+
+Responsabilita:
+- caricare l'artifact JSON (`btc_{interval}_best.json`) e validare `feature_schema_version`
+- eseguire inferenza: scaler → modello → calibrazione isotonic
+- algoritmi supportati: `logistic_regression`, `lightgbm`, `xgboost`
+
+Artifact BTC v2 (`data/models/v4/btc_{interval}_best.json`):
+```json
+{
+  "artifact_type": "prediction_model_v2",
+  "feature_schema_version": "btc-v2-5m",
+  "algorithm_payload": { "algorithm": "lightgbm", ... },
+  "calibration": { "method": "isotonic", ... }
+}
+```
+
+### Regole critiche parity training/runtime
+
+- `feature_schema_version` nel JSON deve corrispondere al set di feature implementato in `btc_feature_enricher.py`
+- le feature CB (`f_btc_cb_*`) devono essere 0.0 in runtime se i dati Coinbase non sono disponibili,
+  identico al comportamento di graceful degradation in training
+- il scaler (means/stds nel JSON) e fittato su train set 70% — mai ricalcolato in runtime
+
+Pipeline training dedicata: `docs/BTC_TRAINING_PIPELINE.md`
+
+---
+
 ## 18. Regola su documentazione ufficiale e MCP
 
 Quando il comportamento di una sorgente/API non è certo:

@@ -81,6 +81,42 @@ Limiti espliciti della missione beta-live:
 - sandbox-chain usata come lane transazionale di rehearsal
 - `go_no_go=NO_GO` blocca la promozione release fino a fix + rerun completo
 
+## BTC Up/Down training pipeline
+
+Pipeline dedicata ai mercati Polymarket **BTC Up/Down 5m** e **BTC Up/Down 15m**.
+
+Documento completo: `docs/BTC_TRAINING_PIPELINE.md`
+
+Comandi rapidi:
+
+```bash
+# Fetch dati (richiede rete non aziendale)
+python scripts/btc_fetch_ohlcv.py --interval 5m --months 6
+python scripts/btc_fetch_coinbase.py --interval 5m --months 6
+
+# Training completo (con Optuna ~30-60min su CPU)
+python scripts/btc_train_v2.py --interval all --lookback-months 6 --optuna-trials 50
+
+# Training rapido (no deep learning)
+python scripts/btc_train_v2.py --interval 5m --algorithms lgbm,xgb,lr
+
+# Live retrain giornaliero
+python scripts/btc_train_v2.py --interval all --live --lookback-months 6
+```
+
+Algoritmi: LightGBM + XGBoost + CatBoost + LR (Optuna Bayesian search, walk-forward CV) +
+LSTM + TCN (PyTorch) + OOF Stacking + Weighted Ensemble.
+
+32 feature: tecnici Binance, lead-lag Coinbase (CB price discovery precede BN di 1-5min),
+derivatives (funding rate, OI), gap open, RSI 1h.
+
+Promozione artifact dopo holdout_pnl > 0 con val_pnl_sharpe > 0.5:
+```yaml
+# config/agents.yaml
+model_artifact_path: data/models/v4/btc_5m_best.json
+feature_schema_version: btc-v2-5m
+```
+
 ## Strategy research contract
 
 La ricerca strategica e formalizzata e separata dal runtime operativo:
@@ -89,6 +125,7 @@ La ricerca strategica e formalizzata e separata dal runtime operativo:
 - policy di promozione modelli: `docs/MODEL_PROMOTION.md`
 - policy dataset e split leakage-safe: `docs/DATASETS.md`
 - template model card: `docs/MODEL_CARD_TEMPLATE.md`
+- pipeline BTC Up/Down: `docs/BTC_TRAINING_PIPELINE.md`
 
 Principi chiave:
 
@@ -283,13 +320,16 @@ Il progetto e oggi in una beta-live tecnica avanzata:
 - acceptance suite presente
 - staging docs presenti
 - web control-plane backend foundation presente (FastAPI + template server-side)
+- BTC Up/Down pipeline completa: fetch multi-exchange, training v2 con Optuna + LSTM/TCN + OOF Stacking
+- fix scaler leakage e time feature mismatch nel runtime BTC enricher
 
 Target operativo attuale:
 
+- completare training BTC v2 su dati 6 mesi e promuovere artifact in `agents.yaml`
 - promuovere `Prediction Engine v2` in `SANDBOX_CHAIN` con runbook evidence-based
 - mantenere `PAPER_LIVE` come path operativo con guardrail invariati e senza venue live posting
 - rendere sempre visibile in UI quale modello e attivo (versione, gate reason, stato drift)
-- rendere visibile anche il path segnale attivo (`model_v2` baseline vs `model_v2_alt_promoted`), source set attivo, enrichment coverage e disagreement vs baseline
+- abbassare `min_edge_bps: 500` (da 750) dopo validazione calibrazione BTC v2
 
 ## Workflow promoted-model (sandbox-live)
 

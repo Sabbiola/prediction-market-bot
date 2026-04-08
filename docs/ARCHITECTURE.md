@@ -12,10 +12,13 @@ prediction-market-bot/
     app.yaml
   docs/
     ARCHITECTURE.md
+    BTC_TRAINING_PIPELINE.md   ← pipeline BTC Up/Down (offline training)
     BETA_SCOPE.md
     BETA_GATE.md
     OPERATIONS.md
     DEVELOPMENT.md
+    DATASETS.md
+    MODEL_PROMOTION.md
     LEGACY_MAPPING.md
     REFACTOR_PLAN.md
   src/
@@ -36,6 +39,8 @@ prediction-market-bot/
         execution.py
         settlement.py
         postmortem.py
+        btc_feature_enricher.py      ← feature computation BTC Up/Down runtime
+        prediction_model_runtime.py  ← inferenza artifact JSON (LR/LGBM/XGB)
       orchestration/
         coordinator.py
       ui/
@@ -103,6 +108,17 @@ prediction-market-bot/
           models.py
           service.py
       main.py
+  scripts/                           ← pipeline offline BTC (non nel path runtime)
+    btc_fetch_ohlcv.py               # Binance OHLCV fetcher
+    btc_fetch_coinbase.py            # Coinbase OHLCV fetcher (lead-lag)
+    btc_fetch_derivatives.py         # Funding rate / OI / LS ratio
+    btc_train_v2.py                  # Training unificato v2 (corrente)
+    btc_train_model.py               # Training v1 (legacy)
+    btc_train_exhaustive.py          # Grid search v1 (legacy)
+  data/
+    btc/                             # OHLCV + derivatives + training log
+    models/v4/                       # Artifact correnti (btc_{interval}_best.json)
+    models/v1/                       # Artifact legacy
   tests/
     test_pipeline_smoke.py
 ```
