@@ -702,10 +702,11 @@ def train_lr_sklearn(
     if HAS_OPTUNA and X_train_raw is not None:
         def objective(trial: Any) -> float:
             C = trial.suggest_float("C", 1e-3, 100.0, log=True)
-            penalty = trial.suggest_categorical("penalty", ["l1", "l2"])
+            # sklearn 1.8+: use l1_ratio instead of penalty='l1'
+            l1_ratio = trial.suggest_float("l1_ratio", 0.0, 1.0)
             def _pred(X_tr: np.ndarray, y_tr: np.ndarray, X_va: np.ndarray) -> np.ndarray:
-                m = LogisticRegression(C=C, penalty=penalty, solver="saga",
-                                       max_iter=500, random_state=42)
+                m = LogisticRegression(C=C, penalty="elasticnet", l1_ratio=l1_ratio,
+                                       solver="saga", max_iter=500, random_state=42)
                 m.fit(X_tr, y_tr)
                 return m.predict_proba(X_va)[:, 1]
             return _wf_cv_eval(_pred, X_train_raw, y_train, n_folds=3)
@@ -714,9 +715,9 @@ def train_lr_sklearn(
                                     sampler=optuna.samplers.TPESampler(seed=42))
         study.optimize(objective, n_trials=n_optuna_trials, show_progress_bar=False)
         bp = study.best_params
-        print(f"    LR   Optuna best CV sharpe={study.best_value:.3f}  C={bp['C']:.4f} penalty={bp['penalty']}", flush=True)
-        model = LogisticRegression(C=bp["C"], penalty=bp["penalty"], solver="saga",
-                                    max_iter=500, random_state=42)
+        print(f"    LR   Optuna best CV sharpe={study.best_value:.3f}  C={bp['C']:.4f} l1_ratio={bp['l1_ratio']:.3f}", flush=True)
+        model = LogisticRegression(C=bp["C"], penalty="elasticnet", l1_ratio=bp["l1_ratio"],
+                                    solver="saga", max_iter=500, random_state=42)
         model.fit(X_train, y_train)
         return model, model.predict_proba(X_val)[:, 1]
     else:
@@ -902,8 +903,8 @@ def train_lstm(
     X_train: np.ndarray, y_train: np.ndarray,
     X_val:   np.ndarray, y_val:   np.ndarray,
     *,
-    epochs: int = 30,
-    lr: float = 1e-3,
+    epochs: int = 40,
+    lr: float = 3e-4,
     batch: int = 256,
 ) -> tuple[Any, np.ndarray]:
     if not HAS_TORCH:
@@ -922,6 +923,7 @@ def train_lstm(
 
     best_val_loss = float("inf")
     best_state: dict | None = None
+    patience, no_improve = 10, 0  # early stopping
 
     for epoch in range(epochs):
         model.train()
@@ -933,11 +935,10 @@ def train_lstm(
             pred = model(xb)
             loss = criterion(pred, yb)
             loss.backward()
-            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            nn.utils.clip_grad_norm_(model.parameters(), 0.5)
             optimizer.step()
         scheduler.step()
 
-        # Validation loss for early stopping
         model.eval()
         with torch.no_grad():
             val_pred = model(torch.from_numpy(Xs_va))
@@ -945,6 +946,12 @@ def train_lstm(
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_state = {k: v.clone() for k, v in model.state_dict().items()}
+            no_improve = 0
+        else:
+            no_improve += 1
+            if no_improve >= patience:
+                print(f"    LSTM early stop at epoch {epoch+1}  best_val_loss={best_val_loss:.5f}")
+                break
 
         if (epoch + 1) % 10 == 0:
             print(f"    LSTM epoch {epoch+1}/{epochs}  val_loss={val_loss:.5f}")
@@ -956,7 +963,6 @@ def train_lstm(
     with torch.no_grad():
         probs = model(torch.from_numpy(Xs_va)).squeeze(1).numpy()
 
-    # Pad to match original y_val length (sequences shift by SEQ_LEN)
     full_probs = np.full(len(y_val), 0.5)
     full_probs[SEQ_LEN:] = probs
     return model, full_probs
@@ -1017,8 +1023,8 @@ def train_tcn(
     X_train: np.ndarray, y_train: np.ndarray,
     X_val:   np.ndarray, y_val:   np.ndarray,
     *,
-    epochs: int = 30,
-    lr: float = 1e-3,
+    epochs: int = 40,
+    lr: float = 3e-4,
     batch: int = 256,
 ) -> tuple[Any, np.ndarray]:
     if not HAS_TORCH:
@@ -1037,6 +1043,7 @@ def train_tcn(
 
     best_val_loss = float("inf")
     best_state: dict | None = None
+    patience, no_improve = 10, 0  # early stopping
 
     for epoch in range(epochs):
         model.train()
@@ -1048,7 +1055,7 @@ def train_tcn(
             pred = model(xb)
             loss = criterion(pred, yb)
             loss.backward()
-            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            nn.utils.clip_grad_norm_(model.parameters(), 0.5)
             optimizer.step()
         scheduler.step()
 
@@ -1059,6 +1066,12 @@ def train_tcn(
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             best_state = {k: v.clone() for k, v in model.state_dict().items()}
+            no_improve = 0
+        else:
+            no_improve += 1
+            if no_improve >= patience:
+                print(f"    TCN early stop at epoch {epoch+1}  best_val_loss={best_val_loss:.5f}")
+                break
 
         if (epoch + 1) % 10 == 0:
             print(f"    TCN epoch {epoch+1}/{epochs}  val_loss={val_loss:.5f}")
