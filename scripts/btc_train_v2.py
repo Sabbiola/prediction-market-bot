@@ -800,7 +800,7 @@ def train_lr_sklearn(
     else:
         best_model, best_probs, best_sharpe = None, np.full(len(y_val), 0.5), -999.0
         for i, gp in enumerate(_LR_GRID):
-            model = LogisticRegression(solver="saga", max_iter=2000, random_state=42, **gp)
+            model = LogisticRegression(solver="saga", max_iter=2000, tol=1e-2, random_state=42, **gp)
             model.fit(X_train, y_train)
             probs = model.predict_proba(X_val)[:, 1]
             m = compute_pnl_metrics(probs, y_val)
@@ -932,14 +932,14 @@ def train_stacking(
                     m.fit(pool)
                     oof_preds[va_idx, j] = m.predict_proba(X_f_va)[:, 1]
                 elif algo == "lr":
-                    m = LogisticRegression(C=1.0, solver="saga", max_iter=300, random_state=42)
+                    m = LogisticRegression(C=1.0, solver="saga", max_iter=2000, tol=1e-2, random_state=42)
                     m.fit(X_f_tr, y_f_tr)
                     oof_preds[va_idx, j] = m.predict_proba(X_f_va)[:, 1]
             except Exception:
                 pass  # leave 0.5 default
 
     # Meta-LR trained on OOF predictions
-    meta = LogisticRegression(C=1.0, solver="lbfgs", max_iter=200, random_state=42)
+    meta = LogisticRegression(C=1.0, solver="lbfgs", max_iter=1000, tol=1e-3, random_state=42)
     meta.fit(oof_preds, y_train)
 
     # Val predictions: stack each base model's val probs
