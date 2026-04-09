@@ -1474,7 +1474,7 @@ def train_interval(
     print(f"\n  WINNER: {best_algo}  pnl_sharpe={best_result['pnl']['sharpe']:.3f}  "
           f"val_acc={best_result['val_acc']:.4f}")
 
-    # Calibrate best model
+    # Calibrate best model (for display only)
     best_probs_val = best_result["probs_val"]
     calibrator = calibrate(best_probs_val, y_val)
     cal_probs_val = apply_calibration(calibrator, best_probs_val)
@@ -1489,6 +1489,12 @@ def train_interval(
         max(_non_dl_candidates, key=lambda a: results[a]["pnl"]["sharpe"])
         if _non_dl_candidates else None
     )
+    # Fit calibrator on the export model's own val predictions (avoid winner mismatch)
+    if non_dl_best_algo and HAS_SKLEARN:
+        export_calibrator = calibrate(results[non_dl_best_algo]["probs_val"], y_val)
+    else:
+        export_calibrator = calibrator
+
     if non_dl_best_algo:
         non_dl_probs_test: np.ndarray | None = None
         if non_dl_best_algo == "lgbm" and models.get("lgbm"):
@@ -1501,7 +1507,7 @@ def train_interval(
             non_dl_probs_test = models["lr"].predict_proba(X_test)[:, 1]
 
         if non_dl_probs_test is not None:
-            non_dl_probs_test_cal = apply_calibration(calibrator, non_dl_probs_test)
+            non_dl_probs_test_cal = apply_calibration(export_calibrator, non_dl_probs_test)
             pnl_test = compute_pnl_metrics(non_dl_probs_test_cal, y_test)
             test_acc = float(((non_dl_probs_test > 0.5) == y_test).mean())
             print(f"\n  HOLDOUT TEST ({non_dl_best_algo}): "
@@ -1538,26 +1544,27 @@ def train_interval(
     }
 
     # Export best runtime-compatible model (non-DL preferred for immediate use)
+    # Uses export_calibrator fitted on the exported model's own val preds (not winner's)
     export_algo = non_dl_best_algo or best_algo
     if export_algo == "lgbm" and models.get("lgbm"):
         artifact_path = _export_lgbm_artifact(
-            models["lgbm"], calibrator, means, stds,
+            models["lgbm"], export_calibrator, means, stds,
             metrics_payload, export_dir, interval,
         )
     elif export_algo == "xgb" and models.get("xgb"):
         artifact_path = _export_xgb_artifact(
-            models["xgb"], calibrator, means, stds,
+            models["xgb"], export_calibrator, means, stds,
             metrics_payload, export_dir, interval,
         )
     elif export_algo == "catboost" and models.get("catboost"):
         artifact_path = _export_catboost_artifact(
-            models["catboost"], calibrator, means, stds,
+            models["catboost"], export_calibrator, means, stds,
             metrics_payload, export_dir, interval,
         )
     else:
         artifact_path = _export_lr_artifact(
             models.get("lr") or list(models.values())[0],
-            calibrator, means, stds, metrics_payload, export_dir, interval,
+            export_calibrator, means, stds, metrics_payload, export_dir, interval,
         )
     print(f"\n  Artifact saved: {artifact_path}")
 
