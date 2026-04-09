@@ -1,12 +1,22 @@
 """BTC price + derivatives feature enricher for Polymarket BTC Up/Down markets.
 
-Fetches live data from Binance:
-  1. BTC/USDT 5m candles (spot) -> OHLCV technicals
-  2. Funding rate (futures) -> long/short crowd sentiment
-  3. Global long/short account ratio (futures) -> position sentiment
-  4. Taker buy/sell ratio (futures) -> aggressor flow
+Fetches live data from Binance and third-party sources:
+  1. BTC/USDT 5m candles (spot) -> OHLCV technicals          (Binance)
+  2. Funding rate (futures) -> long/short crowd sentiment      (Binance Futures)
+  3. Global long/short account ratio (futures)                 (Binance Futures)
+  4. Taker buy/sell ratio (futures) -> aggressor flow          (Binance Futures)
+  5. Open interest history                                     (Binance Futures)
+  6. Order book depth snapshot                                 (Binance spot)
+  7. Fear & Greed Index (daily)                               (Alternative.me)
+  8. Coinbase BTC-USD spot price -> cross-exchange basis       (Coinbase)
+  9. Kraken XBTUSD last trade price -> cross-exchange basis    (Kraken)
 
-Feature names MUST match those produced by scripts/btc_train_exhaustive.py.
+Total: 44 live features. Feature names MUST match scripts/btc_train_exhaustive.py.
+
+Cross-exchange basis rationale:
+  Coinbase/Kraken often LEAD Binance price by 1-30s during US hours
+  (institutional flow, arbitrage latency). A positive basis (CB > Binance)
+  indicates upward pressure as arbitrageurs push Binance price up.
 """
 from __future__ import annotations
 
@@ -34,6 +44,11 @@ SYMBOL = "BTCUSDT"
 INTERVAL = "5m"
 N_CANDLES = 200  # 200 x 5m = ~16h lookback (enables RSI-14 on 1h resampled bars)
 CACHE_TTL_SEC = 60  # re-fetch at most once per minute
+
+# Third-party data sources (no auth required)
+ALTME_FNG_URL = "https://api.alternative.me/fng/?limit=1"
+COINBASE_SPOT_URL = "https://api.coinbase.com/v2/prices/BTC-USD/spot"
+KRAKEN_TICKER_URL = "https://api.kraken.com/0/public/Ticker?pair=XBTUSD"
 
 
 def is_btc_updown_market(slug: str, question: str) -> bool:
@@ -202,6 +217,38 @@ class BtcFeatureEnricher:
                 if best_bid > 0:
                     ob_spread_bps = (best_ask - best_bid) / best_bid * 10000
 
+        # Fear & Greed Index (daily signal, Alternative.me)
+        fng_raw = _safe_json_get(ALTME_FNG_URL, timeout=self.timeout_sec)
+        fng_value: int | None = None
+        if isinstance(fng_raw, dict):
+            entries = fng_raw.get("data", [])
+            if entries:
+                try:
+                    fng_value = int(entries[0].get("value", 50))
+                except (TypeError, ValueError):
+                    pass
+
+        # Coinbase BTC-USD spot price (cross-exchange basis)
+        cb_raw = _safe_json_get(COINBASE_SPOT_URL, timeout=self.timeout_sec)
+        cb_price: float | None = None
+        if isinstance(cb_raw, dict):
+            try:
+                amount = cb_raw.get("data", {}).get("amount") or 0
+                cb_price = float(amount) if amount else None
+            except (TypeError, ValueError):
+                pass
+
+        # Kraken XBTUSD last trade price (cross-exchange basis)
+        kr_raw = _safe_json_get(KRAKEN_TICKER_URL, timeout=self.timeout_sec)
+        kr_price: float | None = None
+        if isinstance(kr_raw, dict) and not kr_raw.get("error"):
+            try:
+                for ticker in kr_raw.get("result", {}).values():
+                    kr_price = float(ticker["c"][0])  # last trade closed
+                    break
+            except (KeyError, IndexError, TypeError, ValueError):
+                pass
+
         return {
             "candles":      candles,
             "funding_rate": funding_rate,
@@ -211,6 +258,9 @@ class BtcFeatureEnricher:
             "oi_prev":      oi_prev,
             "ob_imbalance": ob_imbalance,
             "ob_spread_bps": ob_spread_bps,
+            "fng_value":    fng_value,
+            "cb_price":     cb_price,
+            "kr_price":     kr_price,
         }
 
     def _fetch_candles(self) -> list[dict[str, Any]]:
@@ -455,6 +505,34 @@ class BtcFeatureEnricher:
         sp = data.get("ob_spread_bps")
         feats["f_btc_ob_spread_bps"] = (
             _clamp(sp / 10.0, 0.0, 5.0) if sp is not None and math.isfinite(sp) else 0.0
+        )
+
+        # Fear & Greed Index [0, 1]: 0=extreme fear, 1=extreme greed.
+        # At extremes (< 0.2 or > 0.8) acts as mean-reversion signal.
+        # Default 0.5 (neutral) when unavailable.
+        fng = data.get("fng_value")
+        feats["f_btc_fear_greed"] = (
+            _clamp(fng / 100.0, 0.0, 1.0) if fng is not None else 0.5
+        )
+
+        # Cross-exchange basis vs Binance (latest candle close as reference price).
+        # Positive basis = Coinbase/Kraken trading above Binance → arbitrage pressure
+        # pushes Binance up → mild bullish signal. Clipped ±30 bps.
+        candles = data.get("candles", [])
+        binance_ref = candles[-1]["close"] if candles else 0.0
+
+        cb = data.get("cb_price")
+        feats["f_btc_cb_basis_bps"] = (
+            _clamp((cb - binance_ref) / binance_ref * 10_000, -30.0, 30.0)
+            if cb is not None and cb > 0 and binance_ref > 0
+            else 0.0
+        )
+
+        kr = data.get("kr_price")
+        feats["f_btc_kraken_basis_bps"] = (
+            _clamp((kr - binance_ref) / binance_ref * 10_000, -30.0, 30.0)
+            if kr is not None and kr > 0 and binance_ref > 0
+            else 0.0
         )
 
         return feats

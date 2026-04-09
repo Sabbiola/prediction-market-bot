@@ -539,7 +539,15 @@ def compute_pnl_metrics(
         return {"pnl": 0.0, "sharpe": -99.0, "win_rate": 0.0, "n_trades": len(pnl_series)}
 
     arr = np.array(pnl_series, dtype=np.float64)
-    annual_factor = math.sqrt(252 * 96)    # 96 × 15-min candles per day
+    # Annualise by actual trade count, not by calendar bars.
+    # Using sqrt(252 × bars_per_day) would over-count if we only trade a fraction
+    # of all bars. Instead: sqrt(n_trades_per_year), estimated from the observed
+    # trade rate in this sample. 252 trading days × observed trades_per_day.
+    n_total_bars = len(probs)
+    trade_rate   = len(arr) / max(n_total_bars, 1)   # fraction of bars we trade
+    bars_per_day = 96  # 15-min bars per day (24h × 4)
+    trades_per_year = trade_rate * bars_per_day * 252
+    annual_factor = math.sqrt(max(trades_per_year, 1.0))
     sharpe = float(arr.mean() / (arr.std() + 1e-8) * annual_factor)
     return {
         "pnl":      float(arr.sum()),

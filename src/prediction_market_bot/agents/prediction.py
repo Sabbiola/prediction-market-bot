@@ -27,6 +27,19 @@ from prediction_market_bot.agents.prediction_alt_promoted_engine import run_alt_
 from prediction_market_bot.domain.models import MarketCandidate, PredictionResult, ResearchPacket
 
 
+def _parse_btc_interval(schema_version: str) -> str:
+    """Extract candle interval from model schema version string.
+
+    "btc-v2-15m" → "15m",  "btc-v2-5m" → "5m",  anything else → "5m".
+    Ensures the live enricher fetches candles at the same resolution the model
+    was trained on — critical for feature scale consistency.
+    """
+    for part in schema_version.split("-"):
+        if part.endswith("m") and part[:-1].isdigit():
+            return part
+    return "5m"
+
+
 class PredictionAgent:
     name = "prediction-agent"
 
@@ -40,7 +53,10 @@ class PredictionAgent:
         self.last_shadow_comparison: dict[str, object] | None = None
         self.last_parity_warnings: tuple[str, ...] = ()
         self.last_runtime_features: dict[str, object] | None = None
-        self._btc_enricher: BtcFeatureEnricher = BtcFeatureEnricher()
+        # Derive candle interval from model schema version so enricher resolution
+        # matches training data resolution (e.g. "btc-v2-15m" → interval="15m").
+        _btc_interval = _parse_btc_interval(settings.model_expected_feature_schema_version)
+        self._btc_enricher: BtcFeatureEnricher = BtcFeatureEnricher(interval=_btc_interval)
         self._load_runtime_model()
 
     def run(self, candidate: MarketCandidate, research: ResearchPacket) -> PredictionResult:

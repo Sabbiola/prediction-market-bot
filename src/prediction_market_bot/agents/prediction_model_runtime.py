@@ -146,8 +146,17 @@ class _XGBoostRuntimeModel:
 
 
 class _LightGBMRuntimeModel:
-    def __init__(self, feature_names: tuple[str, ...], model_path: Path) -> None:
+    def __init__(
+        self,
+        feature_names: tuple[str, ...],
+        model_path: Path,
+        scaler_means: tuple[float, ...] | None = None,
+        scaler_stds: tuple[float, ...] | None = None,
+    ) -> None:
         self._feature_names = feature_names
+        # Store scaler params (LightGBM is trained on scaled features)
+        self._scaler_means = scaler_means
+        self._scaler_stds = scaler_stds
         lgb = _try_import_lightgbm()
         if lgb is None:
             raise PredictionModelArtifactError(
@@ -164,6 +173,11 @@ class _LightGBMRuntimeModel:
     def predict_proba(self, features: Mapping[str, float]) -> float:
         import numpy as np
         row = np.array([[float(features.get(n, 0.0)) for n in self._feature_names]], dtype=np.float32)
+        # Apply StandardScaler — model was trained on scaled features
+        if self._scaler_means is not None and self._scaler_stds is not None:
+            means = np.array(self._scaler_means, dtype=np.float32)
+            stds  = np.array(self._scaler_stds,  dtype=np.float32)
+            row   = (row - means) / stds
         prob = float(self._booster.predict(row)[0])
         return _clamp_probability(prob)
 
@@ -467,7 +481,14 @@ class PredictionModelArtifactLoader:
             lgbm_rel = str(payload.get("lgbm_model_path") or "").strip()
             if not lgbm_rel:
                 raise PredictionModelArtifactError(f"missing_lgbm_model_path path={path}")
-            return _LightGBMRuntimeModel(feature_names=feature_names, model_path=path.parent / lgbm_rel)
+            scaler_means = self._coerce_float_tuple(payload.get("scaler_means"), name="scaler_means", path=path) or None
+            scaler_stds  = self._coerce_float_tuple(payload.get("scaler_stds"),  name="scaler_stds",  path=path) or None
+            return _LightGBMRuntimeModel(
+                feature_names=feature_names,
+                model_path=path.parent / lgbm_rel,
+                scaler_means=scaler_means,
+                scaler_stds=scaler_stds,
+            )
         if algorithm == "catboost":
             feature_names = _as_str_tuple(payload.get("feature_names")) or feature_columns
             # Accept both "cat_model_path" and "catboost_model_path" (training script uses the latter)
