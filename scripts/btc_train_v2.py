@@ -707,7 +707,7 @@ def train_lr_sklearn(
             def _pred(X_tr: np.ndarray, y_tr: np.ndarray, X_va: np.ndarray) -> np.ndarray:
                 # sklearn 1.8+: penalty param deprecated; l1_ratio alone controls regularization type
                 m = LogisticRegression(C=C, l1_ratio=l1_ratio,
-                                       solver="saga", max_iter=2000, tol=1e-3, random_state=42)
+                                       solver="saga", max_iter=2000, tol=1e-2, random_state=42)
                 m.fit(X_tr, y_tr)
                 return m.predict_proba(X_va)[:, 1]
             return _wf_cv_eval(_pred, X_train_raw, y_train, n_folds=3)
@@ -718,7 +718,7 @@ def train_lr_sklearn(
         bp = study.best_params
         print(f"    LR   Optuna best CV sharpe={study.best_value:.3f}  C={bp['C']:.4f} l1_ratio={bp['l1_ratio']:.3f}", flush=True)
         model = LogisticRegression(C=bp["C"], l1_ratio=bp["l1_ratio"],
-                                    solver="saga", max_iter=2000, tol=1e-3, random_state=42)
+                                    solver="saga", max_iter=2000, tol=1e-2, random_state=42)
         model.fit(X_train, y_train)
         return model, model.predict_proba(X_val)[:, 1]
     else:
