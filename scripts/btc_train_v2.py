@@ -170,6 +170,83 @@ def _load_jsonl(path: Path) -> list[dict]:
     return candles
 
 
+def _load_separate_derivatives() -> list[dict]:
+    """Merge separate derivative files into unified records keyed by timestamp_ms.
+
+    btc_fetch_derivatives.py creates 4 separate files. This function merges them
+    into a single list of dicts compatible with what build_dataset() expects:
+      - funding_rate    (8h intervals — forward-filled to each 5m bucket)
+      - ls_ratio_log    (log of long/short ratio)
+      - taker_ratio_log (log of buy/sell ratio)
+      - oi_change_pct   (% change in open interest vs previous row)
+
+    Returns [] if none of the separate files exist.
+    """
+    base = Path("data/btc")
+
+    def _read(fname: str) -> list[dict]:
+        p = base / fname
+        return _load_jsonl(p) if p.exists() else []
+
+    fr_rows  = sorted(_read("funding_rate.jsonl"),    key=lambda r: r["timestamp_ms"])
+    ls_rows  = sorted(_read("long_short_ratio.jsonl"), key=lambda r: r["timestamp_ms"])
+    tk_rows  = sorted(_read("taker_ratio.jsonl"),      key=lambda r: r["timestamp_ms"])
+    oi_rows  = sorted(_read("open_interest.jsonl"),    key=lambda r: r["timestamp_ms"])
+
+    if not (fr_rows or ls_rows or tk_rows or oi_rows):
+        return []
+
+    # Build fast lookups: ts_ms -> value
+    # Funding rate (8h) — forward-fill: for each ts, use most recent funding rate at or before ts
+    fr_sorted = [(r["timestamp_ms"], float(r.get("funding_rate", 0.0))) for r in fr_rows]
+
+    def _get_funding(ts: int) -> float:
+        lo, hi = 0, len(fr_sorted) - 1
+        result = 0.0
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            if fr_sorted[mid][0] <= ts:
+                result = fr_sorted[mid][1]
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        return result
+
+    # LS ratio — exact match by timestamp
+    ls_index = {r["timestamp_ms"]: float(r.get("longShortRatio") or r.get("long_short_ratio", 1.0))
+                for r in ls_rows}
+    # Taker ratio — exact match
+    tk_index = {r["timestamp_ms"]: float(r.get("buySellRatio") or r.get("buy_sell_ratio", 1.0))
+                for r in tk_rows}
+    # OI — exact match + compute change pct
+    oi_sorted = [(r["timestamp_ms"], float(r.get("sumOpenInterest") or r.get("open_interest", 0.0)))
+                 for r in oi_rows]
+    oi_index: dict[int, float] = {}
+    for i, (ts, oi) in enumerate(oi_sorted):
+        prev_oi = oi_sorted[i - 1][1] if i > 0 else oi
+        oi_index[ts] = (oi - prev_oi) / max(abs(prev_oi), 1e-8) * 100 if prev_oi else 0.0
+
+    # Collect all timestamps from 5m/15m sources (ls, taker, oi)
+    all_ts = sorted(set(ls_index) | set(tk_index) | set(oi_index))
+    if not all_ts:
+        # Only funding rate available — build from funding rate timestamps
+        all_ts = [ts for ts, _ in fr_sorted]
+
+    merged = []
+    for ts in all_ts:
+        ls_val = ls_index.get(ts, 1.0)
+        tk_val = tk_index.get(ts, 1.0)
+        merged.append({
+            "timestamp_ms":    ts,
+            "funding_rate":    _get_funding(ts),
+            "ls_ratio_log":    _clamp(math.log(max(ls_val, 1e-8)), -2.0, 2.0),
+            "taker_ratio_log": _clamp(math.log(max(tk_val, 1e-8)), -2.0, 2.0),
+            "oi_change_pct":   oi_index.get(ts, 0.0),
+        })
+
+    return merged
+
+
 def load_data(interval: str, lookback_months: int) -> dict[str, list[dict]]:
     """Load Binance, Coinbase, and derivatives data. Returns dict of lists."""
     cutoff_ms = int((datetime.now(UTC) - timedelta(days=lookback_months * 30)).timestamp() * 1000)
@@ -184,14 +261,13 @@ def load_data(interval: str, lookback_months: int) -> dict[str, list[dict]]:
     bn = _load(Path(f"data/btc/ohlcv_{interval}.jsonl"))
     cb = _load(Path(f"data/btc/coinbase_{interval}.jsonl"))
 
-    # Derivatives: try parquet first, fallback to jsonl
+    # Derivatives: try unified file first, then merge from separate files
     deriv: list[dict] = []
-    for ext in ("jsonl", "parquet"):
-        p = Path(f"data/btc/derivatives.{ext}")
-        if p.exists():
-            if ext == "jsonl":
-                deriv = _load_jsonl(p)
-            break
+    unified = Path("data/btc/derivatives.jsonl")
+    if unified.exists():
+        deriv = _load_jsonl(unified)
+    else:
+        deriv = _load_separate_derivatives()
 
     return {"binance": bn, "coinbase": cb, "derivatives": deriv}
 
