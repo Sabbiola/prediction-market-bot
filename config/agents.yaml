@@ -19,11 +19,11 @@ standards:
 
 thresholds:
   min_confidence: 0.38
-  min_edge_bps: 750        # BTC Up/Down taker fee ~7.2% = 720bps; need clear edge above that
+  min_edge_bps: 750        # BTC Up/Down taker fee ~7.2% = 720bps; conservative gate (lower to 500 after validation)
   max_spread_bps: 200      # BTC markets are tight (spread ~100bps)
-  min_liquidity_usd: 5000  # BTC 5m markets have ~$10K liquidity
-  min_volume_24h_usd: 0    # 5m markets don't accumulate much 24h volume
-  min_hours_to_resolution: 0  # BTC Up/Down markets last only 5 minutes
+  min_liquidity_usd: 5000  # BTC 15m markets have ~$10K liquidity
+  min_volume_24h_usd: 0    # 15m markets don't accumulate much 24h volume
+  min_hours_to_resolution: 0  # BTC Up/Down 15m markets last only 15 minutes
 
 risk:
   bankroll_usd: 10000
@@ -155,10 +155,10 @@ agents:
       structure_weight: 0.10
     model_inference:
       engine: model_v2
-      model_artifact_path: data/models/v1/btc_updown_5m_v1.json
-      calibration_artifact_path: ""
-      feature_schema_version: btc-v1
-      strict_feature_parity: false
+      model_artifact_path: data/models/v4/btc_15m_best.json
+      calibration_artifact_path: ""   # calibration embedded in artifact JSON
+      feature_schema_version: btc-v2-15m
+      strict_feature_parity: true
       fallback_to_heuristic: true
       forced_heuristic_reason: ""
       alt_shadow:
