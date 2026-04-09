@@ -1,20 +1,20 @@
 app:
   name: prediction-market-bot
-  env: staging
+  env: paper
   timezone: UTC
   mode: dry-run
 
 runtime:
-  mode: SANDBOX_CHAIN
+  mode: PAPER_LIVE
   market_data_provider: LIVE
   research_provider: LIVE
   provider_failure_policy: FAIL_FAST
 
 execution:
-  mode: SANDBOX_CHAIN
+  mode: PAPER
   enable_rehearsal_lane: false
-  blocking_trade_review: true
-  review_auto_approve: false
+  blocking_trade_review: false
+  review_auto_approve: true
   review_candidate_expiry_seconds: 0
   settlement_same_run: false
 
@@ -64,7 +64,7 @@ live_research:
 
 sandbox_chain:
   enabled: true
-  submit_tx: true
+  submit_tx: false
   rpc_url: http://127.0.0.1:18545
   chain_id: 80002
   contract_address: "0x0000000000000000000000000000000000000000"
@@ -149,8 +149,8 @@ observability:
 feature_flags:
   enable_postmortem: true
   enable_settlement: false
-  enable_manual_review_queue: true
-  blocking_trade_review: true
+  enable_manual_review_queue: false
+  blocking_trade_review: false
   use_live_market_data: true
   use_live_research: true
   allow_live_execution: false

@@ -32,7 +32,7 @@ BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
 FAPI_BASE = "https://fapi.binance.com"
 SYMBOL = "BTCUSDT"
 INTERVAL = "5m"
-N_CANDLES = 60   # 60 x 5m = 5h lookback (enough for all features)
+N_CANDLES = 200  # 200 x 5m = ~16h lookback (enables RSI-14 on 1h resampled bars)
 CACHE_TTL_SEC = 60  # re-fetch at most once per minute
 
 
@@ -333,6 +333,22 @@ class BtcFeatureEnricher:
         f_weekday_sin = math.sin(2 * math.pi * dow / 7)
         f_weekday_cos = math.cos(2 * math.pi * dow / 7)
 
+        # Gap open: (current candle open - prev close) / prev close
+        # Captures overnight / inter-bar gap visible at candle start
+        _gap_raw = (candles[-1]["open"] - prev["close"]) / max(prev["close"], 1e-8)
+        f_btc_gap_open = _clamp(_gap_raw, -0.05, 0.05)
+
+        # RSI(14) on 1h bars resampled from 5m completed candles.
+        # Takes the close of every 12th candle stepping backwards from the most recent.
+        # With N_CANDLES=200: ~16 1h bars available → RSI(14) feasible.
+        _closes_1h: list[float] = []
+        _i = len(completed) - 1
+        while _i >= 0:
+            _closes_1h.insert(0, completed[_i]["close"])
+            _i -= 12
+        _rsi_1h_raw = _rsi(_closes_1h, period=14)  # returns 0.5 if insufficient data
+        f_btc_rsi_1h = _clamp((_rsi_1h_raw - 0.5) * 2.0, -1.0, 1.0)
+
         # Return ALL possible features — the model artifact selects which ones it needs
         return {
             # Returns (all lags the training script might use)
@@ -342,10 +358,12 @@ class BtcFeatureEnricher:
             "f_btc_return_12c":        _clamp(prev_return_12c, -0.30, 0.30),
             "f_btc_return_24c":        _clamp(prev_return_24c, -0.30, 0.30),
             "f_btc_return_48c":        _clamp(prev_return_48c, -0.30, 0.30),
-            # Legacy feature names (v1 compat)
-            "f_btc_prev_return_1c":    _clamp(prev_return_1c,  -0.10, 0.10),
-            "f_btc_prev_return_3c":    _clamp(prev_return_3c,  -0.15, 0.15),
-            "f_btc_prev_return_12c":   _clamp(prev_return_12c, -0.20, 0.20),
+            # btc-v2 prev_return names (match btc_train_v2.py FEATURE_NAMES exactly)
+            "f_btc_prev_return_1c":    _clamp(prev_return_1c,  -0.30, 0.30),
+            "f_btc_prev_return_3c":    _clamp(prev_return_3c,  -0.30, 0.30),
+            "f_btc_prev_return_6c":    _clamp(prev_return_6c,  -0.30, 0.30),
+            "f_btc_prev_return_12c":   _clamp(prev_return_12c, -0.30, 0.30),
+            "f_btc_prev_return_24c":   _clamp(prev_return_24c, -0.30, 0.30),
             "f_btc_prev_return_48c":   _clamp(prev_return_48c, -0.30, 0.30),
             # RSI variants
             "f_btc_rsi_7":             _clamp((rsi_7  - 0.5) * 2.0, -1.0, 1.0),
@@ -355,20 +373,22 @@ class BtcFeatureEnricher:
             "f_btc_vol_ratio_ma10":    _vol_ratio(10),
             "f_btc_vol_ratio_ma14":    _vol_ratio(14),
             "f_btc_vol_ratio_ma20":    _vol_ratio(20),
-            "f_btc_volume_ratio":      _vol_ratio(20),  # legacy alias
+            "f_btc_volume_ratio":      _vol_ratio(20),  # matches FEATURE_NAMES
             # Realized volatility variants
             "f_btc_volatility_6c":     _realized_vol(6),
             "f_btc_volatility_8c":     _realized_vol(8),
             "f_btc_volatility_12c":    _realized_vol(12),
             "f_btc_volatility_24c":    _realized_vol(24),
             "f_btc_volatility_48c":    _realized_vol(48),
-            # Bollinger Band variants
+            # Bollinger Band — both naming conventions (pos = v1, position = v2)
             "f_btc_bb_pos_10":         _bb_pos(10),
             "f_btc_bb_pos_14":         _bb_pos(14),
             "f_btc_bb_pos_20":         _bb_pos(20),
             "f_btc_bb_pos_30":         _bb_pos(30),
             "f_btc_bb_pos_48":         _bb_pos(48),
-            "f_btc_bb_position":       _bb_pos(20),  # legacy alias
+            "f_btc_bb_position":       _bb_pos(20),   # legacy alias (v1)
+            "f_btc_bb_position_10":    _bb_pos(10),   # v2 name (matches FEATURE_NAMES)
+            "f_btc_bb_position_20":    _bb_pos(20),   # v2 name (matches FEATURE_NAMES)
             # MACD
             "f_btc_macd":              macd_val,
             # Stochastic
@@ -380,6 +400,16 @@ class BtcFeatureEnricher:
             "f_decision_hour_utc_cos": f_hour_cos,
             "f_decision_weekday_sin":  f_weekday_sin,
             "f_decision_weekday_cos":  f_weekday_cos,
+            # Cross-timeframe & gap (v2)
+            "f_btc_gap_open":          f_btc_gap_open,
+            "f_btc_rsi_1h":            f_btc_rsi_1h,
+            # Coinbase lead-lag (zero when CB data not fetched live; model trained with CB data)
+            "f_btc_cb_return_1c":      0.0,
+            "f_btc_cb_return_3c":      0.0,
+            "f_btc_cb_bn_spread_1c":   0.0,
+            "f_btc_cb_bn_spread_3c":   0.0,
+            "f_btc_cb_vol_dominance":  0.0,
+            "f_btc_cb_momentum_lead":  0.0,
         }
 
     # ------------------------------------------------------------------

@@ -470,7 +470,8 @@ class PredictionModelArtifactLoader:
             return _LightGBMRuntimeModel(feature_names=feature_names, model_path=path.parent / lgbm_rel)
         if algorithm == "catboost":
             feature_names = _as_str_tuple(payload.get("feature_names")) or feature_columns
-            cat_rel = str(payload.get("cat_model_path") or "").strip()
+            # Accept both "cat_model_path" and "catboost_model_path" (training script uses the latter)
+            cat_rel = str(payload.get("cat_model_path") or payload.get("catboost_model_path") or "").strip()
             if not cat_rel:
                 raise PredictionModelArtifactError(f"missing_cat_model_path path={path}")
             return _CatBoostRuntimeModel(feature_names=feature_names, model_path=path.parent / cat_rel)

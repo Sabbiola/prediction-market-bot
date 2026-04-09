@@ -49,3 +49,11 @@ data/strategy-research/
 
 # UI static build artifacts
 src/prediction_market_bot/ui/static/
+
+# Raw BTC OHLCV and market data (large, re-fetchable via fetch scripts)
+data/btc/*.jsonl
+data/btc/*.parquet
+!data/btc/training_log.jsonl
+
+# CatBoost training logs
+catboost_info/

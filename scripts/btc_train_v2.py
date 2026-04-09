@@ -357,7 +357,10 @@ def compute_features(
 
     # --- Binance returns ---
     def _ret(n: int) -> float:
-        base = candles[max(0, idx - n)]["close"]
+        # n-period return ending at prev (candles[idx-1]).
+        # base must be n candles BEFORE prev, i.e. candles[idx-1-n].
+        # Bug was: base = candles[idx-n] = prev for n=1 → always 0.
+        base = candles[max(0, idx - 1 - n)]["close"]
         return (prev["close"] - base) / max(base, 1e-8)
 
     r1, r3, r6 = _ret(1), _ret(3), _ret(6)
@@ -536,7 +539,7 @@ def compute_pnl_metrics(
         return {"pnl": 0.0, "sharpe": -99.0, "win_rate": 0.0, "n_trades": len(pnl_series)}
 
     arr = np.array(pnl_series, dtype=np.float64)
-    annual_factor = math.sqrt(252 * 288)   # ~5-min candles per year
+    annual_factor = math.sqrt(252 * 96)    # 96 × 15-min candles per day
     sharpe = float(arr.mean() / (arr.std() + 1e-8) * annual_factor)
     return {
         "pnl":      float(arr.sum()),

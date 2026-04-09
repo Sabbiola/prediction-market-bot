@@ -171,7 +171,7 @@ def enrich_with_btc_features(
     merged = dict(base.values)
     merged.update(btc_features)
     return RuntimePredictionFeatures(
-        schema_version="btc-v1",
+        schema_version="btc-v2-15m",
         decision_timestamp_utc=base.decision_timestamp_utc,
         values=merged,
     )
