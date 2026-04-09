@@ -707,7 +707,7 @@ def train_lr_sklearn(
             def _pred(X_tr: np.ndarray, y_tr: np.ndarray, X_va: np.ndarray) -> np.ndarray:
                 # sklearn 1.8+: penalty param deprecated; l1_ratio alone controls regularization type
                 m = LogisticRegression(C=C, l1_ratio=l1_ratio,
-                                       solver="saga", max_iter=500, random_state=42)
+                                       solver="saga", max_iter=2000, random_state=42)
                 m.fit(X_tr, y_tr)
                 return m.predict_proba(X_va)[:, 1]
             return _wf_cv_eval(_pred, X_train_raw, y_train, n_folds=3)
@@ -718,13 +718,13 @@ def train_lr_sklearn(
         bp = study.best_params
         print(f"    LR   Optuna best CV sharpe={study.best_value:.3f}  C={bp['C']:.4f} l1_ratio={bp['l1_ratio']:.3f}", flush=True)
         model = LogisticRegression(C=bp["C"], l1_ratio=bp["l1_ratio"],
-                                    solver="saga", max_iter=500, random_state=42)
+                                    solver="saga", max_iter=2000, random_state=42)
         model.fit(X_train, y_train)
         return model, model.predict_proba(X_val)[:, 1]
     else:
         best_model, best_probs, best_sharpe = None, np.full(len(y_val), 0.5), -999.0
         for i, gp in enumerate(_LR_GRID):
-            model = LogisticRegression(solver="saga", max_iter=500, random_state=42, **gp)
+            model = LogisticRegression(solver="saga", max_iter=2000, random_state=42, **gp)
             model.fit(X_train, y_train)
             probs = model.predict_proba(X_val)[:, 1]
             m = compute_pnl_metrics(probs, y_val)
@@ -1186,6 +1186,45 @@ def _export_xgb_artifact(
     return path
 
 
+def _export_catboost_artifact(
+    model: Any,
+    calibrator: IsotonicRegression | None,
+    means: np.ndarray,
+    stds: np.ndarray,
+    metrics: dict,
+    out_dir: Path,
+    interval: str,
+    suffix: str = "best",
+) -> Path:
+    model_fname = f"btc_{interval}_{suffix}_catboost.cbm"
+    model.save_model(str(out_dir / model_fname))
+
+    artifact = {
+        "artifact_type":          "prediction_model_v2",
+        "model_name":             f"btc_updown_{interval}_catboost_{suffix}",
+        "model_version":          "v2.0.0",
+        "feature_schema_version": f"btc-v2-{interval}",
+        "description":            f"CatBoost | BTC Up/Down {interval} | PnL-optimised | Coinbase lead-lag",
+        **metrics,
+        "feature_columns": FEATURE_NAMES,
+        "required_features": [
+            "f_btc_prev_return_1c", "f_btc_prev_return_3c",
+            "f_btc_rsi_14", "f_btc_bb_position_20",
+        ],
+        "algorithm_payload": {
+            "algorithm":          "catboost",
+            "feature_names":      FEATURE_NAMES,
+            "catboost_model_path": model_fname,
+            "scaler_means":       [round(float(m), 8) for m in means],
+            "scaler_stds":        [round(float(s), 8) for s in stds],
+        },
+        "calibration": _calibration_payload(calibrator),
+    }
+    path = out_dir / f"btc_{interval}_{suffix}.json"
+    path.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
+    return path
+
+
 def _export_lr_artifact(
     model: Any,
     calibrator: IsotonicRegression | None,
@@ -1440,14 +1479,20 @@ def train_interval(
 
     # Holdout evaluation (blindato — only for final report)
     best_model = models.get(best_algo if best_algo != "ensemble" else "lgbm") or models.get(list(models.keys())[0])
-    # For DL models we use non-DL best for holdout (runtime compat)
-    non_dl_best_algo = next((a for a in ["lgbm", "xgb", "lr"] if a in results), None)
+    # Select best non-DL algo by pnl_sharpe (includes catboost; used for holdout + export)
+    _non_dl_candidates = [a for a in ["catboost", "lgbm", "xgb", "lr"] if a in results]
+    non_dl_best_algo = (
+        max(_non_dl_candidates, key=lambda a: results[a]["pnl"]["sharpe"])
+        if _non_dl_candidates else None
+    )
     if non_dl_best_algo:
         non_dl_probs_test: np.ndarray | None = None
         if non_dl_best_algo == "lgbm" and models.get("lgbm"):
             non_dl_probs_test = models["lgbm"].predict(X_test)
         elif non_dl_best_algo == "xgb" and models.get("xgb"):
             non_dl_probs_test = models["xgb"].predict(xgb.DMatrix(X_test, feature_names=FEATURE_NAMES))
+        elif non_dl_best_algo == "catboost" and models.get("catboost"):
+            non_dl_probs_test = models["catboost"].predict(X_test, prediction_type="Probability")[:, 1]
         elif non_dl_best_algo == "lr" and models.get("lr"):
             non_dl_probs_test = models["lr"].predict_proba(X_test)[:, 1]
 
@@ -1498,6 +1543,11 @@ def train_interval(
     elif export_algo == "xgb" and models.get("xgb"):
         artifact_path = _export_xgb_artifact(
             models["xgb"], calibrator, means, stds,
+            metrics_payload, export_dir, interval,
+        )
+    elif export_algo == "catboost" and models.get("catboost"):
+        artifact_path = _export_catboost_artifact(
+            models["catboost"], calibrator, means, stds,
             metrics_payload, export_dir, interval,
         )
     else:
