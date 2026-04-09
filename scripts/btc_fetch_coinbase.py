@@ -120,6 +120,7 @@ def fetch_all(
 
     seen_ts: set[int] = set()
     total = 0
+    max_ts_ms: int = 0
 
     # Load existing data to avoid re-downloading (resume support)
     if out_path.exists():
@@ -127,10 +128,22 @@ def fetch_all(
             for line in fh:
                 line = line.strip()
                 if line:
-                    seen_ts.add(json.loads(line)["open_time_ms"])
+                    ts = json.loads(line)["open_time_ms"]
+                    seen_ts.add(ts)
+                    if ts > max_ts_ms:
+                        max_ts_ms = ts
         print(f"  Resuming: {len(seen_ts)} candles already on disk")
 
-    current_start = start_dt
+    # Jump to last known timestamp to avoid re-fetching already-covered windows
+    if max_ts_ms > 0:
+        resume_dt = datetime.fromtimestamp(max_ts_ms / 1000, UTC)
+        if resume_dt > start_dt:
+            print(f"  Fast-forwarding to {resume_dt.strftime('%Y-%m-%dT%H:%M:%SZ')} (skipping already-fetched windows)")
+            current_start = resume_dt
+        else:
+            current_start = start_dt
+    else:
+        current_start = start_dt
     with out_path.open("a", encoding="utf-8") as fh:
         while current_start < end_dt:
             current_end = min(current_start + timedelta(seconds=window_sec), end_dt)
@@ -163,9 +176,8 @@ def fetch_all(
             current_start = current_end
             time.sleep(THROTTLE_SEC)
 
-            if total % 5000 == 0 and total > 0:
-                pct = (current_start - start_dt) / (end_dt - start_dt) * 100
-                print(f"  {total:>7} candles written  [{pct:.0f}%] ...")
+            pct = (current_start - start_dt) / (end_dt - start_dt) * 100
+            print(f"  {total:>7} candles  [{pct:.1f}%]  window={start_iso[:10]}  batch={new_in_batch}", flush=True)
 
     return total
 

@@ -705,7 +705,8 @@ def train_lr_sklearn(
             # sklearn 1.8+: use l1_ratio instead of penalty='l1'
             l1_ratio = trial.suggest_float("l1_ratio", 0.0, 1.0)
             def _pred(X_tr: np.ndarray, y_tr: np.ndarray, X_va: np.ndarray) -> np.ndarray:
-                m = LogisticRegression(C=C, penalty="elasticnet", l1_ratio=l1_ratio,
+                # sklearn 1.8+: penalty param deprecated; l1_ratio alone controls regularization type
+                m = LogisticRegression(C=C, l1_ratio=l1_ratio,
                                        solver="saga", max_iter=500, random_state=42)
                 m.fit(X_tr, y_tr)
                 return m.predict_proba(X_va)[:, 1]
@@ -716,7 +717,7 @@ def train_lr_sklearn(
         study.optimize(objective, n_trials=n_optuna_trials, show_progress_bar=False)
         bp = study.best_params
         print(f"    LR   Optuna best CV sharpe={study.best_value:.3f}  C={bp['C']:.4f} l1_ratio={bp['l1_ratio']:.3f}", flush=True)
-        model = LogisticRegression(C=bp["C"], penalty="elasticnet", l1_ratio=bp["l1_ratio"],
+        model = LogisticRegression(C=bp["C"], l1_ratio=bp["l1_ratio"],
                                     solver="saga", max_iter=500, random_state=42)
         model.fit(X_train, y_train)
         return model, model.predict_proba(X_val)[:, 1]
