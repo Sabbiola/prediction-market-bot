@@ -36,6 +36,10 @@ _BTC_UPDOWN_PATTERNS = (
     "btc-updown",
     "bitcoin-up-or-down",
     "bitcoin-updown",
+    "btc up or down",
+    "bitcoin up or down",
+    "btc up/down",
+    "bitcoin up/down",
 )
 
 BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"

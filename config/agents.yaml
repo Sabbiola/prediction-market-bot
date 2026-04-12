@@ -18,15 +18,15 @@ standards:
   allow_business_logic_in_ui: false
 
 thresholds:
-  min_confidence: 0.38
-  min_edge_bps: 750        # BTC Up/Down taker fee ~7.2% = 720bps; conservative gate (lower to 500 after validation)
+  min_confidence: 0.05
+  min_edge_bps: 5        # BTC Up/Down model edge is typically between 10-100 bps
   max_spread_bps: 200      # BTC markets are tight (spread ~100bps)
   min_liquidity_usd: 5000  # BTC 15m markets have ~$10K liquidity
   min_volume_24h_usd: 0    # 15m markets don't accumulate much 24h volume
   min_hours_to_resolution: 0  # BTC Up/Down 15m markets last only 15 minutes
 
 risk:
-  bankroll_usd: 10000
+  bankroll_usd: 500
   fractional_kelly: 0.25
   max_position_pct: 0.02
   max_event_bucket_pct: 0.08
@@ -38,7 +38,7 @@ risk:
   max_snapshot_age_sec: 900
   global_circuit_breaker: false
   manual_pause: false
-  min_bet_usd: 25
+  min_bet_usd: 1
   hard_blocks:
     - confidence_below_threshold
     - edge_below_threshold

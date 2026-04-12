@@ -64,9 +64,10 @@ class PredictionAgent:
         self.last_parity_warnings = ()
         runtime_features = build_runtime_prediction_features(candidate, research)
         # Enrich with live BTC technicals when this is a BTC Up/Down market
-        slug = str(getattr(candidate.market, "slug", "") or "").lower()
-        question = str(getattr(candidate.market, "question", "") or "").lower()
-        if is_btc_updown_market(slug, question):
+        # Enrcih with live BTC technicals
+        slug = str(getattr(candidate.market.market, "slug", "") or "").lower()
+        title = str(getattr(candidate.market.market, "title", "") or "").lower()
+        if is_btc_updown_market(slug, title):
             btc_feats = self._btc_enricher.get_features()
             if btc_feats:
                 runtime_features = enrich_with_btc_features(runtime_features, btc_feats)

@@ -109,7 +109,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 REQUIRED_LOOKBACK = 60   # min completed candles before computing features
 SEQ_LEN = 60             # LSTM/TCN input sequence length (candles)
-FEE_BPS  = 720           # Polymarket BTC taker fee in basis points
+FEE_BPS  = 180           # Polymarket BTC taker fee (crypto category, 2026)
 KELLY_FRACTION = 0.05    # fractional Kelly for PnL simulation
 
 # All feature names produced by this script
@@ -555,6 +555,285 @@ def compute_pnl_metrics(
         "win_rate": float((arr > 0).mean()),
         "n_trades": len(arr),
     }
+
+
+def compute_detailed_pnl(
+    probs: np.ndarray,
+    labels: np.ndarray,
+    *,
+    fee_bps: float = FEE_BPS,
+    min_edge_bps: float = 500.0,
+    kelly: float = KELLY_FRACTION,
+) -> dict[str, Any]:
+    """Extended PnL analysis with drawdown, profit factor, streaks, per-trade detail."""
+    market_price = 0.5
+    fee = fee_bps / 10_000
+    trades: list[dict[str, Any]] = []
+
+    for i, (p, y) in enumerate(zip(probs, labels)):
+        edge = abs(float(p) - market_price)
+        if edge * 10_000 < min_edge_bps:
+            continue
+        correct = (float(p) > market_price and int(y) == 1) or (float(p) < market_price and int(y) == 0)
+        bet_size = kelly * edge / (1.0 - market_price + 1e-8)
+        ret = bet_size * ((1.0 - fee) if correct else -1.0)
+        trades.append({
+            "idx": int(i),
+            "prob": round(float(p), 6),
+            "label": int(y),
+            "edge_bps": round(edge * 10_000, 1),
+            "correct": correct,
+            "bet_size": round(bet_size, 6),
+            "pnl": round(ret, 6),
+        })
+
+    if len(trades) < 5:
+        return {"n_trades": len(trades), "too_few": True}
+
+    pnl_arr = np.array([t["pnl"] for t in trades], dtype=np.float64)
+    wins = [t["pnl"] for t in trades if t["correct"]]
+    losses = [t["pnl"] for t in trades if not t["correct"]]
+    edges = [t["edge_bps"] for t in trades]
+
+    # Cumulative PnL and drawdown
+    cum_pnl = np.cumsum(pnl_arr)
+    peak = np.maximum.accumulate(cum_pnl)
+    drawdown = cum_pnl - peak
+    max_dd = float(drawdown.min()) if len(drawdown) > 0 else 0.0
+
+    # Consecutive streaks
+    max_win_streak = max_loss_streak = cur_win = cur_loss = 0
+    for t in trades:
+        if t["correct"]:
+            cur_win += 1
+            cur_loss = 0
+        else:
+            cur_loss += 1
+            cur_win = 0
+        max_win_streak = max(max_win_streak, cur_win)
+        max_loss_streak = max(max_loss_streak, cur_loss)
+
+    gross_profit = sum(wins) if wins else 0.0
+    gross_loss = abs(sum(losses)) if losses else 0.0
+    profit_factor = gross_profit / max(gross_loss, 1e-10)
+
+    # Edge bucket analysis
+    edge_buckets: dict[str, dict[str, Any]] = {}
+    for bucket_lo, bucket_hi, label in [
+        (0, 200, "0-200bps"), (200, 400, "200-400bps"),
+        (400, 600, "400-600bps"), (600, 1000, "600-1000bps"),
+        (1000, 99999, "1000+bps"),
+    ]:
+        bucket_trades = [t for t in trades if bucket_lo <= t["edge_bps"] < bucket_hi]
+        if bucket_trades:
+            bt_wins = sum(1 for t in bucket_trades if t["correct"])
+            bt_pnl = sum(t["pnl"] for t in bucket_trades)
+            edge_buckets[label] = {
+                "count": len(bucket_trades),
+                "win_rate": round(bt_wins / len(bucket_trades), 4),
+                "total_pnl": round(bt_pnl, 6),
+                "avg_edge_bps": round(sum(t["edge_bps"] for t in bucket_trades) / len(bucket_trades), 1),
+            }
+
+    return {
+        "n_trades": len(trades),
+        "win_rate": round(len(wins) / max(len(trades), 1), 4),
+        "total_pnl": round(float(pnl_arr.sum()), 6),
+        "avg_pnl_per_trade": round(float(pnl_arr.mean()), 6),
+        "pnl_std": round(float(pnl_arr.std()), 6),
+        "gross_profit": round(gross_profit, 6),
+        "gross_loss": round(gross_loss, 6),
+        "profit_factor": round(profit_factor, 4),
+        "avg_win": round(sum(wins) / max(len(wins), 1), 6),
+        "avg_loss": round(sum(losses) / max(len(losses), 1), 6),
+        "max_drawdown": round(max_dd, 6),
+        "max_win_streak": max_win_streak,
+        "max_loss_streak": max_loss_streak,
+        "avg_edge_bps": round(sum(edges) / max(len(edges), 1), 1),
+        "median_edge_bps": round(float(np.median(edges)), 1),
+        "edge_buckets": edge_buckets,
+        "too_few": False,
+    }
+
+
+def compute_calibration_table(
+    probs: np.ndarray,
+    labels: np.ndarray,
+    n_bins: int = 10,
+) -> list[dict[str, Any]]:
+    """Bucket predictions and compute predicted vs actual win rate per bucket."""
+    bins = np.linspace(0.0, 1.0, n_bins + 1)
+    table = []
+    for i in range(n_bins):
+        lo, hi = bins[i], bins[i + 1]
+        mask = (probs >= lo) & (probs < hi) if i < n_bins - 1 else (probs >= lo) & (probs <= hi)
+        count = int(mask.sum())
+        if count == 0:
+            continue
+        predicted_avg = round(float(probs[mask].mean()), 4)
+        actual_avg = round(float(labels[mask].mean()), 4)
+        cal_error = round(abs(predicted_avg - actual_avg), 4)
+        table.append({
+            "bin": f"{lo:.1f}-{hi:.1f}",
+            "count": count,
+            "predicted_avg": predicted_avg,
+            "actual_avg": actual_avg,
+            "calibration_error": cal_error,
+        })
+    return table
+
+
+def compute_feature_importance(
+    models: dict[str, Any],
+    feature_names: list[str],
+    top_n: int = 15,
+) -> dict[str, list[tuple[str, float]]]:
+    """Extract feature importance from tree models."""
+    result: dict[str, list[tuple[str, float]]] = {}
+
+    if "lgbm" in models and models["lgbm"] is not None:
+        try:
+            raw = models["lgbm"].feature_importance(importance_type="gain")
+            total = max(raw.sum(), 1e-10)
+            pairs = sorted(zip(feature_names, (raw / total * 100).tolist()), key=lambda x: -x[1])
+            result["lgbm"] = [(n, round(v, 2)) for n, v in pairs[:top_n]]
+        except Exception:
+            pass
+
+    if "xgb" in models and models["xgb"] is not None:
+        try:
+            score = models["xgb"].get_score(importance_type="gain")
+            total = max(sum(score.values()), 1e-10)
+            pairs = sorted(score.items(), key=lambda x: -x[1])
+            result["xgb"] = [(n, round(v / total * 100, 2)) for n, v in pairs[:top_n]]
+        except Exception:
+            pass
+
+    if "catboost" in models and models["catboost"] is not None:
+        try:
+            raw = models["catboost"].get_feature_importance()
+            pairs = sorted(zip(feature_names, raw.tolist()), key=lambda x: -x[1])
+            result["catboost"] = [(n, round(v, 2)) for n, v in pairs[:top_n]]
+        except Exception:
+            pass
+
+    return result
+
+
+def compute_multi_threshold_sensitivity(
+    probs: np.ndarray,
+    labels: np.ndarray,
+    fee_bps: float = FEE_BPS,
+    kelly: float = KELLY_FRACTION,
+) -> list[dict[str, Any]]:
+    """Show how PnL changes at different min_edge thresholds."""
+    rows = []
+    for threshold in [100, 150, 200, 250, 300, 400, 500, 600, 750, 1000]:
+        m = compute_pnl_metrics(probs, labels, fee_bps=fee_bps, min_edge_bps=float(threshold), kelly=kelly)
+        rows.append({
+            "min_edge_bps": threshold,
+            "n_trades": m["n_trades"],
+            "win_rate": round(m["win_rate"], 4),
+            "pnl": round(m["pnl"], 6),
+            "sharpe": round(m["sharpe"], 4),
+        })
+    return rows
+
+
+def print_analysis_report(
+    algo_name: str,
+    probs: np.ndarray,
+    labels: np.ndarray,
+    models: dict[str, Any],
+    feature_names: list[str],
+    split_name: str = "val",
+) -> dict[str, Any]:
+    """Print and return comprehensive analysis for a model on a given split."""
+    report: dict[str, Any] = {"algo": algo_name, "split": split_name}
+
+    # --- 1. Detailed PnL ---
+    dpnl = compute_detailed_pnl(probs, labels)
+    report["detailed_pnl"] = dpnl
+    if not dpnl.get("too_few"):
+        print(f"\n  ┌─────────────────────────────────────────────────────────────")
+        print(f"  │ DETAILED PnL — {algo_name.upper()} on {split_name.upper()} set")
+        print(f"  ├─────────────────────────────────────────────────────────────")
+        print(f"  │ Trades:          {dpnl['n_trades']:>8}")
+        print(f"  │ Win rate:        {dpnl['win_rate']:>8.2%}")
+        print(f"  │ Total PnL:       {dpnl['total_pnl']:>+8.4f}")
+        print(f"  │ Avg PnL/trade:   {dpnl['avg_pnl_per_trade']:>+8.6f}")
+        print(f"  │ Profit factor:   {dpnl['profit_factor']:>8.2f}")
+        print(f"  │ Gross profit:    {dpnl['gross_profit']:>+8.4f}")
+        print(f"  │ Gross loss:      {dpnl['gross_loss']:>8.4f}")
+        print(f"  │ Avg win:         {dpnl['avg_win']:>+8.6f}")
+        print(f"  │ Avg loss:        {dpnl['avg_loss']:>+8.6f}")
+        print(f"  │ Max drawdown:    {dpnl['max_drawdown']:>+8.4f}")
+        print(f"  │ Max win streak:  {dpnl['max_win_streak']:>8}")
+        print(f"  │ Max loss streak: {dpnl['max_loss_streak']:>8}")
+        print(f"  │ Avg edge (bps):  {dpnl['avg_edge_bps']:>8.1f}")
+        print(f"  │ Med edge (bps):  {dpnl['median_edge_bps']:>8.1f}")
+        print(f"  └─────────────────────────────────────────────────────────────")
+
+        if dpnl["edge_buckets"]:
+            print(f"\n  Edge bucket breakdown:")
+            print(f"  {'Bucket':<14} {'Trades':>7} {'WinRate':>8} {'PnL':>10} {'AvgEdge':>8}")
+            print(f"  {'─'*14} {'─'*7} {'─'*8} {'─'*10} {'─'*8}")
+            for bk, bv in dpnl["edge_buckets"].items():
+                print(f"  {bk:<14} {bv['count']:>7} {bv['win_rate']:>7.1%} {bv['total_pnl']:>+10.4f} {bv['avg_edge_bps']:>7.1f}")
+
+    # --- 2. Calibration table ---
+    cal_table = compute_calibration_table(probs, labels)
+    report["calibration"] = cal_table
+    if cal_table:
+        mean_cal_err = sum(r["calibration_error"] * r["count"] for r in cal_table) / max(sum(r["count"] for r in cal_table), 1)
+        report["mean_calibration_error"] = round(mean_cal_err, 4)
+        print(f"\n  Calibration table ({split_name}) — mean CE = {mean_cal_err:.4f}:")
+        print(f"  {'Bin':<10} {'Count':>6} {'Predicted':>10} {'Actual':>10} {'Error':>8}")
+        print(f"  {'─'*10} {'─'*6} {'─'*10} {'─'*10} {'─'*8}")
+        for row in cal_table:
+            star = " ⚠" if row["calibration_error"] > 0.05 else ""
+            print(f"  {row['bin']:<10} {row['count']:>6} {row['predicted_avg']:>10.4f} {row['actual_avg']:>10.4f} {row['calibration_error']:>8.4f}{star}")
+
+    # --- 3. Multi-threshold sensitivity ---
+    sensitivity = compute_multi_threshold_sensitivity(probs, labels)
+    report["threshold_sensitivity"] = sensitivity
+    print(f"\n  Threshold sensitivity ({split_name}):")
+    print(f"  {'MinEdge':>8} {'Trades':>7} {'WinRate':>8} {'PnL':>10} {'Sharpe':>8}")
+    print(f"  {'─'*8} {'─'*7} {'─'*8} {'─'*10} {'─'*8}")
+    for row in sensitivity:
+        marker = "  ← current" if row["min_edge_bps"] == 300 else ""
+        print(f"  {row['min_edge_bps']:>7}  {row['n_trades']:>7} {row['win_rate']:>7.1%} {row['pnl']:>+10.4f} {row['sharpe']:>8.2f}{marker}")
+
+    # --- 4. Feature importance ---
+    fi = compute_feature_importance(models, feature_names)
+    report["feature_importance"] = {k: v for k, v in fi.items()}
+    for algo_key, importances in fi.items():
+        if algo_key.lower() == algo_name.lower() or (algo_name in ("ensemble", "stacking") and algo_key == list(fi.keys())[0]):
+            print(f"\n  Feature importance ({algo_key}):")
+            print(f"  {'#':>3} {'Feature':<30} {'Importance %':>12}")
+            print(f"  {'─'*3} {'─'*30} {'─'*12}")
+            for rank, (fname, fval) in enumerate(importances, 1):
+                bar = '█' * int(fval / 2)
+                print(f"  {rank:>3} {fname:<30} {fval:>10.2f}%  {bar}")
+
+    return report
+
+
+def save_training_report(
+    interval: str,
+    report_data: dict[str, Any],
+    export_dir: Path,
+) -> Path:
+    """Save full training report as JSON."""
+    report_dir = Path("data/btc")
+    report_dir.mkdir(parents=True, exist_ok=True)
+
+    json_path = report_dir / f"training_report_{interval}.json"
+    with json_path.open("w", encoding="utf-8") as f:
+        json.dump(report_data, f, indent=2, default=str)
+
+    print(f"\n  Full report saved: {json_path}")
+    return json_path
 
 
 # ---------------------------------------------------------------------------
@@ -1558,15 +1837,61 @@ def train_interval(
         eligible = results  # fallback: no model meets threshold, take all
     best_algo = max(eligible, key=lambda k: eligible[k]["pnl"]["sharpe"])
     best_result = results[best_algo]
-    print(f"\n  WINNER: {best_algo}  pnl_sharpe={best_result['pnl']['sharpe']:.3f}  "
+    print(f"\n{'='*64}")
+    print(f"  WINNER: {best_algo.upper()}  pnl_sharpe={best_result['pnl']['sharpe']:.3f}  "
           f"val_acc={best_result['val_acc']:.4f}")
+    print(f"{'='*64}")
+
+    # --- Algorithm comparison table ---
+    print(f"\n  Algorithm comparison:")
+    print(f"  {'Algo':<12} {'ValAcc':>8} {'Sharpe':>8} {'PnL':>10} {'Trades':>7} {'WinRate':>8} {'Time':>7}")
+    print(f"  {'─'*12} {'─'*8} {'─'*8} {'─'*10} {'─'*7} {'─'*8} {'─'*7}")
+    for algo_key, algo_res in results.items():
+        marker = " ★" if algo_key == best_algo else ""
+        print(f"  {algo_key:<12} {algo_res['val_acc']:>7.4f} {algo_res['pnl']['sharpe']:>8.3f} "
+              f"{algo_res['pnl']['pnl']:>+10.4f} {algo_res['pnl']['n_trades']:>7} "
+              f"{algo_res['pnl']['win_rate']:>7.1%} {algo_res['elapsed_s']:>6.1f}s{marker}")
 
     # Calibrate best model (for display only)
     best_probs_val = best_result["probs_val"]
     calibrator = calibrate(best_probs_val, y_val)
     cal_probs_val = apply_calibration(calibrator, best_probs_val)
     pnl_cal = compute_pnl_metrics(cal_probs_val, y_val)
-    print(f"  After calibration: pnl_sharpe={pnl_cal['sharpe']:.3f}  n_trades={pnl_cal['n_trades']}")
+    print(f"\n  After calibration: pnl_sharpe={pnl_cal['sharpe']:.3f}  n_trades={pnl_cal['n_trades']}")
+
+    # --- Full analysis on validation set ---
+    full_report: dict[str, Any] = {
+        "interval": interval,
+        "fee_bps": FEE_BPS,
+        "timestamp": datetime.now(UTC).isoformat(),
+        "data_stats": {
+            "binance_candles": len(data["binance"]),
+            "coinbase_candles": len(data["coinbase"]),
+            "derivatives_rows": len(data["derivatives"]),
+            "has_coinbase": has_cb,
+            "has_derivatives": has_deriv,
+            "total_samples": int(n),
+            "train_samples": int(n_train),
+            "val_samples": int(len(y_val)),
+            "test_samples": int(len(y_test)),
+            "yes_rate": round(float(y.mean()), 6),
+        },
+        "algorithms": {},
+    }
+    for algo_key, algo_res in results.items():
+        full_report["algorithms"][algo_key] = {
+            "val_acc": algo_res["val_acc"],
+            "pnl_sharpe": algo_res["pnl"]["sharpe"],
+            "pnl": algo_res["pnl"]["pnl"],
+            "n_trades": algo_res["pnl"]["n_trades"],
+            "win_rate": algo_res["pnl"]["win_rate"],
+            "elapsed_s": algo_res["elapsed_s"],
+        }
+
+    val_report = print_analysis_report(
+        best_algo, best_probs_val, y_val, models, FEATURE_NAMES, split_name="val",
+    )
+    full_report["val_analysis"] = val_report
 
     # Holdout evaluation (blindato — only for final report)
     best_model = models.get(best_algo if best_algo != "ensemble" else "lgbm") or models.get(list(models.keys())[0])
@@ -1597,9 +1922,18 @@ def train_interval(
             non_dl_probs_test_cal = apply_calibration(export_calibrator, non_dl_probs_test)
             pnl_test = compute_pnl_metrics(non_dl_probs_test_cal, y_test)
             test_acc = float(((non_dl_probs_test > 0.5) == y_test).mean())
-            print(f"\n  HOLDOUT TEST ({non_dl_best_algo}): "
-                  f"acc={test_acc:.4f}  pnl_sharpe={pnl_test['sharpe']:.3f}  "
+            print(f"\n{'='*64}")
+            print(f"  HOLDOUT TEST ({non_dl_best_algo.upper()}) — BLIND EVALUATION")
+            print(f"{'='*64}")
+            print(f"  acc={test_acc:.4f}  pnl_sharpe={pnl_test['sharpe']:.3f}  "
                   f"n_trades={pnl_test['n_trades']}  cumulative_pnl={pnl_test['pnl']:.4f}")
+
+            # Full analysis on test set
+            test_report = print_analysis_report(
+                non_dl_best_algo, non_dl_probs_test_cal, y_test,
+                models, FEATURE_NAMES, split_name="test",
+            )
+            full_report["test_analysis"] = test_report
         else:
             pnl_test = {"pnl": 0.0, "sharpe": 0.0, "win_rate": 0.0, "n_trades": 0}
             test_acc = 0.0
@@ -1607,6 +1941,16 @@ def train_interval(
         pnl_test = {"pnl": 0.0, "sharpe": 0.0, "win_rate": 0.0, "n_trades": 0}
         test_acc = 0.0
         non_dl_best_algo = best_algo
+
+    full_report["winner"] = best_algo
+    full_report["export_algo"] = non_dl_best_algo
+    full_report["holdout"] = {
+        "test_acc": test_acc,
+        "pnl_sharpe": pnl_test["sharpe"],
+        "pnl": pnl_test["pnl"],
+        "n_trades": pnl_test["n_trades"],
+        "win_rate": pnl_test.get("win_rate", 0.0),
+    }
 
     # --- Export artifacts ---
     export_dir.mkdir(parents=True, exist_ok=True)
@@ -1628,6 +1972,7 @@ def train_interval(
         "has_derivatives":  has_deriv,
         "trained_at_utc":   datetime.now(UTC).isoformat(),
         "best_algorithm":   best_algo,
+        "fee_bps":          FEE_BPS,
     }
 
     # Export best runtime-compatible model (non-DL preferred for immediate use)
@@ -1664,6 +2009,9 @@ def train_interval(
         pth = export_dir / f"btc_{interval}_tcn.pth"
         _export_dl_pth(models["tcn"], pth)
         print(f"  TCN saved:      {pth}")
+
+    # Save comprehensive training report
+    save_training_report(interval, full_report, export_dir)
 
     # Log training run
     log_path = Path("data/btc/training_log.jsonl")

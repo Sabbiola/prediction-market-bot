@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PMBot — Trader Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0b0d14; --bg2: #111420; --bg3: #171b28;
+      --border: #1e2538; --border2: #2a3148;
+      --text: #e4e8f1; --dim: #7a8194; --muted: #505872;
+      --green: #00e68a; --green-bg: rgba(0,230,138,.08);
+      --red: #ff5c6c; --red-bg: rgba(255,92,108,.08);
+      --blue: #5e8cff; --cyan: #00d4ff;
+      --amber: #ffb84d;
+      --radius: 16px; --radius-sm: 10px;
+      --font: 'Inter', -apple-system, sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { font-size: 15px; }
+    body { font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; }
+
+    /* ── LAYOUT ── */
+    .page { max-width: 1100px; margin: 0 auto; padding: 24px 20px 60px; }
+
+    .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 32px; }
+    .header__left { display: flex; align-items: center; gap: 14px; }
+    .logo { width: 38px; height: 38px; border-radius: 12px; background: linear-gradient(135deg, var(--blue), var(--cyan)); display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 1rem; color: #fff; }
+    .header h1 { font-size: 1.3rem; font-weight: 700; }
+    .header h1 span { color: var(--dim); font-weight: 400; font-size: .85rem; margin-left: 8px; }
+    .badge { font-size: .68rem; font-weight: 700; padding: 3px 10px; border-radius: 20px; letter-spacing: .04em; }
+    .badge--live { background: var(--green-bg); color: var(--green); border: 1px solid rgba(0,230,138,.2); }
+    .badge--paper { background: rgba(94,140,255,.1); color: var(--blue); border: 1px solid rgba(94,140,255,.2); }
+
+    /* ── HERO METRICS ── */
+    .hero { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+    .hero-card { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 24px; position: relative; overflow: hidden; }
+    .hero-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; }
+    .hero-card--pnl::before { background: linear-gradient(90deg, var(--green), var(--cyan)); }
+    .hero-card--balance::before { background: linear-gradient(90deg, var(--blue), var(--cyan)); }
+    .hero-card--winrate::before { background: linear-gradient(90deg, var(--amber), #ff8c42); }
+    .hero-label { font-size: .7rem; font-weight: 600; text-transform: uppercase; letter-spacing: .1em; color: var(--dim); margin-bottom: 6px; }
+    .hero-value { font-size: 2rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+    .hero-value--green { color: var(--green); }
+    .hero-value--red { color: var(--red); }
+    .hero-sub { font-size: .78rem; color: var(--muted); margin-top: 4px; }
+
+    /* ── STATS ROW ── */
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin-bottom: 24px; }
+    .stat { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px 16px; text-align: center; }
+    .stat__val { font-size: 1.25rem; font-weight: 700; margin-bottom: 2px; font-variant-numeric: tabular-nums; }
+    .stat__label { font-size: .65rem; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); }
+
+    /* ── CHART AREA ── */
+    .chart-container { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-bottom: 24px; }
+    .chart-container__title { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); margin-bottom: 14px; }
+    .chart-wrap { width: 100%; height: 220px; position: relative; }
+    canvas { width: 100% !important; height: 100% !important; }
+
+    /* ── TRADES TABLE ── */
+    .trades-section { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+    .trades-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--border); }
+    .trades-header h2 { font-size: .88rem; font-weight: 700; }
+    .trades-count { font-size: .72rem; color: var(--dim); background: var(--bg3); padding: 3px 10px; border-radius: 12px; }
+    .trades-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+    thead th { font-size: .65rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+    tbody td { padding: 10px 14px; border-bottom: 1px solid rgba(30,37,56,.6); white-space: nowrap; }
+    tbody tr { transition: background .12s; }
+    tbody tr:hover { background: var(--bg3); }
+    .td-market { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pill { display: inline-flex; font-size: .68rem; font-weight: 700; padding: 2px 8px; border-radius: 8px; }
+    .pill--win { background: var(--green-bg); color: var(--green); }
+    .pill--loss { background: var(--red-bg); color: var(--red); }
+    .pill--yes { background: rgba(94,140,255,.1); color: var(--blue); }
+    .pill--no { background: rgba(255,184,77,.1); color: var(--amber); }
+    .pnl--pos { color: var(--green); font-weight: 600; }
+    .pnl--neg { color: var(--red); font-weight: 600; }
+    .mono { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: .78rem; }
+
+    /* ── EMPTY STATE ── */
+    .empty { text-align: center; padding: 60px 20px; color: var(--dim); }
+    .empty__icon { font-size: 2.5rem; margin-bottom: 12px; }
+    .empty__text { font-size: .9rem; }
+    .empty__sub { font-size: .78rem; color: var(--muted); margin-top: 6px; }
+
+    /* ── REFRESH ── */
+    .refresh-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+    .refresh-bar__left { display: flex; align-items: center; gap: 8px; }
+    .pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: pulse 2s ease infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+    .refresh-text { font-size: .72rem; color: var(--muted); }
+    .btn-refresh { background: var(--bg3); border: 1px solid var(--border2); border-radius: 8px; padding: 6px 14px; color: var(--dim); font-size: .76rem; font-weight: 600; cursor: pointer; font-family: var(--font); transition: all .15s; }
+    .btn-refresh:hover { background: var(--border); color: var(--text); }
+    .link-ops { color: var(--blue); text-decoration: none; font-size: .76rem; font-weight: 500; }
+    .link-ops:hover { text-decoration: underline; }
+
+    @media (max-width: 640px) {
+      .hero { grid-template-columns: 1fr; }
+      .stats { grid-template-columns: repeat(2, 1fr); }
+      .header { flex-direction: column; align-items: flex-start; gap: 8px; }
+    }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <!-- HEADER -->
+  <div class="header">
+    <div class="header__left">
+      <div class="logo">P</div>
+      <h1>PMBot <span>Trader View</span></h1>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center;">
+      <span class="badge badge--paper" id="mode-badge">{{ runtime_mode or "PAPER" }}</span>
+      <a href="/" class="link-ops">Ops Dashboard →</a>
+    </div>
+  </div>
+
+  <!-- REFRESH BAR -->
+  <div class="refresh-bar">
+    <div class="refresh-bar__left">
+      <div class="pulse"></div>
+      <span class="refresh-text" id="last-update">Updated just now</span>
+    </div>
+    <button class="btn-refresh" onclick="location.reload()">↻ Refresh</button>
+  </div>
+
+  <!-- HERO METRICS -->
+  <div class="hero">
+    <div class="hero-card hero-card--pnl">
+      <div class="hero-label">Total P&L</div>
+      <div class="hero-value {{ 'hero-value--green' if total_pnl >= 0 else 'hero-value--red' }}" id="hero-pnl">
+        {% if total_pnl >= 0 %}+{% endif %}${{ "%.2f"|format(total_pnl|abs) }}
+      </div>
+      <div class="hero-sub">{{ total_trades }} trades · {{ total_runs }} runs</div>
+    </div>
+    <div class="hero-card hero-card--balance">
+      <div class="hero-label">Paper Balance</div>
+      <div class="hero-value" id="hero-balance">${{ "%.2f"|format(balance) }}</div>
+      <div class="hero-sub">started at ${{ "%.2f"|format(starting_balance) }}</div>
+    </div>
+    <div class="hero-card hero-card--winrate">
+      <div class="hero-label">Win Rate</div>
+      <div class="hero-value">{{ "%.1f"|format(win_rate) }}%</div>
+      <div class="hero-sub">{{ wins }}W / {{ losses }}L</div>
+    </div>
+  </div>
+
+  <!-- SECONDARY STATS -->
+  <div class="stats">
+    <div class="stat">
+      <div class="stat__val {{ 'pnl--pos' if avg_win > 0 else '' }}">${{ "%.0f"|format(avg_win) }}</div>
+      <div class="stat__label">Avg Win</div>
+    </div>
+    <div class="stat">
+      <div class="stat__val {{ 'pnl--neg' if avg_loss < 0 else '' }}">${{ "%.0f"|format(avg_loss) }}</div>
+      <div class="stat__label">Avg Loss</div>
+    </div>
+    <div class="stat">
+      <div class="stat__val">{{ "%.2f"|format(profit_factor) }}x</div>
+      <div class="stat__label">Profit Factor</div>
+    </div>
+    <div class="stat">
+      <div class="stat__val">${{ "%.0f"|format(max_drawdown) }}</div>
+      <div class="stat__label">Max Drawdown</div>
+    </div>
+    <div class="stat">
+      <div class="stat__val">${{ "%.0f"|format(avg_stake) }}</div>
+      <div class="stat__label">Avg Stake</div>
+    </div>
+    <div class="stat">
+      <div class="stat__val">{{ best_streak }}</div>
+      <div class="stat__label">Best Streak</div>
+    </div>
+  </div>
+
+  <!-- EQUITY CURVE -->
+  {% if balance_history|length > 1 %}
+  <div class="chart-container">
+    <div class="chart-container__title">Equity Curve</div>
+    <div class="chart-wrap">
+      <canvas id="equity-chart"></canvas>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- RECENT TRADES -->
+  <div class="trades-section">
+    <div class="trades-header">
+      <h2>Recent Trades</h2>
+      <span class="trades-count">{{ trades|length }} trades</span>
+    </div>
+    {% if trades %}
+    <div class="trades-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Market</th>
+            <th>Side</th>
+            <th>Stake</th>
+            <th>Result</th>
+            <th>P&L</th>
+            <th>Edge</th>
+            <th>Balance</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for t in trades|reverse %}
+          <tr>
+            <td class="mono" style="color:var(--muted);">{{ trades|length - loop.index0 }}</td>
+            <td class="td-market" title="{{ t.title }}">{{ t.title[:50] }}{% if t.title|length > 50 %}…{% endif %}</td>
+            <td><span class="pill pill--{{ t.side|lower }}">{{ t.side }}</span></td>
+            <td class="mono">${{ "%.0f"|format(t.stake) }}</td>
+            <td><span class="pill pill--{{ t.outcome|lower }}">{{ t.outcome }}</span></td>
+            <td class="{{ 'pnl--pos' if t.pnl >= 0 else 'pnl--neg' }} mono">{% if t.pnl >= 0 %}+{% endif %}${{ "%.0f"|format(t.pnl|abs) }}</td>
+            <td class="mono" style="color:var(--dim);">{{ "%.0f"|format(t.edge_bps) }}bp</td>
+            <td class="mono">${{ "%.0f"|format(t.balance_after) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty">
+      <div class="empty__icon">📊</div>
+      <div class="empty__text">No trades yet</div>
+      <div class="empty__sub">The bot is running. Trades will appear here as they settle.</div>
+    </div>
+    {% endif %}
+  </div>
+
+</div>
+
+{% if balance_history|length > 1 %}
+<script>
+(function() {
+  var data = {{ balance_history | tojson }};
+  var canvas = document.getElementById('equity-chart');
+  if (!canvas) return;
+  var ctx = canvas.getContext('2d');
+  var dpr = window.devicePixelRatio || 1;
+
+  function draw() {
+    var rect = canvas.parentElement.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    canvas.style.width = rect.width + 'px';
+    canvas.style.height = rect.height + 'px';
+    ctx.scale(dpr, dpr);
+
+    var W = rect.width, H = rect.height;
+    var pad = { top: 20, right: 16, bottom: 28, left: 60 };
+    var chartW = W - pad.left - pad.right;
+    var chartH = H - pad.top - pad.bottom;
+
+    var min = Math.min.apply(null, data);
+    var max = Math.max.apply(null, data);
+    var range = max - min || 1;
+    min -= range * 0.05;
+    max += range * 0.05;
+    range = max - min;
+
+    function x(i) { return pad.left + (i / (data.length - 1)) * chartW; }
+    function y(v) { return pad.top + (1 - (v - min) / range) * chartH; }
+
+    ctx.clearRect(0, 0, W, H);
+
+    // Grid
+    ctx.strokeStyle = '#1e2538';
+    ctx.lineWidth = 1;
+    for (var g = 0; g < 5; g++) {
+      var gy = pad.top + (g / 4) * chartH;
+      ctx.beginPath(); ctx.moveTo(pad.left, gy); ctx.lineTo(W - pad.right, gy); ctx.stroke();
+      var label = max - (g / 4) * range;
+      ctx.fillStyle = '#505872';
+      ctx.font = '10px Inter';
+      ctx.textAlign = 'right';
+      ctx.fillText('$' + Math.round(label).toLocaleString(), pad.left - 8, gy + 4);
+    }
+
+    // Starting balance line
+    var startBal = data[0];
+    var startY = y(startBal);
+    ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = '#2a3148';
+    ctx.beginPath(); ctx.moveTo(pad.left, startY); ctx.lineTo(W - pad.right, startY); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Gradient fill
+    var grad = ctx.createLinearGradient(0, pad.top, 0, H - pad.bottom);
+    var lastVal = data[data.length - 1];
+    if (lastVal >= startBal) {
+      grad.addColorStop(0, 'rgba(0,230,138,.18)');
+      grad.addColorStop(1, 'rgba(0,230,138,0)');
+    } else {
+      grad.addColorStop(0, 'rgba(255,92,108,.18)');
+      grad.addColorStop(1, 'rgba(255,92,108,0)');
+    }
+
+    ctx.beginPath();
+    ctx.moveTo(x(0), y(data[0]));
+    for (var i = 1; i < data.length; i++) ctx.lineTo(x(i), y(data[i]));
+    ctx.lineTo(x(data.length - 1), H - pad.bottom);
+    ctx.lineTo(x(0), H - pad.bottom);
+    ctx.closePath();
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Line
+    ctx.beginPath();
+    ctx.moveTo(x(0), y(data[0]));
+    for (var i = 1; i < data.length; i++) ctx.lineTo(x(i), y(data[i]));
+    ctx.strokeStyle = lastVal >= startBal ? '#00e68a' : '#ff5c6c';
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+
+    // Dot on last point
+    ctx.beginPath();
+    ctx.arc(x(data.length - 1), y(lastVal), 4, 0, Math.PI * 2);
+    ctx.fillStyle = lastVal >= startBal ? '#00e68a' : '#ff5c6c';
+    ctx.fill();
+    ctx.strokeStyle = '#111420';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  draw();
+  window.addEventListener('resize', draw);
+})();
+</script>
+{% endif %}
+</body>
+</html>

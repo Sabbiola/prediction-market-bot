@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import glob
+import json
+import logging
+from pathlib import Path
 from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, Form, Request
@@ -9,6 +13,8 @@ from fastapi.templating import Jinja2Templates
 from prediction_market_bot.ui.dependencies import get_auth_service, get_read_model_service
 from prediction_market_bot.ui.auth import UiAuthService
 from prediction_market_bot.ui.read_models import UiReadModelService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -192,3 +198,151 @@ def _safe_next_path(next_path: str | None) -> str:
     if value.startswith("//"):
         return "/"
     return value or "/"
+
+
+@router.get("/trader", response_class=HTMLResponse)
+def trader_view(
+    request: Request,
+    service: UiReadModelService = Depends(get_read_model_service),
+    auth: UiAuthService = Depends(get_auth_service),
+) -> Response:
+    """Simple trader-focused dashboard: P&L, balance, equity curve, trades."""
+    templates = getattr(request.app.state, "templates", None)
+    if not isinstance(templates, Jinja2Templates):
+        raise RuntimeError("UI templates not initialized")
+
+    # Determine reports directory from the context
+    context_obj = getattr(request.app.state, "ui_context", None)
+    reports_dir = Path("data/artifacts/reports")
+    if context_obj is not None:
+        settings = getattr(context_obj, "settings", None)
+        base = getattr(settings, "base_data_dir", None) if settings else None
+        if base:
+            candidate = Path(str(base)) / "artifacts" / "reports"
+            if candidate.exists():
+                reports_dir = candidate
+
+    starting_balance = 500.0
+    trades: list[dict[str, Any]] = []
+    balance_history: list[float] = [starting_balance]
+    cumulative_pnl = 0.0
+    total_runs = 0
+    runtime_mode = "PAPER"
+
+    report_files = sorted(glob.glob(str(reports_dir / "paper-*.json")))
+    if not report_files:
+        report_files = sorted(glob.glob(str(reports_dir / "*.json")))
+
+    # Each paper run re-evaluates the same markets on live data.
+    # Keep only the latest settlement per market_id to avoid counting duplicates.
+    latest_by_market: dict[str, dict[str, Any]] = {}
+
+    for fpath in report_files:
+        try:
+            with open(fpath) as fh:
+                report = json.load(fh)
+        except Exception:
+            continue
+
+        total_runs += 1
+        obs = report.get("observability", {})
+        runtime_mode = obs.get("runtime_mode", runtime_mode) if obs else runtime_mode
+
+        for rec in report.get("records", []):
+            execution = rec.get("execution", {})
+            settlement = rec.get("settlement", {})
+            prediction = rec.get("prediction", {})
+            scan = rec.get("scan", {})
+            risk = rec.get("risk", {})
+
+            if execution.get("status") != "FILLED":
+                continue
+
+            outcome = settlement.get("outcome_classification", "")
+            if outcome not in ("WIN", "LOSS"):
+                continue
+
+            market_id = rec.get("market_id", "")
+            pnl = settlement.get("pnl_usd", 0.0)
+            market_info = scan.get("market", {}).get("market", {})
+
+            latest_by_market[market_id] = {
+                "market_id": market_id,
+                "title": market_info.get("title", market_id or "Unknown"),
+                "side": prediction.get("selected_side", settlement.get("side", "")),
+                "stake": settlement.get("stake_usd", risk.get("stake_usd", 0)),
+                "pnl": pnl,
+                "outcome": outcome,
+                "edge_bps": prediction.get("edge_bps", 0),
+                "confidence": prediction.get("confidence", 0),
+            }
+
+    # Build final trade list sorted by PnL descending (wins first) for readability
+    trades = list(latest_by_market.values())
+    # Compute cumulative balance
+    cumulative_pnl = 0.0
+    for t in trades:
+        cumulative_pnl += t["pnl"]
+        t["balance_after"] = starting_balance + cumulative_pnl
+        balance_history.append(starting_balance + cumulative_pnl)
+
+
+    # Compute metrics
+    total_trades = len(trades)
+    wins = sum(1 for t in trades if t["outcome"] == "WIN")
+    losses = sum(1 for t in trades if t["outcome"] == "LOSS")
+    win_rate = (wins / total_trades * 100) if total_trades > 0 else 0.0
+    total_pnl = cumulative_pnl
+    balance = starting_balance + total_pnl
+
+    gross_wins = sum(t["pnl"] for t in trades if t["outcome"] == "WIN")
+    gross_losses = abs(sum(t["pnl"] for t in trades if t["outcome"] == "LOSS"))
+    avg_win = gross_wins / wins if wins > 0 else 0.0
+    avg_loss = -(gross_losses / losses) if losses > 0 else 0.0
+    profit_factor = (gross_wins / gross_losses) if gross_losses > 0 else 0.0
+    avg_stake = sum(t["stake"] for t in trades) / total_trades if total_trades > 0 else 0.0
+
+    # Max drawdown
+    peak = starting_balance
+    max_dd = 0.0
+    for b in balance_history:
+        if b > peak:
+            peak = b
+        dd = peak - b
+        if dd > max_dd:
+            max_dd = dd
+
+    # Best win streak
+    best_streak = 0
+    current_streak = 0
+    for t in trades:
+        if t["outcome"] == "WIN":
+            current_streak += 1
+            best_streak = max(best_streak, current_streak)
+        else:
+            current_streak = 0
+
+    return templates.TemplateResponse(
+        request=request,
+        name="trader.html",
+        context={
+            "title": "PMBot — Trader Dashboard",
+            "runtime_mode": runtime_mode,
+            "starting_balance": starting_balance,
+            "balance": balance,
+            "total_pnl": total_pnl,
+            "total_trades": total_trades,
+            "total_runs": total_runs,
+            "wins": wins,
+            "losses": losses,
+            "win_rate": win_rate,
+            "avg_win": avg_win,
+            "avg_loss": avg_loss,
+            "profit_factor": profit_factor,
+            "max_drawdown": max_dd,
+            "avg_stake": avg_stake,
+            "best_streak": best_streak,
+            "balance_history": balance_history,
+            "trades": trades,
+        },
+    )

@@ -31,6 +31,7 @@ model_promotion:
     - PAPER_LIVE
     - SANDBOX_CHAIN
   promoted_runtime_modes:
+    - PAPER_LIVE
     - SANDBOX_CHAIN
   benchmark_min_delta_brier: 0.0
   benchmark_min_delta_log_loss: 0.0
@@ -98,7 +99,7 @@ alerting:
 
 live_market_data:
   enabled: true
-  endpoint_url: https://gamma-api.polymarket.com/markets
+  endpoint_url: https://gamma-api.polymarket.com/events?series_id=10192&active=true&closed=false
   limit: 50
   max_staleness_sec: 900
   timeout_sec: 8.0

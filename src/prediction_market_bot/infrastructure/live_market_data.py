@@ -211,8 +211,18 @@ class PolymarketReadOnlyMarketDataAdapter(MarketDataPort):
 
     @staticmethod
     def _extract_markets(payload: Any) -> tuple[list[Mapping[str, Any]], str | None]:
+        extracted = []
         if isinstance(payload, list):
-            return [row for row in payload if isinstance(row, Mapping)], None
+            for row in payload:
+                if not isinstance(row, Mapping):
+                    continue
+                if "markets" in row and isinstance(row["markets"], list):
+                    for m in row["markets"]:
+                        if isinstance(m, Mapping):
+                            extracted.append(m)
+                else:
+                    extracted.append(row)
+            return extracted, None
         if isinstance(payload, Mapping):
             markets = payload.get("markets")
             if isinstance(markets, list):
