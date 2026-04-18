@@ -63,6 +63,7 @@ from .operational_backup import (
     verify_operational_sqlite_db,
 )
 from .sandbox_chain import SandboxChainExecutor
+from .polymarket_clob_executor import PolymarketClobExecutor
 
 __all__ = [
     "AltDataAdapterError",
@@ -124,4 +125,5 @@ __all__ = [
     "StaticResearchSource",
     "build_default_research_sources",
     "SandboxChainExecutor",
+    "PolymarketClobExecutor",
 ]

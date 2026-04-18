@@ -57,6 +57,9 @@ def test_build_coordinator_wires_static_runtime_path(temp_config_paths: tuple[Pa
     assert isinstance(coordinator.market_data, StaticMarketDataProvider)
     assert coordinator.execution.execution_mode == settings.execution.mode
     assert coordinator.settlement_same_run == settings.execution.settlement_same_run
+    # REC-02 regression: RiskAgent must receive execution_mode so that
+    # initial-live-period bankroll/exposure caps are enforced.
+    assert coordinator.risk._execution_mode == settings.execution.mode
     if settings.enable_manual_review_queue:
         assert coordinator.review_queue_hook is not None
     else:

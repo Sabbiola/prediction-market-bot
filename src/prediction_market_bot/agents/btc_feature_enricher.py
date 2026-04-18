@@ -17,6 +17,12 @@ Cross-exchange basis rationale:
   Coinbase/Kraken often LEAD Binance price by 1-30s during US hours
   (institutional flow, arbitrage latency). A positive basis (CB > Binance)
   indicates upward pressure as arbitrageurs push Binance price up.
+
+HTTP policy (REC-05):
+  All outbound calls go through an injected ``StructuredHttpClient`` whenever
+  one is provided — that client enforces allowed-hosts policy, circuit-breaker
+  backoff, retry/jitter and timeouts. The bare-urllib path is retained only as
+  a fallback for ad-hoc use outside the bot runtime (e.g. scripts).
 """
 from __future__ import annotations
 
@@ -27,9 +33,20 @@ import time
 import urllib.request
 from datetime import UTC, datetime
 from threading import Lock
-from typing import Any
+from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
+
+
+class _HttpClientLike(Protocol):
+    """Minimal protocol we need from ``StructuredHttpClient`` without coupling.
+
+    Keeping this as a Protocol avoids a hard import cycle between the agent
+    package (``prediction_market_bot.agents``) and the infrastructure package
+    (``prediction_market_bot.infrastructure.http_client``).
+    """
+
+    def fetch_json(self, *, source: str, url: str, use_cache: bool = ..., cache_ttl_sec: int | None = ..., timeout_sec: float | None = ...) -> Any: ...
 
 _BTC_UPDOWN_PATTERNS = (
     "btc-up-or-down",
@@ -85,8 +102,32 @@ def _rsi(closes: list[float], period: int = 14) -> float:
     return rs / (1.0 + rs)
 
 
-def _safe_json_get(url: str, *, timeout: float = 8.0) -> Any:
-    """Fetch JSON from URL, return None on error."""
+def _safe_json_get(
+    url: str,
+    *,
+    timeout: float = 8.0,
+    http_client: _HttpClientLike | None = None,
+    source: str = "btc_feature_enricher",
+) -> Any:
+    """Fetch JSON from URL, return None on error.
+
+    When ``http_client`` is provided, routes through the shared
+    ``StructuredHttpClient`` so allowed-hosts enforcement, circuit breakers and
+    structured metrics are all honoured. Falls back to bare urllib only for
+    ad-hoc out-of-runtime callers (scripts, tests).
+    """
+    if http_client is not None:
+        try:
+            response = http_client.fetch_json(
+                source=source,
+                url=url,
+                use_cache=False,  # enricher has its own TTL cache, avoid double cache
+                timeout_sec=timeout,
+            )
+            return getattr(response, "payload", None)
+        except Exception as exc:
+            logger.debug("btc_feature_enricher_http_client_error url=%s error=%s", url, exc)
+            return None
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "prediction-market-bot/1.0"})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -110,12 +151,14 @@ class BtcFeatureEnricher:
         n_candles: int = N_CANDLES,
         cache_ttl_sec: float = CACHE_TTL_SEC,
         timeout_sec: float = 8.0,
+        http_client: _HttpClientLike | None = None,
     ) -> None:
         self.symbol = symbol
         self.interval = interval
         self.n_candles = n_candles
         self.cache_ttl_sec = cache_ttl_sec
         self.timeout_sec = timeout_sec
+        self._http_client = http_client
         self._lock = Lock()
         self._cache: dict[str, Any] = {}
         self._cache_at: float = 0.0
@@ -165,6 +208,7 @@ class BtcFeatureEnricher:
         funding_raw = _safe_json_get(
             f"{FAPI_BASE}/fapi/v1/fundingRate?symbol={self.symbol}&limit=1",
             timeout=self.timeout_sec,
+            http_client=self._http_client,
         )
         funding_rate = None
         if isinstance(funding_raw, list) and funding_raw:
@@ -174,6 +218,7 @@ class BtcFeatureEnricher:
         ls_raw = _safe_json_get(
             f"{FAPI_BASE}/futures/data/globalLongShortAccountRatio?symbol={self.symbol}&period=5m&limit=1",
             timeout=self.timeout_sec,
+            http_client=self._http_client,
         )
         ls_ratio = None
         if isinstance(ls_raw, list) and ls_raw:
@@ -183,6 +228,7 @@ class BtcFeatureEnricher:
         taker_raw = _safe_json_get(
             f"{FAPI_BASE}/futures/data/takerlongshortRatio?symbol={self.symbol}&period=5m&limit=1",
             timeout=self.timeout_sec,
+            http_client=self._http_client,
         )
         taker_ratio = None
         if isinstance(taker_raw, list) and taker_raw:
@@ -192,6 +238,7 @@ class BtcFeatureEnricher:
         oi_raw = _safe_json_get(
             f"{FAPI_BASE}/futures/data/openInterestHist?symbol={self.symbol}&period=5m&limit=2",
             timeout=self.timeout_sec,
+            http_client=self._http_client,
         )
         oi_current = None
         oi_prev = None
@@ -204,6 +251,7 @@ class BtcFeatureEnricher:
         ob_raw = _safe_json_get(
             f"https://api.binance.com/api/v3/depth?symbol={self.symbol}&limit=20",
             timeout=self.timeout_sec,
+            http_client=self._http_client,
         )
         ob_imbalance = None
         ob_spread_bps = None
@@ -222,7 +270,11 @@ class BtcFeatureEnricher:
                     ob_spread_bps = (best_ask - best_bid) / best_bid * 10000
 
         # Fear & Greed Index (daily signal, Alternative.me)
-        fng_raw = _safe_json_get(ALTME_FNG_URL, timeout=self.timeout_sec)
+        fng_raw = _safe_json_get(
+            ALTME_FNG_URL,
+            timeout=self.timeout_sec,
+            http_client=self._http_client,
+        )
         fng_value: int | None = None
         if isinstance(fng_raw, dict):
             entries = fng_raw.get("data", [])
@@ -233,7 +285,11 @@ class BtcFeatureEnricher:
                     pass
 
         # Coinbase BTC-USD spot price (cross-exchange basis)
-        cb_raw = _safe_json_get(COINBASE_SPOT_URL, timeout=self.timeout_sec)
+        cb_raw = _safe_json_get(
+            COINBASE_SPOT_URL,
+            timeout=self.timeout_sec,
+            http_client=self._http_client,
+        )
         cb_price: float | None = None
         if isinstance(cb_raw, dict):
             try:
@@ -243,7 +299,11 @@ class BtcFeatureEnricher:
                 pass
 
         # Kraken XBTUSD last trade price (cross-exchange basis)
-        kr_raw = _safe_json_get(KRAKEN_TICKER_URL, timeout=self.timeout_sec)
+        kr_raw = _safe_json_get(
+            KRAKEN_TICKER_URL,
+            timeout=self.timeout_sec,
+            http_client=self._http_client,
+        )
         kr_price: float | None = None
         if isinstance(kr_raw, dict) and not kr_raw.get("error"):
             try:
@@ -272,9 +332,20 @@ class BtcFeatureEnricher:
             f"{BINANCE_KLINES_URL}"
             f"?symbol={self.symbol}&interval={self.interval}&limit={self.n_candles}"
         )
-        req = urllib.request.Request(url, headers={"User-Agent": "prediction-market-bot/1.0"})
-        with urllib.request.urlopen(req, timeout=self.timeout_sec) as resp:
-            raw = json.loads(resp.read())
+        raw: Any
+        if self._http_client is not None:
+            raw = _safe_json_get(
+                url,
+                timeout=self.timeout_sec,
+                http_client=self._http_client,
+                source="btc_feature_enricher.klines",
+            )
+            if raw is None:
+                raise RuntimeError("btc_feature_enricher_klines_fetch_failed")
+        else:
+            req = urllib.request.Request(url, headers={"User-Agent": "prediction-market-bot/1.0"})
+            with urllib.request.urlopen(req, timeout=self.timeout_sec) as resp:
+                raw = json.loads(resp.read())
         candles = []
         for c in raw:
             candles.append({

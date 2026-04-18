@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from prediction_market_bot.app.settings import PredictionSettings
 from prediction_market_bot.agents.prediction_heuristic import (
@@ -43,7 +44,12 @@ def _parse_btc_interval(schema_version: str) -> str:
 class PredictionAgent:
     name = "prediction-agent"
 
-    def __init__(self, settings: PredictionSettings) -> None:
+    def __init__(
+        self,
+        settings: PredictionSettings,
+        *,
+        http_client: Any | None = None,
+    ) -> None:
         self.settings = settings
         self._artifact_loader = PredictionModelArtifactLoader()
         self._runtime_model: RuntimePredictionModelContract | None = None
@@ -56,7 +62,12 @@ class PredictionAgent:
         # Derive candle interval from model schema version so enricher resolution
         # matches training data resolution (e.g. "btc-v2-15m" → interval="15m").
         _btc_interval = _parse_btc_interval(settings.model_expected_feature_schema_version)
-        self._btc_enricher: BtcFeatureEnricher = BtcFeatureEnricher(interval=_btc_interval)
+        # Inject the shared StructuredHttpClient (REC-05) so BTC external fetches
+        # inherit allowed-hosts enforcement, retry/jitter and circuit breakers.
+        self._btc_enricher: BtcFeatureEnricher = BtcFeatureEnricher(
+            interval=_btc_interval,
+            http_client=http_client,
+        )
         self._load_runtime_model()
 
     def run(self, candidate: MarketCandidate, research: ResearchPacket) -> PredictionResult:
@@ -70,7 +81,14 @@ class PredictionAgent:
         if is_btc_updown_market(slug, title):
             btc_feats = self._btc_enricher.get_features()
             if btc_feats:
-                runtime_features = enrich_with_btc_features(runtime_features, btc_feats)
+                # Pass the expected schema version (e.g. "btc-v2-5m" or "btc-v2-15m")
+                # so the runtime schema matches the promoted artifact — not hardcoded.
+                expected_schema = self.settings.model_expected_feature_schema_version.strip()
+                runtime_features = enrich_with_btc_features(
+                    runtime_features,
+                    btc_feats,
+                    schema_version=expected_schema or "btc-v2-15m",
+                )
         self.last_runtime_features = {
             "schema_version": runtime_features.schema_version,
             "decision_timestamp_utc": runtime_features.decision_timestamp_utc.isoformat(),

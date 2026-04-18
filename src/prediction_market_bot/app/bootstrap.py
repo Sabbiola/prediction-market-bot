@@ -39,6 +39,7 @@ from prediction_market_bot.infrastructure import (
     LiveResearchIngestionPipeline,
     OperationalRepositories,
     PostgresOperationalRepositories,
+    PolymarketClobExecutor,
     PolymarketReadOnlyMarketDataAdapter,
     SandboxChainExecutor,
     SqliteOperationalRepositories,
@@ -416,6 +417,27 @@ def _build_executor_for_mode(
             enabled=settings.sandbox_chain.enabled,
             http_client=http_client,
         )
+    if mode == ExecutionMode.POLYMARKET_LIVE:
+        clob = settings.polymarket_clob
+        # private key read from env inside PolymarketClobExecutor — never from YAML
+        wallet_address = clob.wallet_address.strip()
+        if not wallet_address:
+            # Try resolving from secrets backend (vault / env fallback)
+            wallet_address = ""  # executor will derive it from key at init
+        return PolymarketClobExecutor(
+            clob_endpoint_url=clob.clob_endpoint_url,
+            chain_id=clob.chain_id,
+            exchange_contract_address=clob.exchange_contract_address,
+            private_key_env=clob.private_key_env,
+            wallet_address=wallet_address,
+            slippage_bps=clob.slippage_bps,
+            fee_rate_bps=settings.risk.taker_fee_bps,
+            max_taker_fee_bps=clob.max_taker_fee_bps,
+            timeout_sec=clob.timeout_sec,
+            max_retries=clob.max_retries,
+            retry_backoff_sec=clob.retry_backoff_sec,
+            dry_run=clob.dry_run,
+        )
     return LiveDisabledExecutor()
 
 
@@ -662,8 +684,12 @@ def build_coordinator(settings: AppSettings, persistence: JsonlPersistence) -> P
         market_data=market_data,
         scanner=ScanAgent(settings.scan),
         research=research_agent,
-        prediction=PredictionAgent(prediction_settings),
-        risk=RiskAgent(settings.risk, prediction_settings),
+        prediction=PredictionAgent(prediction_settings, http_client=http_client),
+        risk=RiskAgent(
+            settings.risk,
+            prediction_settings,
+            execution_mode=settings.execution.mode,
+        ),
         execution=ExecutionAgent(
             settings.venue,
             main_executor,

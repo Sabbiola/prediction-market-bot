@@ -15,6 +15,7 @@ from prediction_market_bot.infrastructure.operational_migrations import (
 )
 from prediction_market_bot.infrastructure.persistence import JsonlPersistence
 from prediction_market_bot.infrastructure.operational_sqlite import OperationalRepositories
+from prediction_market_bot.services.consistency import ConsistencyChecker
 from prediction_market_bot.services.model_promotion import resolve_runtime_model_gate_decision
 from prediction_market_bot.services.operator_control import load_operator_state, operator_state_path
 
@@ -108,6 +109,13 @@ def validate_startup(
     checks.append(_check_persistence_read_write(persistence))
     checks.extend(_check_alt_data_configuration(settings))
     checks.extend(_check_sandbox_chain_config(settings))
+
+    # REC-07: artifact ↔ operational-DB consistency (read-only, non-blocking)
+    checks.extend(_check_artifact_consistency(persistence, operational))
+
+    # REC-09: warn when un-implemented concurrency knobs are set > 1
+    checks.extend(_check_concurrency_knobs(settings))
+
     return StartupValidationReport(checks=tuple(checks))
 
 
@@ -588,4 +596,94 @@ def _check_staging_profile_requirements(settings: AppSettings) -> tuple[StartupC
             )
         )
 
+    return tuple(checks)
+
+
+
+def _check_artifact_consistency(
+    persistence: JsonlPersistence,
+    operational: OperationalRepositories,
+) -> tuple[StartupCheck, ...]:
+    """Run the consistency checker and surface findings as StartupChecks.
+
+    This is intentionally non-blocking: errors are reported as warnings so
+    they don't prevent the bot from starting.  A genuine inconsistency should
+    be investigated and remediated manually, not auto-repaired on startup.
+    """
+    checks: list[StartupCheck] = []
+    try:
+        checker = ConsistencyChecker(
+            persistence=persistence,
+            run_repo=operational.runs,
+        )
+        report = checker.run(recent_n=100)
+        for finding in report.findings:
+            if finding.severity == "info":
+                continue  # suppress info findings from startup output
+            # Map consistency errors -> startup warnings (non-blocking)
+            startup_severity: StartupSeverity = "warning"
+            checks.append(
+                StartupCheck(
+                    f"consistency_{finding.check}",
+                    finding.severity != "error",
+                    startup_severity,
+                    f"consistency_check: {finding.detail}",
+                )
+            )
+        if not checks:
+            checks.append(
+                StartupCheck(
+                    "artifact_consistency",
+                    True,
+                    "info",
+                    f"consistency_ok errors={report.error_count} warnings={report.warning_count}",
+                )
+            )
+    except Exception as exc:
+        checks.append(
+            StartupCheck(
+                "artifact_consistency",
+                False,
+                "warning",
+                f"consistency_check_failed error={exc}",
+            )
+        )
+    return tuple(checks)
+
+
+def _check_concurrency_knobs(settings: AppSettings) -> tuple[StartupCheck, ...]:
+    """Warn when parallelism knobs > 1 are configured but not yet implemented.
+
+    The scheduler runs research and prediction sequentially.  Accepting the
+    config values avoids silent ignore (REC-09), but operators must know that
+    setting max_parallel_* > 1 has no effect until concurrency is implemented.
+    """
+    checks: list[StartupCheck] = []
+    rt = settings.runtime
+    for knob, value in (
+        ("max_parallel_research_jobs", rt.max_parallel_research_jobs),
+        ("max_parallel_prediction_jobs", rt.max_parallel_prediction_jobs),
+    ):
+        if value > 1:
+            checks.append(
+                StartupCheck(
+                    f"concurrency_knob_{knob}",
+                    True,
+                    "warning",
+                    (
+                        f"run_loop.{knob}={value} but the scheduler currently runs "
+                        "stages sequentially (concurrency not yet implemented). "
+                        "The value is accepted and stored; set to 1 to suppress this warning."
+                    ),
+                )
+            )
+        else:
+            checks.append(
+                StartupCheck(
+                    f"concurrency_knob_{knob}",
+                    True,
+                    "info",
+                    f"run_loop.{knob}={value} sequential_mode_ok",
+                )
+            )
     return tuple(checks)

@@ -40,6 +40,10 @@ class ExecutionMode(str, Enum):
     PAPER = "PAPER"
     SHADOW_SIGN = "SHADOW_SIGN"
     SANDBOX_CHAIN = "SANDBOX_CHAIN"
+    # POLYMARKET_LIVE: submits real signed orders to clob.polymarket.com on
+    # Polygon mainnet.  Requires POLYMARKET_PRIVATE_KEY env var and funded wallet.
+    # Enable only after passing dress-rehearsal in SANDBOX_CHAIN mode.
+    POLYMARKET_LIVE = "POLYMARKET_LIVE"
     LIVE_DISABLED = "LIVE_DISABLED"
 
 

@@ -1,20 +1,27 @@
 app:
   name: prediction-market-bot
-  env: paper
+  env: staging
   timezone: UTC
-  mode: dry-run
+  mode: sandbox-live
 
+# Staging profile — aligns with README "Profilo staging sandbox-live":
+#   - runtime.mode=SANDBOX_CHAIN (rehearsal lane)
+#   - providers live
+#   - blocking trade review mandatory, no auto-approve
+#   - sandbox tx lane active (submit_tx=true below)
+#   - settlement separated (settlement_same_run=false)
+#   - Operational DB postgres condiviso
 runtime:
-  mode: PAPER_LIVE
+  mode: SANDBOX_CHAIN
   market_data_provider: LIVE
   research_provider: LIVE
   provider_failure_policy: FAIL_FAST
 
 execution:
-  mode: PAPER
-  enable_rehearsal_lane: false
-  blocking_trade_review: false
-  review_auto_approve: true
+  mode: SANDBOX_CHAIN
+  enable_rehearsal_lane: true
+  blocking_trade_review: true
+  review_auto_approve: false
   review_candidate_expiry_seconds: 0
   settlement_same_run: false
 
@@ -64,7 +71,7 @@ live_research:
 
 sandbox_chain:
   enabled: true
-  submit_tx: false
+  submit_tx: true
   rpc_url: http://127.0.0.1:18545
   chain_id: 80002
   contract_address: "0x0000000000000000000000000000000000000000"
@@ -98,6 +105,9 @@ ui_auth:
       password_hash_env: PM_BOT_UI_ADMIN_PASSWORD_HASH
 
 storage:
+  # Default staging ships with SQLite for low-friction local rehearsal.
+  # To run a shared Postgres instance (recommended for team staging), override
+  # `operational_db.driver: postgres` and set OPERATIONAL_DB_DSN — see README.
   operational_db:
     driver: sqlite
     dsn: ""
@@ -131,6 +141,12 @@ http:
     - api.x.com
     - oauth.reddit.com
     - www.reddit.com
+    # BTC Up/Down enricher external sources (REC-05)
+    - api.binance.com
+    - fapi.binance.com
+    - api.alternative.me
+    - api.coinbase.com
+    - api.kraken.com
     - localhost
     - 127.0.0.1
   max_response_bytes: 1048576
@@ -148,9 +164,9 @@ observability:
 
 feature_flags:
   enable_postmortem: true
-  enable_settlement: false
-  enable_manual_review_queue: false
-  blocking_trade_review: false
+  enable_settlement: true
+  enable_manual_review_queue: true
+  blocking_trade_review: true
   use_live_market_data: true
   use_live_research: true
   allow_live_execution: false

@@ -8,7 +8,7 @@ from .operator_control import (
     save_operator_state,
 )
 from .alerting import AlertEvent, AlertingService, build_alerting_service
-from .resolution import DeterministicResolutionPoller
+from .resolution import DeterministicResolutionPoller, PolymarketResolutionPoller
 from .history import (
     BrierMetrics,
     CalibrationMetrics,
@@ -47,6 +47,7 @@ __all__ = [
     "PaperPortfolioSnapshot",
     "PaperPositionSnapshot",
     "DeterministicResolutionPoller",
+    "PolymarketResolutionPoller",
     "ReplayDecisionRecord",
     "ReplaySummary",
     "ShadowScoringReport",

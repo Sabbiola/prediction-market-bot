@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
 
 from prediction_market_bot.interfaces import PersistencePort
+
+logger = logging.getLogger(__name__)
 
 
 class JsonlPersistence(PersistencePort):
@@ -67,15 +70,32 @@ class JsonlPersistence(PersistencePort):
         if not path.exists():
             return []
         rows: list[dict[str, Any]] = []
+        corrupt_count = 0
         with path.open("r", encoding="utf-8") as handle:
-            for line in handle:
+            for lineno, line in enumerate(handle, start=1):
                 text = line.strip()
                 if not text:
                     continue
                 try:
                     raw = json.loads(text)
-                except json.JSONDecodeError:
+                except json.JSONDecodeError as exc:
+                    corrupt_count += 1
+                    logger.warning(
+                        "jsonl_corrupt_line path=%s line=%d error=%s preview=%.80r",
+                        path,
+                        lineno,
+                        exc,
+                        text,
+                    )
                     continue
                 if isinstance(raw, dict):
                     rows.append(raw)
+        if corrupt_count:
+            logger.error(
+                "jsonl_read_complete_with_corruption path=%s corrupt_lines=%d valid_rows=%d "
+                "hint=file_may_need_manual_repair",
+                path,
+                corrupt_count,
+                len(rows),
+            )
         return rows

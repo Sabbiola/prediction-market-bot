@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+import logging
+import threading
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from hmac import compare_digest
-from typing import Mapping
+from typing import Mapping, Protocol
 
 from fastapi import HTTPException, Request, status
 
 from prediction_market_bot.app.secrets import SecretProvider
 from prediction_market_bot.app.settings import AppSettings, UiAuthUserSettings
+
+logger = logging.getLogger(__name__)
 
 _VALID_ROLES = {"viewer", "operator", "admin"}
 _PASSWORD_HASH_SCHEME = "pbkdf2_sha256"
@@ -22,17 +26,90 @@ class AuthenticatedUser:
     session_expires_at: str
 
 
-@dataclass(slots=True)
+# ---------------------------------------------------------------------------
+# Lockout store protocol + default in-memory implementation (REC-06)
+#
+# ``_LockoutStore`` is an injectable protocol so that operators running
+# multiple UI replicas behind a load-balancer can swap in a shared, persistent
+# store (Redis, Postgres, etc.) without changing the auth logic.
+#
+# The default ``InMemoryLockoutStore`` is single-process only.  When more than
+# one replica is deployed the lockout counter is not shared: each process sees
+# only the attempts it handled.  This is safe for the current single-container
+# deployment but must be replaced before horizontal scaling.
+# ---------------------------------------------------------------------------
+
+
+class _LockoutStore(Protocol):
+    """Minimal protocol for tracking per-user failed-auth windows."""
+
+    def get_count(self, username: str) -> int: ...
+    def get_lockout_until(self, username: str) -> datetime | None: ...
+    def increment(self, username: str, lockout_until: datetime | None) -> None: ...
+    def clear(self, username: str) -> None: ...
+
+
+@dataclass
 class _FailedAuthWindow:
     count: int = 0
     lockout_until: datetime | None = None
 
 
+class InMemoryLockoutStore:
+    """Thread-safe in-memory lockout store.
+
+    Suitable for **single-replica** deployments only.  In a multi-replica
+    setup each process maintains its own counter, which effectively halves
+    the brute-force protection of ``max_failed_attempts``.  Add a note in
+    your infra runbook if you scale the UI horizontally.
+    """
+
+    def __init__(self) -> None:
+        self._data: dict[str, _FailedAuthWindow] = {}
+        self._lock = threading.Lock()
+
+    def get_count(self, username: str) -> int:
+        with self._lock:
+            return self._data.get(username, _FailedAuthWindow()).count
+
+    def get_lockout_until(self, username: str) -> datetime | None:
+        with self._lock:
+            return self._data.get(username, _FailedAuthWindow()).lockout_until
+
+    def increment(self, username: str, lockout_until: datetime | None) -> None:
+        with self._lock:
+            w = self._data.get(username) or _FailedAuthWindow()
+            w.count += 1
+            if lockout_until is not None:
+                w.lockout_until = lockout_until
+            self._data[username] = w
+
+    def clear(self, username: str) -> None:
+        with self._lock:
+            self._data.pop(username, None)
+
+
 class UiAuthService:
-    def __init__(self, settings: AppSettings, secrets: SecretProvider) -> None:
+    def __init__(
+        self,
+        settings: AppSettings,
+        secrets: SecretProvider,
+        *,
+        lockout_store: _LockoutStore | None = None,
+    ) -> None:
         self._settings = settings
         self._secrets = secrets
-        self._failed_attempts: dict[str, _FailedAuthWindow] = {}
+        # Use the injected store, or fall back to the default in-memory one.
+        # Emit a one-time warning so operators running multiple replicas notice.
+        if lockout_store is None:
+            self._lockout: _LockoutStore = InMemoryLockoutStore()
+            logger.debug(
+                "ui_auth_lockout_store=in_memory "
+                "note=single_replica_only "
+                "hint=inject_a_shared_lockout_store_for_multi_replica_deployments"
+            )
+        else:
+            self._lockout = lockout_store
 
     @property
     def enabled(self) -> bool:
@@ -141,24 +218,33 @@ class UiAuthService:
         return user
 
     def _is_locked_out(self, username: str) -> bool:
-        window = self._failed_attempts.get(username.strip())
-        if window is None or window.lockout_until is None:
+        key = username.strip()
+        lockout_until = self._lockout.get_lockout_until(key)
+        if lockout_until is None:
             return False
-        if datetime.now(UTC) >= window.lockout_until:
-            self._failed_attempts.pop(username.strip(), None)
+        if datetime.now(UTC) >= lockout_until:
+            self._lockout.clear(key)
             return False
         return True
 
     def _register_failure(self, username: str) -> None:
         key = username.strip()
-        window = self._failed_attempts.get(key) or _FailedAuthWindow()
-        window.count += 1
-        if window.count >= self._settings.ui_auth.max_failed_attempts:
-            window.lockout_until = datetime.now(UTC) + timedelta(seconds=self._settings.ui_auth.lockout_seconds)
-        self._failed_attempts[key] = window
+        current_count = self._lockout.get_count(key)
+        # +1 for the failure we're about to record
+        new_count = current_count + 1
+        lockout_until: datetime | None = None
+        if new_count >= self._settings.ui_auth.max_failed_attempts:
+            lockout_until = datetime.now(UTC) + timedelta(seconds=self._settings.ui_auth.lockout_seconds)
+            logger.warning(
+                "ui_auth_lockout username=%r attempts=%d lockout_seconds=%d",
+                key,
+                new_count,
+                self._settings.ui_auth.lockout_seconds,
+            )
+        self._lockout.increment(key, lockout_until)
 
     def _clear_failures(self, username: str) -> None:
-        self._failed_attempts.pop(username.strip(), None)
+        self._lockout.clear(username.strip())
 
     def _verify_password(self, *, user: UiAuthUserSettings, password: str) -> bool:
         password_hash = self._resolve_password_hash(user)

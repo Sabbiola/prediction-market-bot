@@ -24,6 +24,7 @@ from prediction_market_bot.domain.models import ExecutionResult, MarketSnapshot,
 from prediction_market_bot.services import (
     DeterministicResolutionPoller,
     PaperPortfolioEngine,
+    PolymarketResolutionPoller,
     SettlementRequestQueueService,
     generate_report_markdown,
     load_operator_state,
@@ -204,7 +205,13 @@ def settle_run_command(
         portfolio.replay_rows(persistence.read_all_artifact_records("paper_portfolio_events"))
     settlement_agent = SettlementAgent()
     postmortem_agent = PostmortemAgent()
-    resolution_poller = DeterministicResolutionPoller()
+    # Use the real Polymarket resolution poller in live/sandbox modes so that
+    # settlement PnL reflects actual market outcomes (not a hash-based mock).
+    from prediction_market_bot.domain.enums import RuntimeMode
+    if settings.runtime.mode in {RuntimeMode.PAPER_LIVE, RuntimeMode.SANDBOX_CHAIN}:
+        resolution_poller = PolymarketResolutionPoller()
+    else:
+        resolution_poller = DeterministicResolutionPoller()
 
     settled_now = 0
     postmortems_now = 0

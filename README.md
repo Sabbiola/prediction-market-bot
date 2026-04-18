@@ -38,11 +38,13 @@ Il profilo imposta in modo esplicito:
 
 - `runtime.mode=SANDBOX_CHAIN`
 - provider live abilitati
-- review bloccante obbligatoria
+- review bloccante obbligatoria (`blocking_trade_review=true`, `review_auto_approve=false`)
 - lane tx sandbox attiva (`submit_tx=true`)
 - settlement separata (`settlement_same_run=false`)
 - UI auth abilitata con hash password obbligatori
-- Operational DB postgres condiviso (`storage.operational_db.driver=postgres`)
+- Operational DB: default SQLite per rehearsal locale; per staging condiviso
+  impostare `storage.operational_db.driver=postgres` e `OPERATIONAL_DB_DSN`
+  (vedi sezione "Persistence" piu sotto)
 
 Comando di validazione consigliato:
 

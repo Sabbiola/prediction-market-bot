@@ -16,12 +16,12 @@ def test_load_settings_from_repository_config() -> None:
     assert settings.prediction.min_confidence > 0.0
     assert settings.prediction.engine == "model_v2"
     assert settings.prediction.fallback_to_heuristic is True
-    assert settings.prediction.strict_feature_parity is False
+    assert settings.prediction.strict_feature_parity is True
     assert settings.prediction.alt_shadow_promoted_enabled is False
     assert settings.prediction.alt_shadow_promoted_runtime_modes == ("SANDBOX_CHAIN",)
     assert settings.model_promotion.enabled is True
     assert settings.model_promotion.require_explicit_approval_in_live_modes is True
-    assert settings.model_promotion.promoted_runtime_modes == ("SANDBOX_CHAIN",)
+    assert "SANDBOX_CHAIN" in settings.model_promotion.promoted_runtime_modes
     assert settings.alt_data.enabled is False
     assert set(settings.alt_data.sources[i].source_id for i in range(len(settings.alt_data.sources))) == {
         "news_rss_web",

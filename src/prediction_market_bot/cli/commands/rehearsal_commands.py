@@ -810,7 +810,10 @@ def live_readiness_check_command(
     )
 
     # 4) Recent backup exists (last 7 days)
-    backup_dir = _Path(settings.storage.data_dir) / "backups"
+    # NOTE: historically this used `settings.storage.data_dir / "backups"`, but
+    # `StorageSettings` exposes `operational_db_backup_dir` directly — there is
+    # no `data_dir` field. Use the configured backup dir instead.
+    backup_dir = _Path(settings.storage.operational_db_backup_dir)
     backup_ok = False
     backup_detail = "no_backup_dir"
     if backup_dir.exists():
@@ -861,11 +864,18 @@ def live_readiness_check_command(
     )
 
     # 7) Not currently paused
-    from prediction_market_bot.services.operator_control import OperatorControlService
+    # NOTE: `OperatorControlService` never existed — state is loaded via the
+    # `load_operator_state` helper against the operational repository.
+    from prediction_market_bot.services.operator_control import (
+        load_operator_state,
+        operator_state_path,
+    )
     try:
         operational = build_operational_repositories(settings)
-        control = OperatorControlService(operational.operator_control)
-        state = control.get_state()
+        state = load_operator_state(
+            operator_state_path(settings.storage.artifacts_dir),
+            repository=operational.operator_control_state,
+        )
         paused = getattr(state, "paused", False)
         not_paused_ok = not paused
         pause_detail = f"paused={paused} reason={getattr(state, 'pause_reason', '')!r}"

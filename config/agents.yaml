@@ -18,27 +18,34 @@ standards:
   allow_business_logic_in_ui: false
 
 thresholds:
-  min_confidence: 0.05
-  min_edge_bps: 5        # BTC Up/Down model edge is typically between 10-100 bps
-  max_spread_bps: 200      # BTC markets are tight (spread ~100bps)
-  min_liquidity_usd: 5000  # BTC 15m markets have ~$10K liquidity
-  min_volume_24h_usd: 0    # 15m markets don't accumulate much 24h volume
-  min_hours_to_resolution: 0  # BTC Up/Down 15m markets last only 15 minutes
+  # --- ECONOMIC GUARDRAILS ---
+  # Polymarket taker fee ≈ 72 bps (0.72%).  Every approved trade must clear
+  # this fee PLUS leave meaningful expected profit.  Set min_edge_bps well
+  # above the fee break-even; 150 bps leaves ~78 bps net EV per trade.
+  min_confidence: 0.62   # was 0.05 — require genuine conviction before sizing
+  min_edge_bps: 150      # was 5 — must beat 72 bps Polymarket taker fee
+  max_spread_bps: 200    # BTC markets are tight (spread ~100 bps)
+  min_liquidity_usd: 5000  # BTC 15 m markets have ~$10 K liquidity
+  min_volume_24h_usd: 0    # 15 m markets don't accumulate much 24 h volume
+  min_hours_to_resolution: 0  # BTC Up/Down 15 m markets last only 15 minutes
 
 risk:
-  bankroll_usd: 500
+  bankroll_usd: 500         # €500 production budget
+  # Polymarket taker fee subtracted from raw edge before threshold check.
+  # Keep aligned with actual Polymarket fee schedule.
+  taker_fee_bps: 72         # Polymarket taker fee (bps); used in fee-aware edge gate
   fractional_kelly: 0.25
-  max_position_pct: 0.02
+  max_position_pct: 0.02    # max 2% bankroll per trade = ~€10 at €500 bankroll
   max_event_bucket_pct: 0.08
   max_category_bucket_pct: 0.10
   max_portfolio_exposure_pct: 0.10
   max_per_market_exposure_pct: 0.02
-  max_daily_loss_pct: 0.05
+  max_daily_loss_pct: 0.05  # circuit-breaker: -5% daily = -€25 on €500 bankroll
   daily_stop_loss_pct: 0.05
   max_snapshot_age_sec: 900
   global_circuit_breaker: false
   manual_pause: false
-  min_bet_usd: 1
+  min_bet_usd: 1            # min trade size in USD (1 USDC)
   hard_blocks:
     - confidence_below_threshold
     - edge_below_threshold
@@ -150,9 +157,12 @@ agents:
       - prediction_result
     model_family: xgboost_plus_llm
     components:
-      market_weight: 0.45
-      narrative_weight: 0.45
-      structure_weight: 0.10
+      # market_weight reduced to 0.10: giving the crowd price 45% weight caused
+      # fair_yes_prob ≈ market_yes_prob (circular), yielding near-zero edge.
+      # Research-driven signals now dominate the heuristic blend.
+      market_weight: 0.10
+      narrative_weight: 0.65
+      structure_weight: 0.25
     model_inference:
       engine: model_v2
       model_artifact_path: data/models/v4/btc_15m_best.json

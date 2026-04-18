@@ -139,6 +139,13 @@ class RuntimeSettings:
     research_provider: ProviderSelection = ProviderSelection.AUTO
     provider_failure_policy: ProviderFailurePolicy = ProviderFailurePolicy.FAIL_FAST
     scan_interval_sec: int = 300
+    # REC-09: knobs below are read from config to avoid silent ignore, but the
+    # scheduler currently runs research and prediction sequentially (single-
+    # threaded).  Values > 1 are accepted and stored; a startup warning is
+    # emitted so operators know concurrency is not yet implemented.
+    settlement_interval_sec: int = 600
+    max_parallel_research_jobs: int = 1
+    max_parallel_prediction_jobs: int = 1
 
 
 @dataclass(slots=True, frozen=True)
@@ -244,6 +251,10 @@ class ModelPromotionSettings:
 @dataclass(slots=True, frozen=True)
 class RiskSettings:
     bankroll_usd: float = 10_000.0
+    # taker_fee_bps: Polymarket taker fee in basis points.  The risk agent
+    # subtracts this from the raw edge before comparing to min_edge_bps so
+    # only trades with *net* edge above the threshold are approved.
+    taker_fee_bps: int = 72
     fractional_kelly: float = 0.25
     max_position_pct: float = 0.02
     max_event_bucket_pct: float = 0.08
@@ -342,6 +353,7 @@ class AlertingTelegramSettings:
     bot_token: str = ""
     bot_token_env: str = "PM_BOT_TELEGRAM_BOT_TOKEN"
     chat_id: str = ""
+    chat_id_env: str = "PM_BOT_TELEGRAM_CHAT_ID"
     timeout_sec: float = 5.0
     max_retries: int = 1
     retry_backoff_sec: float = 0.5
@@ -428,6 +440,30 @@ class AltDataSourceSettings:
 class AltDataSettings:
     enabled: bool = False
     sources: tuple[AltDataSourceSettings, ...] = ()
+
+
+@dataclass(slots=True, frozen=True)
+class PolymarketClobSettings:
+    """Settings for the live Polymarket CLOB order executor.
+
+    NEVER store ``private_key`` directly — read it from the env var named by
+    ``private_key_env``.  Set ``dry_run=False`` only after a full
+    SANDBOX_CHAIN dress-rehearsal has passed cleanly.
+    """
+
+    enabled: bool = False
+    clob_endpoint_url: str = "https://clob.polymarket.com"
+    chain_id: int = 137  # Polygon mainnet; Amoy testnet = 80002
+    exchange_contract_address: str = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"
+    private_key_env: str = "POLYMARKET_PRIVATE_KEY"
+    wallet_address: str = ""
+    slippage_bps: int = 50
+    max_taker_fee_bps: int = 100
+    timeout_sec: float = 10.0
+    max_retries: int = 2
+    retry_backoff_sec: float = 1.0
+    # dry_run: sign orders but do NOT submit. Safe default.
+    dry_run: bool = True
 
 
 @dataclass(slots=True, frozen=True)
@@ -618,6 +654,7 @@ class AppSettings:
     live_market_data: LiveMarketDataSettings
     live_research: LiveResearchSettings
     alt_data: AltDataSettings
+    polymarket_clob: PolymarketClobSettings
     sandbox_chain: SandboxChainSettings
     strategy_research: StrategyResearchSettings
     ui_auth: UiAuthSettings
@@ -650,6 +687,7 @@ class AppSettings:
         wikipedia_research_section = _as_dict(live_research_section.get("wikipedia"))
         openalex_research_section = _as_dict(live_research_section.get("openalex"))
         sandbox_chain_section = _as_dict(app_config.get("sandbox_chain"))
+        polymarket_clob_section = _as_dict(app_config.get("polymarket_clob"))
         strategy_research_section = _as_dict(app_config.get("strategy_research"))
         historical_ingest_section = _as_dict(strategy_research_section.get("historical_data_ingest"))
         research_corpus_section = _as_dict(strategy_research_section.get("research_corpus"))
@@ -694,6 +732,9 @@ class AppSettings:
                 runtime_section.get("provider_failure_policy", "FAIL_FAST")
             ),
             scan_interval_sec=max(int(run_loop_section.get("scan_interval_sec", 300)), 1),
+            settlement_interval_sec=max(int(run_loop_section.get("settlement_interval_sec", 600)), 1),
+            max_parallel_research_jobs=max(int(run_loop_section.get("max_parallel_research_jobs", 1)), 1),
+            max_parallel_prediction_jobs=max(int(run_loop_section.get("max_parallel_prediction_jobs", 1)), 1),
         )
         logging_settings = LoggingSettings(
             level=str(observability.get("log_level", "INFO")),
@@ -796,6 +837,7 @@ class AppSettings:
         )
         risk = RiskSettings(
             bankroll_usd=float(risk_section.get("bankroll_usd", 10_000.0)),
+            taker_fee_bps=max(int(risk_section.get("taker_fee_bps", 72)), 0),
             fractional_kelly=float(risk_section.get("fractional_kelly", 0.25)),
             max_position_pct=float(risk_section.get("max_position_pct", 0.02)),
             max_event_bucket_pct=float(risk_section.get("max_event_bucket_pct", 0.08)),
@@ -918,6 +960,10 @@ class AppSettings:
                     "PM_BOT_TELEGRAM_BOT_TOKEN",
                 ),
                 chat_id=_as_str(alerting_telegram_section.get("chat_id")),
+                chat_id_env=_as_str(
+                    alerting_telegram_section.get("chat_id_env"),
+                    "PM_BOT_TELEGRAM_CHAT_ID",
+                ),
                 timeout_sec=max(float(alerting_telegram_section.get("timeout_sec", 5.0)), 0.1),
                 max_retries=max(int(alerting_telegram_section.get("max_retries", 1)), 0),
                 retry_backoff_sec=max(float(alerting_telegram_section.get("retry_backoff_sec", 0.5)), 0.0),
@@ -1048,6 +1094,29 @@ class AppSettings:
                 alt_data_sources_section=alt_data_sources_section,
                 legacy_sources_section=legacy_research_sources,
             ),
+        )
+        polymarket_clob = PolymarketClobSettings(
+            enabled=_as_bool(polymarket_clob_section.get("enabled"), False),
+            clob_endpoint_url=_as_str(
+                polymarket_clob_section.get("clob_endpoint_url"),
+                "https://clob.polymarket.com",
+            ),
+            chain_id=int(polymarket_clob_section.get("chain_id", 137)),
+            exchange_contract_address=_as_str(
+                polymarket_clob_section.get("exchange_contract_address"),
+                "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E",
+            ),
+            private_key_env=_as_str(
+                polymarket_clob_section.get("private_key_env"),
+                "POLYMARKET_PRIVATE_KEY",
+            ),
+            wallet_address=_as_str(polymarket_clob_section.get("wallet_address")),
+            slippage_bps=max(int(polymarket_clob_section.get("slippage_bps", 50)), 0),
+            max_taker_fee_bps=max(int(polymarket_clob_section.get("max_taker_fee_bps", 100)), 0),
+            timeout_sec=max(float(polymarket_clob_section.get("timeout_sec", 10.0)), 0.1),
+            max_retries=max(int(polymarket_clob_section.get("max_retries", 2)), 0),
+            retry_backoff_sec=max(float(polymarket_clob_section.get("retry_backoff_sec", 1.0)), 0.0),
+            dry_run=_as_bool(polymarket_clob_section.get("dry_run"), True),
         )
         sandbox_chain = SandboxChainSettings(
             enabled=_as_bool(sandbox_chain_section.get("enabled"), False),
@@ -1320,6 +1389,7 @@ class AppSettings:
             live_market_data=live_market_data,
             live_research=live_research,
             alt_data=alt_data,
+            polymarket_clob=polymarket_clob,
             sandbox_chain=sandbox_chain,
             strategy_research=strategy_research,
             ui_auth=ui_auth,

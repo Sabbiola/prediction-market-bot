@@ -47,12 +47,20 @@ class RiskAgent:
             block_reasons.append("global_circuit_breaker_active")
 
         edge_bps = prediction.edge * 10_000.0
+        # Net edge after deducting venue taker fee (fee-aware gate).
+        # Even if gross edge > min_edge_bps, the trade loses money if fee > gross
+        # edge.  We therefore check net_edge_bps against the threshold.
+        taker_fee_bps = float(self.risk.taker_fee_bps)
+        net_edge_bps = edge_bps - taker_fee_bps
         if prediction.confidence < self.prediction.min_confidence:
             block_reasons.append(
                 f"confidence_below_threshold confidence={prediction.confidence:.4f} min={self.prediction.min_confidence:.4f}"
             )
-        if edge_bps < self.prediction.min_edge_bps:
-            block_reasons.append(f"edge_below_threshold edge_bps={edge_bps:.2f} min={self.prediction.min_edge_bps}")
+        if net_edge_bps < self.prediction.min_edge_bps:
+            block_reasons.append(
+                f"edge_below_threshold net_edge_bps={net_edge_bps:.2f} gross_edge_bps={edge_bps:.2f} "
+                f"taker_fee_bps={taker_fee_bps:.0f} min={self.prediction.min_edge_bps}"
+            )
 
         if candidate is not None:
             liquidity = candidate.market.liquidity_usd
@@ -148,6 +156,8 @@ class RiskAgent:
         rationale.extend(
             [
                 f"edge_bps={edge_bps:.2f}",
+                f"taker_fee_bps={taker_fee_bps:.0f}",
+                f"net_edge_bps={net_edge_bps:.2f}",
                 f"confidence={prediction.confidence:.4f}",
                 f"raw_kelly={raw_kelly:.6f}",
                 f"fractional_kelly={fractional_kelly:.6f}",

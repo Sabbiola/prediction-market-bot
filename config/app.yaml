@@ -60,12 +60,19 @@ http:
   enforce_allowed_hosts: false
   allowed_hosts:
     - gamma-api.polymarket.com
+    - clob.polymarket.com          # Polymarket CLOB order submission (live trading)
     - en.wikipedia.org
     - api.openalex.org
     - news.google.com
     - api.x.com
     - oauth.reddit.com
     - www.reddit.com
+    # BTC Up/Down enricher external sources (REC-05)
+    - api.binance.com
+    - fapi.binance.com
+    - api.alternative.me
+    - api.coinbase.com
+    - api.kraken.com
     - localhost
     - 127.0.0.1
   max_response_bytes: 1048576
@@ -89,10 +96,18 @@ alerting:
     max_retries: 1
     retry_backoff_sec: 0.5
   telegram:
+    # To enable Telegram alerts:
+    #   1. Create a bot via @BotFather → get the token
+    #   2. Get your chat_id via @userinfobot or /getUpdates
+    #   3. Set env vars:  PM_BOT_TELEGRAM_BOT_TOKEN=<token>
+    #                     PM_BOT_TELEGRAM_CHAT_ID=<chat_id>
+    #   4. Set enabled: true  (or keep false and rely solely on env vars)
     enabled: false
     bot_token: ""
     bot_token_env: PM_BOT_TELEGRAM_BOT_TOKEN
+    # chat_id read from env var PM_BOT_TELEGRAM_CHAT_ID if left blank here
     chat_id: ""
+    chat_id_env: PM_BOT_TELEGRAM_CHAT_ID
     timeout_sec: 5.0
     max_retries: 1
     retry_backoff_sec: 0.5
@@ -278,6 +293,39 @@ strategy_research:
       - linked
       - ambiguous
     throttle_sec: 0.0
+
+# ---------------------------------------------------------------------------
+# Polymarket CLOB live executor
+# ---------------------------------------------------------------------------
+# To enable real order submission on Polymarket L2 (Polygon):
+#   1. Generate a dedicated Polygon wallet (NEVER use your cold storage key)
+#   2. Fund it with MATIC (gas) and USDC on Polygon
+#   3. Approve USDC spending in Polymarket vault contract
+#   4. Set env var:  POLYMARKET_PRIVATE_KEY=0x<hex_key>
+#   5. Change execution.mode to POLYMARKET_LIVE in this file
+#   6. Run dress-rehearsal first: prediction-market-bot beta-dress-rehearsal
+polymarket_clob:
+  enabled: false
+  clob_endpoint_url: https://clob.polymarket.com
+  # Polygon mainnet chain ID (137).  Amoy testnet is 80002.
+  chain_id: 137
+  # ERC-712 domain used by Polymarket CTF Exchange contract on Polygon mainnet.
+  # Do NOT change unless Polymarket migrates their contract.
+  exchange_contract_address: "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"
+  # private_key must NEVER be stored in this file.  Read from env var only.
+  private_key_env: POLYMARKET_PRIVATE_KEY
+  # Wallet address must match the key above (set at startup).
+  wallet_address: ""
+  # Slippage limit in bps applied on top of quoted limit_price.
+  slippage_bps: 50
+  # Reject orders with taker fee above this threshold (safety guard).
+  max_taker_fee_bps: 100
+  timeout_sec: 10.0
+  max_retries: 2
+  retry_backoff_sec: 1.0
+  # dry_run: build and sign the order but do NOT submit to CLOB.
+  # Set to false only when you are ready for real order flow.
+  dry_run: true
 
 sandbox_chain:
   enabled: false

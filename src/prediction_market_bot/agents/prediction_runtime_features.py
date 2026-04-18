@@ -159,19 +159,30 @@ def build_runtime_prediction_features(candidate: MarketCandidate, research: Rese
 def enrich_with_btc_features(
     base: RuntimePredictionFeatures,
     btc_features: dict[str, float],
+    *,
+    schema_version: str,
 ) -> RuntimePredictionFeatures:
-    """Overlay BTC technical features onto base features and switch schema to btc-v1.
+    """Overlay BTC technical features onto base features and switch schema.
 
     Used when the prediction target is a BTC Up/Down market:
       - Merges Binance-derived features into the values dict.
-      - Sets schema_version to "btc-v1" so the BTC model artifact loads correctly.
+      - Sets schema_version to the caller-provided value so the BTC model
+        artifact loads correctly.
+
+    The caller (``PredictionAgent``) must pass the schema version derived from
+    the configured model artifact (e.g. ``"btc-v2-5m"`` for a 5-minute model,
+    ``"btc-v2-15m"`` for a 15-minute model). Hardcoding the schema here caused
+    a promoted 5m artifact to fail parity against a 15m runtime schema.
     """
     if not btc_features:
         return base
+    resolved_schema = (schema_version or "").strip()
+    if not resolved_schema:
+        raise ValueError("enrich_with_btc_features requires a non-empty schema_version")
     merged = dict(base.values)
     merged.update(btc_features)
     return RuntimePredictionFeatures(
-        schema_version="btc-v2-15m",
+        schema_version=resolved_schema,
         decision_timestamp_utc=base.decision_timestamp_utc,
         values=merged,
     )

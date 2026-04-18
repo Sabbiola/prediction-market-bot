@@ -281,6 +281,9 @@ def build_alerting_service(settings: AppSettings, *, secrets: SecretProvider | N
         if not token:
             token = secret_provider.get(telegram.bot_token_env)
         chat_id = telegram.chat_id.strip()
+        # Also try the chat_id_env fallback (env var PM_BOT_TELEGRAM_CHAT_ID)
+        if not chat_id and hasattr(telegram, "chat_id_env") and telegram.chat_id_env:
+            chat_id = secret_provider.get(telegram.chat_id_env)
         if token and chat_id:
             sinks.append(
                 TelegramAlertSink(
