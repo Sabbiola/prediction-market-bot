@@ -47,8 +47,8 @@ data/metrics/
 # Historical strategy-research data (large, re-fetchable)
 data/strategy-research/
 
-# UI static build artifacts
-src/prediction_market_bot/ui/static/
+# UI static build artifacts (generated files only — hand-authored src tracked)
+# src/prediction_market_bot/ui/static/
 
 # Raw BTC OHLCV and market data (large, re-fetchable via fetch scripts)
 data/btc/*.jsonl

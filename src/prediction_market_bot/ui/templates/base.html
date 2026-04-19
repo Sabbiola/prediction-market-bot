@@ -4,6 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title | default("PMBot — Control Plane") }}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body data-section="{{ active_tab | default('overview') }}">
@@ -116,6 +119,8 @@
           <span class="sidebar__nav-label">Sandbox TX</span>
         </button>
 
+        <span class="sidebar__section-label">Portfolio</span>
+
         <button class="sidebar__nav-item" data-section="positions" data-tooltip="Open Positions" aria-current="false">
           <svg class="sidebar__icon" viewBox="0 0 18 18" fill="none">
             <rect x="2" y="10" width="3" height="6" rx="1" fill="currentColor" opacity=".9"/>
@@ -133,7 +138,7 @@
           <span class="sidebar__nav-label">Settlement</span>
         </button>
 
-        <span class="sidebar__section-label">Reports & System</span>
+        <span class="sidebar__section-label">Reports</span>
 
         <button class="sidebar__nav-item" data-section="reports" data-tooltip="Reports & Replay" aria-current="false">
           <svg class="sidebar__icon" viewBox="0 0 18 18" fill="none">
@@ -144,6 +149,8 @@
           </svg>
           <span class="sidebar__nav-label">Reports</span>
         </button>
+
+        <span class="sidebar__section-label">System</span>
 
         <button class="sidebar__nav-item" data-section="system" data-tooltip="System Health" aria-current="false">
           <svg class="sidebar__icon" viewBox="0 0 18 18" fill="none">
@@ -206,8 +213,10 @@
         </div>
 
         {% if auth_enabled and auth_user and auth_user.username %}
-        <div class="topbar__auth">
-          <form method="post" action="/logout">
+        <div class="topbar__auth" style="display:flex;align-items:center;gap:8px;margin-left:12px;">
+          <span style="font-size:.78rem;color:var(--text-muted);">{{ auth_user.username }}</span>
+          <span class="pill pill--{{ auth_user.role | lower | default('viewer') }}">{{ auth_user.role }}</span>
+          <form method="post" action="/logout" style="margin:0;">
             <button type="submit" class="btn btn--ghost btn--sm">Logout</button>
           </form>
         </div>

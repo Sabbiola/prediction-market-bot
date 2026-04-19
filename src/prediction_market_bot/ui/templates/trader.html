@@ -4,7 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PMBot — Trader Dashboard</title>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     :root {
       --bg: #0b0d14; --bg2: #111420; --bg3: #171b28;
@@ -19,7 +21,7 @@
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html { font-size: 15px; }
-    body { font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; }
+    body { font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; -webkit-font-smoothing: antialiased; }
 
     /* ── LAYOUT ── */
     .page { max-width: 1100px; margin: 0 auto; padding: 24px 20px 60px; }
@@ -225,7 +227,7 @@
     </div>
     {% else %}
     <div class="empty">
-      <div class="empty__icon">📊</div>
+      <div class="empty__icon" style="font-size:2rem;color:var(--dim);margin-bottom:12px;">—</div>
       <div class="empty__text">No trades yet</div>
       <div class="empty__sub">The bot is running. Trades will appear here as they settle.</div>
     </div>

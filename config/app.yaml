@@ -31,7 +31,6 @@ model_promotion:
     - PAPER_LIVE
     - SANDBOX_CHAIN
   promoted_runtime_modes:
-    - PAPER_LIVE
     - SANDBOX_CHAIN
   benchmark_min_delta_brier: 0.0
   benchmark_min_delta_log_loss: 0.0
