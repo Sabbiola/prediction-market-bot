@@ -22,8 +22,15 @@ thresholds:
   # Polymarket taker fee ≈ 72 bps (0.72%).  Every approved trade must clear
   # this fee PLUS leave meaningful expected profit.  Set min_edge_bps well
   # above the fee break-even; 150 bps leaves ~78 bps net EV per trade.
-  min_confidence: 0.62   # was 0.05 — require genuine conviction before sizing
-  min_edge_bps: 150      # was 5 — must beat 72 bps Polymarket taker fee
+  # Single-slot BTC 15m mode — exactly one fresh BTC slot is scanned per tick
+  # (see ScanAgent._enforce_btc_single_slot, sweet spot 0.15-0.50 h_to_res).
+  # Fractional-Kelly sizing means low confidence → tiny stake; we don't need
+  # a high confidence threshold because the sizer already discounts uncertain
+  # trades. Main guardrail is gross edge ≥ 120 bps (net ≈ 48 bps after fee).
+  # Confidence floor 0.20 rejects only flat coin-flips where the model itself
+  # signals no direction.
+  min_confidence: 0.10   # Kelly already shrinks low-conviction stakes; edge filter is the real EV gate
+  min_edge_bps: 120      # gross edge; net ≈ 48 bps after 72 bps taker fee
   max_spread_bps: 200    # BTC markets are tight (spread ~100 bps)
   min_liquidity_usd: 5000  # BTC 15 m markets have ~$10 K liquidity
   min_volume_24h_usd: 0    # 15 m markets don't accumulate much 24 h volume
@@ -36,9 +43,9 @@ risk:
   taker_fee_bps: 72         # Polymarket taker fee (bps); used in fee-aware edge gate
   fractional_kelly: 0.25
   max_position_pct: 0.02    # max 2% bankroll per trade = ~€10 at €500 bankroll
-  max_event_bucket_pct: 0.08
-  max_category_bucket_pct: 0.10
-  max_portfolio_exposure_pct: 0.10
+  max_event_bucket_pct: 0.40       # was 0.08 — BTC 15m series is one event, need headroom
+  max_category_bucket_pct: 0.50    # was 0.10 — same category domination, widened
+  max_portfolio_exposure_pct: 0.40 # was 0.10 — with settlement_same_run=false positions accumulate for ~15min until UMA resolves → need more concurrent headroom
   max_per_market_exposure_pct: 0.02
   max_daily_loss_pct: 0.05  # circuit-breaker: -5% daily = -€25 on €500 bankroll
   daily_stop_loss_pct: 0.05

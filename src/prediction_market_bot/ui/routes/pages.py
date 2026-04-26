@@ -229,6 +229,37 @@ def trader_view(
     total_runs = 0
     runtime_mode = "PAPER"
 
+    # ------------------------------------------------------------------
+    # Async settlement index (cross-run)
+    # ------------------------------------------------------------------
+    # With settlement_same_run=false the per-run JSON report is written BEFORE
+    # the market is actually resolved on Polymarket/UMA. The real WIN/LOSS
+    # outcomes land later in the ``settlement_results`` artifact via the
+    # scheduler's cross-run settlement pass. Pull those first and index by
+    # market_id so we can overlay them on top of the execution rows below.
+    async_settlements_by_market: dict[str, dict[str, Any]] = {}
+    try:
+        persistence_obj = getattr(context_obj, "persistence", None) if context_obj is not None else None
+        if persistence_obj is not None:
+            for row in persistence_obj.read_all_artifact_records("settlement_results"):
+                payload = row.get("payload") or {}
+                mid = payload.get("market_id")
+                outcome = payload.get("outcome_classification", "")
+                if not mid or outcome not in ("WIN", "LOSS"):
+                    continue
+                async_settlements_by_market[mid] = {
+                    "pnl_usd": payload.get("pnl_usd", 0.0),
+                    "outcome_classification": outcome,
+                    "stake_usd": payload.get("stake_usd", 0.0),
+                    "side": payload.get("side", ""),
+                    "resolved_yes": payload.get("resolved_yes"),
+                    "run_id": row.get("run_id"),
+                    "timestamp": row.get("timestamp"),
+                }
+    except Exception:
+        # UI must degrade gracefully if the persistence layer is unavailable.
+        async_settlements_by_market = {}
+
     report_files = sorted(glob.glob(str(reports_dir / "paper-*.json")))
     if not report_files:
         report_files = sorted(glob.glob(str(reports_dir / "*.json")))
@@ -249,28 +280,40 @@ def trader_view(
         runtime_mode = obs.get("runtime_mode", runtime_mode) if obs else runtime_mode
 
         for rec in report.get("records", []):
-            execution = rec.get("execution", {})
-            settlement = rec.get("settlement", {})
-            prediction = rec.get("prediction", {})
-            scan = rec.get("scan", {})
-            risk = rec.get("risk", {})
+            execution = rec.get("execution") or {}
+            settlement = rec.get("settlement") or {}
+            prediction = rec.get("prediction") or {}
+            scan = rec.get("scan") or {}
+            risk = rec.get("risk") or {}
 
             if execution.get("status") != "FILLED":
                 continue
 
-            outcome = settlement.get("outcome_classification", "")
-            if outcome not in ("WIN", "LOSS"):
-                continue
-
             market_id = rec.get("market_id", "")
-            pnl = settlement.get("pnl_usd", 0.0)
+            # Prefer the async (real UMA) settlement over the inline report one.
+            # Inline settlements are either absent (settlement_same_run=false) or
+            # come from the legacy hash-fake era.
+            async_row = async_settlements_by_market.get(market_id)
+            if async_row is not None:
+                outcome = async_row["outcome_classification"]
+                pnl = async_row["pnl_usd"]
+                stake = async_row["stake_usd"] or settlement.get("stake_usd") or risk.get("stake_usd", 0)
+                side = async_row["side"] or prediction.get("selected_side", "")
+            else:
+                outcome = settlement.get("outcome_classification", "")
+                if outcome not in ("WIN", "LOSS"):
+                    continue  # no resolution yet — skip this pending trade
+                pnl = settlement.get("pnl_usd", 0.0)
+                stake = settlement.get("stake_usd", risk.get("stake_usd", 0))
+                side = prediction.get("selected_side", settlement.get("side", ""))
+
             market_info = scan.get("market", {}).get("market", {})
 
             latest_by_market[market_id] = {
                 "market_id": market_id,
                 "title": market_info.get("title", market_id or "Unknown"),
-                "side": prediction.get("selected_side", settlement.get("side", "")),
-                "stake": settlement.get("stake_usd", risk.get("stake_usd", 0)),
+                "side": side,
+                "stake": stake,
                 "pnl": pnl,
                 "outcome": outcome,
                 "edge_bps": prediction.get("edge_bps", 0),

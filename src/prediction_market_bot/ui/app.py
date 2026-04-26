@@ -17,7 +17,7 @@ from prediction_market_bot.app.secrets import SecretResolutionError, build_secre
 from .actions import UiOperatorActionService
 from .auth import UiAuthService
 from .read_models import UiReadModelService, build_ui_runtime_context
-from .routes import api_router, pages_router
+from .routes import api_router, pages_router, trader_live_router
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +136,7 @@ def create_web_app(
     if static_dir.exists():
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
     app.include_router(api_router)
+    app.include_router(trader_live_router)
     app.include_router(pages_router)
     return app
 

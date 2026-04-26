@@ -22,7 +22,12 @@ execution:
   blocking_trade_review: true
   review_auto_approve: true
   review_candidate_expiry_seconds: 3600
-  settlement_same_run: true
+  # settlement_same_run=false → le posizioni restano aperte e vengono risolte
+  # dal PolymarketResolutionPoller reale (via `run-settlement-pass`) usando
+  # l'oracolo Chainlink. Con true si usava `_default_resolution()` — un hash
+  # deterministico su market_id+yes_price che produceva "sempre gli stessi
+  # trade sullo stesso giorno" perché l'esito non dipendeva dal BTC reale.
+  settlement_same_run: false
 
 model_promotion:
   enabled: true
@@ -32,6 +37,7 @@ model_promotion:
     - SANDBOX_CHAIN
   promoted_runtime_modes:
     - SANDBOX_CHAIN
+    - PAPER_LIVE   # enable BTC 15m ML ensemble (model v2.0.0) in paper-live
   benchmark_min_delta_brier: 0.0
   benchmark_min_delta_log_loss: 0.0
   max_calibration_error: 0.08

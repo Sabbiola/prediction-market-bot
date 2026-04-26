@@ -298,6 +298,48 @@ def settle_run_command(
     return 0
 
 
+def _run_cross_run_settlement_pass(
+    *,
+    config_path: Path,
+    agents_config_path: Path,
+) -> None:
+    """Poll real Polymarket outcomes for every run_id with pending settlements.
+
+    Called from the scheduler loop when ``settlement_same_run=false`` so that
+    positions opened across prior ticks actually resolve against the live
+    Polymarket/UMA oracle instead of piling up forever.
+
+    Uses the same machinery as ``settle_run_command`` but applied per-run_id
+    across all pending settlement requests in the queue.
+    """
+    settings = load_settings(config_path, agents_config_path)
+    persistence = build_persistence(settings)
+    operational = build_operational_repositories(settings)
+    queue = SettlementRequestQueueService(persistence, pending_repo=operational.pending_settlements)
+    pending = queue.list_requests(state=SettlementRequestState.PENDING, limit=0)
+    if not pending:
+        return
+    # Group pending requests by run_id, then delegate to the per-run command.
+    run_ids = sorted({r.run_id for r in pending if r.run_id})
+    print(f"Settlement pass: polling {len(pending)} pending across {len(run_ids)} run(s).")
+    for run_id in run_ids:
+        try:
+            settle_run_command(
+                config_path=config_path,
+                agents_config_path=agents_config_path,
+                run_id=run_id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "scheduler_settlement_pass_run_failed",
+                extra={
+                    "event": "scheduler_settlement_pass_run_failed",
+                    "run_id": run_id,
+                    "error": str(exc),
+                },
+            )
+
+
 def run_scheduler_command(
     config_path: Path,
     agents_config_path: Path,
@@ -306,6 +348,8 @@ def run_scheduler_command(
     max_iterations: int,
     run_id_prefix: str,
     fail_fast: bool,
+    align_to_minutes: int = 0,
+    align_offset_sec: int = 15,
 ) -> int:
     settings = load_settings(config_path, agents_config_path)
     configure_logging(settings.logging)
@@ -323,13 +367,22 @@ def run_scheduler_command(
     state.scheduler_iterations = 0
     save_operator_state(state_path, state, repository=operational.operator_control_state)
 
+    settlement_interval = float(getattr(settings.runtime, "settlement_interval_sec", 600))
+    settlement_same_run_enabled = bool(
+        getattr(settings.execution, "settlement_same_run", True)
+    )
+    align_mode = align_to_minutes > 0
     print(
         "Scheduler started "
-        f"interval_sec={effective_interval} max_iterations={max_iterations if max_iterations > 0 else 'infinite'}"
+        f"interval_sec={effective_interval} settlement_interval_sec={settlement_interval} "
+        f"settlement_same_run={settlement_same_run_enabled} "
+        f"align_to_minutes={align_to_minutes} align_offset_sec={align_offset_sec} "
+        f"max_iterations={max_iterations if max_iterations > 0 else 'infinite'}"
     )
     shutdown_requested = False
     previous_sigint = signal.getsignal(signal.SIGINT)
     previous_sigterm = signal.getsignal(signal.SIGTERM)
+    last_settlement_pass_at = 0.0
 
     def _request_shutdown(signum: int, frame: object) -> None:
         del frame
@@ -363,15 +416,96 @@ def run_scheduler_command(
                     print("Scheduler stopping due to fail-fast policy.")
                     return exit_code
 
+                # Cross-run settlement pass — only needed when same-run fake
+                # settlement is disabled. Polls real Polymarket outcomes for all
+                # pending positions from prior ticks, so the loop actually
+                # reflects Chainlink/UMA resolutions instead of the deterministic
+                # hash fallback in the coordinator.
+                now_monotonic = time.monotonic()
+                if (
+                    not settlement_same_run_enabled
+                    and (now_monotonic - last_settlement_pass_at) >= settlement_interval
+                ):
+                    try:
+                        _run_cross_run_settlement_pass(
+                            config_path=config_path,
+                            agents_config_path=agents_config_path,
+                        )
+                    except Exception as exc:  # pragma: no cover — scheduler robustness
+                        logger.warning(
+                            "scheduler_settlement_pass_failed",
+                            extra={
+                                "event": "scheduler_settlement_pass_failed",
+                                "error": str(exc),
+                            },
+                        )
+                        print(f"Scheduler tick {iterations + 1}: settlement pass failed: {exc}")
+                    last_settlement_pass_at = now_monotonic
+
             iterations += 1
             if max_iterations > 0 and iterations >= max_iterations:
                 break
-            if effective_interval > 0 and not shutdown_requested:
+            if shutdown_requested:
+                continue
+
+            # Slot-aligned wait: sleep until the next wall-clock boundary at
+            # HH:00, HH:Nm, etc. plus a small offset (so Polymarket has time
+            # to lock the slot's reference price). Falls back to fixed
+            # interval when align_to_minutes <= 0.
+            if align_mode:
+                now = datetime.now(UTC)
+                step_minutes = align_to_minutes
+                # next boundary >= now
+                minutes_into_step = now.minute % step_minutes
+                seconds_into_step = (
+                    minutes_into_step * 60 + now.second + now.microsecond / 1_000_000
+                )
+                step_total_sec = step_minutes * 60
+                seconds_until_next_boundary = step_total_sec - seconds_into_step
+                if seconds_until_next_boundary <= 0:
+                    seconds_until_next_boundary += step_total_sec
+                sleep_remaining = seconds_until_next_boundary + max(align_offset_sec, 0)
+                # If the offset alone pushed us past a full step, drop one step
+                # so we still fire at the *next* boundary, not the one after.
+                while sleep_remaining > step_total_sec + align_offset_sec:
+                    sleep_remaining -= step_total_sec
+            elif effective_interval > 0:
                 sleep_remaining = effective_interval
-                while sleep_remaining > 0 and not shutdown_requested:
-                    step = min(sleep_remaining, 1.0)
-                    time.sleep(step)
-                    sleep_remaining -= step
+            else:
+                sleep_remaining = 0.0
+
+            # Always-on position monitor: while idling between ticks, keep
+            # polling pending settlements every position_monitor_interval_sec
+            # so UMA/Chainlink resolutions are picked up the moment they land
+            # — instead of waiting until the next 15-min tick. This is what
+            # gives us "continuous" position monitoring even though the
+            # scan/predict/execute cycle only fires once per slot.
+            position_monitor_interval = 60.0
+            last_monitor_pass_at = time.monotonic()
+            while sleep_remaining > 0 and not shutdown_requested:
+                step = min(sleep_remaining, 1.0)
+                time.sleep(step)
+                sleep_remaining -= step
+
+                if (
+                    not settlement_same_run_enabled
+                    and (time.monotonic() - last_monitor_pass_at) >= position_monitor_interval
+                ):
+                    try:
+                        _run_cross_run_settlement_pass(
+                            config_path=config_path,
+                            agents_config_path=agents_config_path,
+                        )
+                    except Exception as exc:  # pragma: no cover — robustness
+                        logger.warning(
+                            "scheduler_position_monitor_failed",
+                            extra={
+                                "event": "scheduler_position_monitor_failed",
+                                "error": str(exc),
+                            },
+                        )
+                    last_monitor_pass_at = time.monotonic()
+                    last_settlement_pass_at = last_monitor_pass_at
     except KeyboardInterrupt:
         print("Scheduler interrupted by operator.")
         return 130

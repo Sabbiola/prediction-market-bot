@@ -165,6 +165,115 @@
       .catch(function (err) { showToast('Resubmit failed: ' + err.message, 'error'); });
   });
 
+  /* ── INLINE SPARKLINE CHARTS (render_chart macro) ──────── */
+  function renderInlineCharts() {
+    if (typeof Chart === 'undefined') return;
+    document.querySelectorAll('.chart-inline[data-chart-points]').forEach(function (wrap) {
+      if (wrap.dataset.rendered === '1') return;
+      var raw = wrap.getAttribute('data-chart-points');
+      if (!raw) return;
+      var points;
+      try { points = JSON.parse(raw); } catch (e) { return; }
+      if (!Array.isArray(points) || points.length === 0) return;
+
+      var canvas = wrap.querySelector('.chart-inline__canvas');
+      if (!canvas) return;
+      var labels = points.map(function (p) { return p.label; });
+      var values = points.map(function (p) { return Number(p.value) || 0; });
+
+      var ctx = canvas.getContext('2d');
+      var grad = ctx.createLinearGradient(0, 0, 0, 140);
+      grad.addColorStop(0, 'rgba(139, 92, 246, 0.38)');
+      grad.addColorStop(1, 'rgba(139, 92, 246, 0)');
+
+      var lineGrad = ctx.createLinearGradient(0, 0, canvas.width || 300, 0);
+      lineGrad.addColorStop(0, '#8b5cf6');
+      lineGrad.addColorStop(1, '#06b6d4');
+
+      new Chart(canvas, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [{
+            data: values,
+            borderColor: lineGrad,
+            backgroundColor: grad,
+            borderWidth: 2,
+            fill: true,
+            tension: 0.32,
+            pointRadius: 0,
+            pointHoverRadius: 4,
+            pointHoverBackgroundColor: '#a78bfa',
+            pointHoverBorderColor: '#07091a',
+            pointHoverBorderWidth: 2,
+          }],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { intersect: false, mode: 'index' },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: 'rgba(12, 16, 36, 0.92)',
+              titleColor: '#ffffff',
+              titleFont: { family: "'Inter', sans-serif", weight: '700', size: 11 },
+              bodyColor: '#a5acc9',
+              bodyFont: { family: "'JetBrains Mono', monospace", size: 11 },
+              borderColor: 'rgba(139, 92, 246, 0.32)',
+              borderWidth: 1,
+              padding: 10,
+              cornerRadius: 8,
+              displayColors: false,
+              callbacks: {
+                label: function (item) { return '  ' + Number(item.raw).toFixed(2); },
+              },
+            },
+          },
+          scales: {
+            x: {
+              display: true,
+              grid: { display: false, drawBorder: false },
+              ticks: {
+                color: '#5a6183',
+                font: { family: "'JetBrains Mono', monospace", size: 9 },
+                maxTicksLimit: 6,
+                autoSkip: true,
+              },
+              border: { display: false },
+            },
+            y: {
+              display: true,
+              grid: { color: 'rgba(139, 92, 246, 0.05)', drawBorder: false },
+              ticks: {
+                color: '#7a82a3',
+                font: { family: "'JetBrains Mono', monospace", size: 9 },
+                maxTicksLimit: 4,
+                padding: 4,
+              },
+              border: { display: false },
+            },
+          },
+          animation: { duration: 600, easing: 'easeOutQuart' },
+        },
+      });
+      wrap.dataset.rendered = '1';
+    });
+  }
+
+  // Chart.js loads with `defer` — wait for it before rendering.
+  if (typeof Chart !== 'undefined') {
+    renderInlineCharts();
+  } else {
+    window.addEventListener('load', renderInlineCharts);
+  }
+  // Also re-render when switching sections (layout becomes visible).
+  navItems.forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      setTimeout(renderInlineCharts, 20);
+    });
+  });
+
   /* ── COUNT-UP ANIMATION ────────────────────────────────── */
   document.querySelectorAll('[data-count-to]').forEach(function (el) {
     var target = parseInt(el.dataset.countTo, 10);

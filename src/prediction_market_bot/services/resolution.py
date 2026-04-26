@@ -120,14 +120,64 @@ class PolymarketResolutionPoller(ResolutionPollerPort):
                 checked_at=now,
             )
 
-        # 2. ``is_resolved`` bool + ``outcomePrices`` array [yes_price, no_price]
-        is_resolved = bool(market_data.get("isResolved") or market_data.get("is_resolved"))
+        # 2. Polymarket BTC Up/Down (and most CLOB markets): the
+        # ``umaResolutionStatus`` field flips to "resolved" once UMA finalises
+        # the outcome, and ``outcomePrices`` carries the winning outcome as
+        # ["1","0"] (YES=Up won) or ["0","1"] (NO=Down won). Fallbacks:
+        # ``automaticallyResolved`` bool, classic ``isResolved`` flag, or
+        # a closed market whose outcomePrices have already collapsed to 0/1.
+        uma_status = str(
+            market_data.get("umaResolutionStatus") or ""
+        ).strip().lower()
+        is_resolved = (
+            uma_status == "resolved"
+            or bool(market_data.get("automaticallyResolved"))
+            or bool(market_data.get("isResolved"))
+            or bool(market_data.get("is_resolved"))
+        )
+        outcome_prices_raw = market_data.get("outcomePrices") or []
+        # outcomePrices arrives as a JSON-string list on some Polymarket
+        # endpoints (e.g. '["1","0"]') — decode if needed.
+        if isinstance(outcome_prices_raw, str):
+            try:
+                outcome_prices_raw = json.loads(outcome_prices_raw)
+            except (ValueError, TypeError):
+                outcome_prices_raw = []
+
+        # Even without an explicit "resolved" flag, a closed market whose
+        # outcomePrices have collapsed to a 0/1 binary outcome is resolved.
+        prices_are_binary = (
+            isinstance(outcome_prices_raw, list)
+            and len(outcome_prices_raw) >= 2
+            and self._looks_binary(outcome_prices_raw[0], outcome_prices_raw[1])
+        )
+        market_is_closed = bool(market_data.get("closed"))
+        if not is_resolved and market_is_closed and prices_are_binary:
+            is_resolved = True
+
+        # Fast-path: time-bound markets (BTC Up/Down 15m) keep UMA on-chain
+        # finalisation 5-10 min behind the actual outcome.  Once the slot's
+        # endDate has passed AND the order book has converged to >=95%
+        # confidence on one side, the outcome is decided in practice —
+        # settle immediately rather than wait for the on-chain attestation.
+        # 30-second buffer past endDate avoids racing the closing tick.
+        if (
+            not is_resolved
+            and isinstance(outcome_prices_raw, list)
+            and len(outcome_prices_raw) >= 2
+            and self._slot_has_ended(market_data, buffer_sec=30)
+            and self._looks_directional(
+                outcome_prices_raw[0], outcome_prices_raw[1], threshold=0.95
+            )
+        ):
+            is_resolved = True
+            if not uma_status:
+                uma_status = "fastpath_post_close"
+
         if is_resolved:
-            outcome_prices = market_data.get("outcomePrices") or []
-            if isinstance(outcome_prices, list) and len(outcome_prices) >= 2:
+            if isinstance(outcome_prices_raw, list) and len(outcome_prices_raw) >= 2:
                 try:
-                    yes_price = float(outcome_prices[0])
-                    # YES resolves to 1.0, NO resolves to 0.0
+                    yes_price = float(outcome_prices_raw[0])
                     resolved_yes = yes_price > 0.5
                     return ResolutionCheckResult(
                         market_id=market_id,
@@ -135,7 +185,7 @@ class PolymarketResolutionPoller(ResolutionPollerPort):
                         resolved_yes=resolved_yes,
                         reason=(
                             f"resolution_resolved_via_outcomePrices "
-                            f"yes_price={yes_price:.4f}"
+                            f"yes_price={yes_price:.4f} uma_status={uma_status or 'n/a'}"
                         ),
                         checked_at=now,
                     )
@@ -146,7 +196,10 @@ class PolymarketResolutionPoller(ResolutionPollerPort):
                 market_id=market_id,
                 status=ResolutionStatus.AMBIGUOUS,
                 resolved_yes=None,
-                reason="resolution_ambiguous_is_resolved_but_outcome_unreadable",
+                reason=(
+                    f"resolution_ambiguous_resolved_but_outcome_unreadable "
+                    f"uma_status={uma_status or 'n/a'}"
+                ),
                 checked_at=now,
             )
 
@@ -158,6 +211,56 @@ class PolymarketResolutionPoller(ResolutionPollerPort):
             reason="resolution_pending_market_not_yet_resolved",
             checked_at=now,
         )
+
+    @staticmethod
+    def _looks_binary(p_yes: Any, p_no: Any) -> bool:
+        """Return True if (p_yes, p_no) look like a resolved binary outcome
+        — i.e. one is ~1.0 and the other is ~0.0. Tolerates string-encoded
+        prices (Polymarket sometimes ships them as JSON strings)."""
+        try:
+            y = float(p_yes)
+            n = float(p_no)
+        except (ValueError, TypeError):
+            return False
+        eps = 0.05
+        return (
+            (abs(y - 1.0) < eps and abs(n) < eps)
+            or (abs(n - 1.0) < eps and abs(y) < eps)
+        )
+
+    @staticmethod
+    def _looks_directional(p_yes: Any, p_no: Any, *, threshold: float = 0.95) -> bool:
+        """Looser variant of _looks_binary: returns True when one side is
+        above ``threshold`` (e.g. 0.95) — i.e. the order book has
+        effectively decided the outcome even if it hasn't fully collapsed
+        to 1.0/0.0 yet.  Used for the post-close fast-path so we don't
+        wait for the on-chain UMA finalisation."""
+        try:
+            y = float(p_yes)
+            n = float(p_no)
+        except (ValueError, TypeError):
+            return False
+        return (y >= threshold and n <= 1.0 - threshold) or (
+            n >= threshold and y <= 1.0 - threshold
+        )
+
+    @staticmethod
+    def _slot_has_ended(market_data: dict[str, Any], *, buffer_sec: int = 30) -> bool:
+        """True when the market's ``endDate`` is in the past by at least
+        ``buffer_sec`` seconds.  Tolerates ``Z`` suffixes and timezone-naive
+        ISO strings.  Returns False when endDate is missing or unparseable."""
+        end_iso = market_data.get("endDate") or market_data.get("end_date_iso")
+        if not isinstance(end_iso, str) or not end_iso.strip():
+            return False
+        try:
+            cleaned = end_iso.strip().replace("Z", "+00:00")
+            end_dt = datetime.fromisoformat(cleaned)
+            if end_dt.tzinfo is None:
+                end_dt = end_dt.replace(tzinfo=UTC)
+        except ValueError:
+            return False
+        now = datetime.now(UTC)
+        return (now - end_dt).total_seconds() >= buffer_sec
 
     def _fetch_json(self, url: str) -> Any:
         req = urllib.request.Request(

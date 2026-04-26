@@ -199,6 +199,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_iterations=args.max_iterations,
             run_id_prefix=args.run_id_prefix,
             fail_fast=args.fail_fast,
+            align_to_minutes=args.align_to_minutes,
+            align_offset_sec=args.align_offset_sec,
         )
     if args.command == "pause":
         return pause_command(

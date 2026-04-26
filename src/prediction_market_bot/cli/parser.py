@@ -292,6 +292,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Seconds between scheduler ticks. 0 (default) reads scan_interval_sec from app config.",
     )
     scheduler.add_argument(
+        "--align-to-minutes",
+        type=int,
+        default=0,
+        help=(
+            "Align ticks to wall-clock minute boundaries (e.g. 15 = fire at HH:00, "
+            "HH:15, HH:30, HH:45). Overrides --interval-sec sleep timing. 0 disables."
+        ),
+    )
+    scheduler.add_argument(
+        "--align-offset-sec",
+        type=int,
+        default=15,
+        help=(
+            "Seconds to wait AFTER the boundary before firing (used with "
+            "--align-to-minutes). Default 15 — gives the new Polymarket slot a "
+            "moment to lock its reference price before we scan."
+        ),
+    )
+    scheduler.add_argument(
         "--max-iterations",
         type=int,
         default=0,

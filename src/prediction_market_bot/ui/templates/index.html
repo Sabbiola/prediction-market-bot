@@ -20,17 +20,23 @@
 
 {% macro render_chart(points) -%}
 {% if points %}
-<div class="table-wrap">
-<table>
-  <thead>
-    <tr><th>Metric</th><th>Value</th></tr>
-  </thead>
-  <tbody>
-    {% for point in points %}
-    <tr><td>{{ point.label }}</td><td>{{ "%.2f"|format(point.value) }}</td></tr>
-    {% endfor %}
-  </tbody>
-</table>
+<div class="chart-inline" data-chart-points='{{ points | tojson | safe }}'>
+  <div class="chart-inline__viz">
+    <canvas class="chart-inline__canvas" aria-hidden="true"></canvas>
+  </div>
+  <details class="chart-inline__data">
+    <summary class="text-soft" style="font-size:.74rem;cursor:pointer;padding:var(--space-2) 0;">Show raw values</summary>
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>Metric</th><th>Value</th></tr></thead>
+      <tbody>
+        {% for point in points %}
+        <tr><td>{{ point.label }}</td><td class="mono">{{ "%.2f"|format(point.value) }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </details>
 </div>
 {% else %}
 <p class="text-soft" style="font-size:.82rem;padding:var(--space-3) 0;">No chart data available.</p>

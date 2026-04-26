@@ -103,8 +103,12 @@ class PaperExecutor:
 
     @staticmethod
     def _slippage_bps(market_id: str) -> int:
-        # Deterministic per market_id, in range [0, 6] bps.
-        return sum(ord(char) for char in market_id) % 7
+        # Deterministic per market_id, in range [40, 60] bps — matches the
+        # production CLOB ``clob.slippage_bps=50`` setting (±10 bps jitter).
+        # The previous 0-6 bps range was unrealistically optimistic and
+        # over-estimated paper PnL by ~5-10% on each settled trade.
+        jitter = sum(ord(char) for char in market_id) % 21  # 0..20
+        return 40 + jitter
 
     @staticmethod
     def _apply_slippage(limit_price: float, side: OutcomeSide, slippage_bps: int) -> float:
