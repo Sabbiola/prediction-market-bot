@@ -17,13 +17,20 @@ class ScanAgent:
         candidates: list[MarketCandidate] = []
 
         for market in markets:
+            if self.settings.btc_only_mode:
+                title = market.title or ""
+                if not is_btc_updown_market(title, title):
+                    continue
             if not self._is_eligible(market):
                 continue
 
             score, reasons = self._score_market(market)
             candidates.append(MarketCandidate(market=market, scan_score=score, reasons=reasons))
 
-        candidates = self._enforce_btc_single_slot(candidates)
+        candidates = self._enforce_btc_single_slot(
+            candidates,
+            btc_only=self.settings.btc_only_mode,
+        )
         return sorted(candidates, key=self._ranking_key)
 
     # BTC 15 m model sweet spot.
@@ -46,6 +53,8 @@ class ScanAgent:
     def _enforce_btc_single_slot(
         cls,
         candidates: list[MarketCandidate],
+        *,
+        btc_only: bool = False,
     ) -> list[MarketCandidate]:
         """For Polymarket BTC Up/Down series: keep at most ONE slot per tick —
         the next-opened slot whose horizon is in the model's sweet spot
@@ -65,7 +74,7 @@ class ScanAgent:
                 other_candidates.append(candidate)
 
         if not btc_candidates:
-            return other_candidates
+            return [] if btc_only else other_candidates
 
         eligible = [
             c for c in btc_candidates
@@ -73,7 +82,7 @@ class ScanAgent:
         ]
         if not eligible:
             # No slot in the sweet spot → skip BTC this tick (profitable choice).
-            return other_candidates
+            return [] if btc_only else other_candidates
 
         # Pick the in-progress slot (smallest h_to_res still in the sweet spot).
         # Why: a slot's REFERENCE PRICE (BTC at slot open, e.g. 17:15:00) is
@@ -92,7 +101,7 @@ class ScanAgent:
                 c.market.market_id,
             ),
         )
-        return [best_btc, *other_candidates]
+        return [best_btc] if btc_only else [best_btc, *other_candidates]
 
     def _is_eligible(self, market: MarketSnapshot) -> bool:
         if market.status.value != "OPEN":

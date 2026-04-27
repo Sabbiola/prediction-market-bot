@@ -42,6 +42,8 @@ def create_web_app(
     auth = UiAuthService(context.settings, secrets)
     auth.validate_configuration()
     app.state.auth = auth
+    # Jinja2 templates kept for backward-compat (e.g. tests that import them).
+    # The SPA cutover in pages.py serves static/dist/index.html instead.
     app.state.templates = Jinja2Templates(directory=str(_templates_dir()))
     if context.settings.ui_auth.enabled:
         try:

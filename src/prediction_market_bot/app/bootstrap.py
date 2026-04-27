@@ -40,6 +40,7 @@ from prediction_market_bot.infrastructure import (
     OperationalRepositories,
     PostgresOperationalRepositories,
     PolymarketClobExecutor,
+    BtcUpDown15mEventsAdapter,
     PolymarketReadOnlyMarketDataAdapter,
     SandboxChainExecutor,
     SqliteOperationalRepositories,
@@ -201,7 +202,10 @@ def build_live_market_data_provider(
     api_key_env = settings.live_market_data.api_key_env.strip()
     if api_key_env:
         api_key = secret_provider.get(api_key_env)
-    return PolymarketReadOnlyMarketDataAdapter(
+    adapter_cls = (
+        BtcUpDown15mEventsAdapter if settings.scan.btc_only_mode else PolymarketReadOnlyMarketDataAdapter
+    )
+    return adapter_cls(
         endpoint_url=endpoint_url if endpoint_url is not None else settings.live_market_data.endpoint_url,
         timeout_sec=timeout_sec if timeout_sec is not None else settings.live_market_data.timeout_sec,
         max_retries=max_retries if max_retries is not None else settings.live_market_data.max_retries,

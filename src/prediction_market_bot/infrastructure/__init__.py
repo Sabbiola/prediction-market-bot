@@ -26,7 +26,7 @@ from .http_client import (
     RetryableHttpError,
     StructuredHttpClient,
 )
-from .live_market_data import LiveMarketBatch, PolymarketReadOnlyMarketDataAdapter
+from .live_market_data import BtcUpDown15mEventsAdapter, LiveMarketBatch, PolymarketReadOnlyMarketDataAdapter
 from .research import (
     LiveResearchIngestionPipeline,
     OpenAlexWorksResearchSource,
@@ -112,6 +112,7 @@ __all__ = [
     "HttpClientError",
     "RetryableHttpError",
     "PermanentHttpError",
+    "BtcUpDown15mEventsAdapter",
     "LiveMarketBatch",
     "PolymarketReadOnlyMarketDataAdapter",
     "LiveResearchIngestionPipeline",

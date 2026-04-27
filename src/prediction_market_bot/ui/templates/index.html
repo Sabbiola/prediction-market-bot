@@ -578,7 +578,7 @@
             <td>{{ row.evidence_coverage_summary }}</td>
             <td>{{ row.prediction_rationale_summary }}</td>
             <td>{{ row.risk_rationale_summary }}</td>
-            <td><a href="{{ row.prediction_url }}">P</a> | <a href="{{ row.risk_url }}">R</a> | <a href="{{ row.sandbox_tx_url }}">TX</a> | <a href="{{ row.position_url }}">Pos</a></td>
+            <td>{% if row.prediction_url %}<a href="{{ row.prediction_url }}" title="Prediction">P</a>{% else %}—{% endif %} | {% if row.risk_url %}<a href="{{ row.risk_url }}" title="Risk">R</a>{% else %}—{% endif %} | {% if row.sandbox_tx_url %}<a href="{{ row.sandbox_tx_url }}" title="Sandbox TX">TX</a>{% else %}—{% endif %} | {% if row.position_url %}<a href="{{ row.position_url }}" title="Position">Pos</a>{% else %}—{% endif %}</td>
             <td>{{ row.updated_at }}</td>
           </tr>
           {% endfor %}
@@ -708,7 +708,7 @@
             <td class="mono">{{ row.order_id }}</td>
             <td>{{ row.execution_mode }}</td>
             <td>{{ row.intent_rationale }}</td>
-            <td><a href="{{ row.review_queue_url }}">Review</a> | <a href="{{ row.sandbox_tx_url }}">TX</a> | <a href="{{ row.position_url }}">Pos</a></td>
+            <td>{% if row.review_queue_url %}<a href="{{ row.review_queue_url }}" title="Review Queue">Review</a>{% else %}—{% endif %} | {% if row.sandbox_tx_url %}<a href="{{ row.sandbox_tx_url }}" title="Sandbox TX">TX</a>{% else %}—{% endif %} | {% if row.position_url %}<a href="{{ row.position_url }}" title="Position">Pos</a>{% else %}—{% endif %}</td>
             <td>{{ row.message }}</td>
           </tr>
           {% endfor %}
@@ -751,7 +751,7 @@
       <div style="display:flex;flex-direction:column;gap:var(--space-3);">
         <div class="form-group"><label for="tx-run-id">Run ID</label><input id="tx-run-id" type="text" value="{{ sandbox_tx.run_selector.selected_run_id if sandbox_tx.run_selector else '' }}" placeholder="run_id"></div>
         <div class="form-group"><label for="tx-intent-id">Intent ID</label><input id="tx-intent-id" type="text" value="{{ sandbox_tx.active_intent_id }}" placeholder="intent_id"></div>
-        <div class="form-group"><label for="tx-limit">Reconcile Limit</label><input id="tx-limit" type="text" value="100" placeholder="limit"></div>
+        <div class="form-group"><label for="tx-limit">Reconcile Limit</label><input id="tx-limit" type="number" min="1" max="1000" value="100" placeholder="limit"></div>
         <div style="display:flex;gap:var(--space-3);">
           <button id="action-tx-reconcile" type="button" class="btn btn--primary btn--sm" {% if not sandbox_tx.can_reconcile or not can_tx_reconcile %}disabled{% endif %}>Reconcile</button>
           <button id="action-tx-resubmit-safe" type="button" class="btn btn--danger btn--sm" {% if not sandbox_tx.can_resubmit_safe or not can_tx_resubmit_safe %}disabled{% endif %}>Safe Resubmit</button>
@@ -897,7 +897,7 @@
             <td>{{ "%.2f"|format(row.exposure_pct) }}</td>
             <td>{% if row.review_queue_id %}<a href="{{ row.review_queue_url }}" class="mono">{{ row.review_queue_id }}</a>{% else %}n/a{% endif %}</td>
             <td>{% if row.tx_intent_id %}<a href="{{ row.sandbox_tx_url }}" class="mono">{{ row.tx_intent_id }}</a>{% else %}n/a{% endif %}</td>
-            <td><a href="{{ row.prediction_url }}">P</a> | <a href="{{ row.risk_url }}">R</a> | <a href="{{ row.sandbox_tx_url }}">TX</a> | <a href="{{ row.settlement_url }}">S</a></td>
+            <td>{% if row.prediction_url %}<a href="{{ row.prediction_url }}" title="Prediction">P</a>{% else %}—{% endif %} | {% if row.risk_url %}<a href="{{ row.risk_url }}" title="Risk">R</a>{% else %}—{% endif %} | {% if row.sandbox_tx_url %}<a href="{{ row.sandbox_tx_url }}" title="Sandbox TX">TX</a>{% else %}—{% endif %} | {% if row.settlement_url %}<a href="{{ row.settlement_url }}" title="Settlement">S</a>{% else %}—{% endif %}</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -950,7 +950,7 @@
             <td>{% if row.fill_price is none %}n/a{% else %}{{ "%.4f"|format(row.fill_price) }}{% endif %}</td>
             <td class="mono">{{ row.order_id }}</td>
             <td>{{ row.retry_count }}</td>
-            <td><a href="{{ row.review_queue_url }}">R</a> | <a href="{{ row.sandbox_tx_url }}">TX</a> | <a href="{{ row.position_url }}">P</a></td>
+            <td>{% if row.review_queue_url %}<a href="{{ row.review_queue_url }}" title="Review Queue">R</a>{% else %}—{% endif %} | {% if row.sandbox_tx_url %}<a href="{{ row.sandbox_tx_url }}" title="Sandbox TX">TX</a>{% else %}—{% endif %} | {% if row.position_url %}<a href="{{ row.position_url }}" title="Position">P</a>{% else %}—{% endif %}</td>
             <td>{{ row.updated_at }}</td>
           </tr>
           {% endfor %}
@@ -979,7 +979,7 @@
             <td>{{ row.execution_side }}</td>
             <td>{{ row.resolution_reason }}</td>
             <td>{{ row.retry_count }}</td>
-            <td><a href="{{ row.review_queue_url }}">R</a> | <a href="{{ row.sandbox_tx_url }}">TX</a> | <a href="{{ row.position_url }}">P</a></td>
+            <td>{% if row.review_queue_url %}<a href="{{ row.review_queue_url }}" title="Review Queue">R</a>{% else %}—{% endif %} | {% if row.sandbox_tx_url %}<a href="{{ row.sandbox_tx_url }}" title="Sandbox TX">TX</a>{% else %}—{% endif %} | {% if row.position_url %}<a href="{{ row.position_url }}" title="Position">P</a>{% else %}—{% endif %}</td>
           </tr>
           {% endfor %}
         </tbody>

@@ -199,6 +199,7 @@ class ScanSettings:
     min_hours_to_resolution: float = 6.0
     max_spread_bps: int = 300
     anomaly_move_bps: int = 150
+    btc_only_mode: bool = False
 
 
 @dataclass(slots=True, frozen=True)
@@ -787,6 +788,7 @@ class AppSettings:
             min_volume_24h_usd=float(thresholds.get("min_volume_24h_usd", 5_000.0)),
             min_hours_to_resolution=float(thresholds.get("min_hours_to_resolution", 6.0)),
             max_spread_bps=int(thresholds.get("max_spread_bps", 300)),
+            btc_only_mode=_as_bool(thresholds.get("btc_only_mode"), False),
         )
         alt_shadow_inference = _as_dict(model_inference.get("alt_shadow"))
         prediction = PredictionSettings(

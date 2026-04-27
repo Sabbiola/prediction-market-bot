@@ -286,8 +286,7 @@ async def incidents_stream(
                     yield f"event: incidents\ndata: {data}\n\n"
                     last_count = current_count
                 else:
-                    # Send keepalive comment
-                    yield ": keepalive\n\n"
+                    yield "event: heartbeat\ndata: {}\n\n"
             except Exception:
                 yield f"event: error\ndata: {{\"message\": \"internal_error\"}}\n\n"
                 break

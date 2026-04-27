@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time as _time_module
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import perf_counter
@@ -506,3 +507,52 @@ class PolymarketReadOnlyMarketDataAdapter(MarketDataPort):
         if parsed.tzinfo is None:
             return parsed.replace(tzinfo=UTC)
         return parsed.astimezone(UTC)
+
+
+class BtcUpDown15mEventsAdapter(PolymarketReadOnlyMarketDataAdapter):
+    """Fetches BTC Up/Down 15m markets via Gamma /events endpoint.
+
+    Queries events opened in the last 2h and filters for ticker prefix
+    'btc-updown-15m-', then flattens their nested markets list. This avoids
+    downloading 50+ general markets just to find 1-2 BTC 15m slots and works
+    reliably even when BTC slots don't appear in the top-N markets by liquidity.
+    """
+
+    _EVENTS_URL = "https://gamma-api.polymarket.com/events"
+    _BTC_15M_TICKER_PREFIX = "btc-updown-15m-"
+    _LOOKBACK_SEC = 7200  # 2h window — catches current slot + next 3-4 slots
+
+    def _fetch_payload(self, *, limit: int) -> tuple[Any, int, bool, float]:
+        started = perf_counter()
+        start_date_min = int(_time_module.time()) - self._LOOKBACK_SEC
+        response = self.http_client.fetch_json(
+            source="polymarket_live_market_data",
+            url=self._EVENTS_URL,
+            query_params={"start_date_min": str(start_date_min), "limit": str(max(limit, 30))},
+            headers=self.headers,
+            use_cache=False,
+            cache_ttl_sec=0,
+            timeout_sec=self.timeout_sec,
+            max_retries=self.max_retries,
+            retry_backoff_sec=self.retry_backoff_sec,
+            retry_jitter_sec=self.retry_jitter_sec,
+            api_key=self.api_key,
+            api_key_header=self.api_key_header,
+            api_key_prefix=self.api_key_prefix,
+            require_api_key=self.require_api_key,
+        )
+        fetch_duration_ms = max((perf_counter() - started) * 1000.0, 0.0)
+        payload = response.payload
+        if isinstance(payload, list):
+            markets: list[Any] = []
+            for event in payload:
+                if not isinstance(event, dict):
+                    continue
+                ticker = str(event.get("ticker", "")).lower()
+                if not ticker.startswith(self._BTC_15M_TICKER_PREFIX):
+                    continue
+                for m in event.get("markets", []):
+                    if isinstance(m, dict):
+                        markets.append(m)
+            payload = markets
+        return payload, response.retries_used, response.cache_hit, fetch_duration_ms

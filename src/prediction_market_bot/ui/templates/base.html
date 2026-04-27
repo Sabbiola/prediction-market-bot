@@ -213,15 +213,16 @@
           {% endif %}
         </div>
 
-        {% if auth_enabled and auth_user and auth_user.username %}
         <div class="topbar__auth" style="display:flex;align-items:center;gap:8px;margin-left:12px;">
+          <button id="auto-refresh-btn" class="btn btn--ghost btn--sm" title="Toggle auto-refresh (30s)" aria-pressed="false">&#8635; Auto</button>
+          {% if auth_enabled and auth_user and auth_user.username %}
           <span style="font-size:.78rem;color:var(--text-muted);">{{ auth_user.username }}</span>
           <span class="pill pill--{{ auth_user.role | lower | default('viewer') }}">{{ auth_user.role }}</span>
           <form method="post" action="/logout" style="margin:0;">
             <button type="submit" class="btn btn--ghost btn--sm">Logout</button>
           </form>
+          {% endif %}
         </div>
-        {% endif %}
       </header>
 
       <main id="main-content" class="content-area" role="main" tabindex="-1">

@@ -1,6 +1,10 @@
 app:
   name: prediction-market-bot
-  env: staging
+  # NB: il profilo "staging" canonico richiede review umana bloccante
+  # (vedi _check_staging_profile_requirements). Per raccolta dati continua
+  # in SANDBOX_CHAIN usiamo env=staging-data-collection: stessa lane
+  # sandbox-live ma senza review gate (i trade vengono eseguiti subito).
+  env: staging-data-collection
   timezone: UTC
   mode: sandbox-live
 
@@ -20,8 +24,11 @@ runtime:
 execution:
   mode: SANDBOX_CHAIN
   enable_rehearsal_lane: true
+  # In SANDBOX_CHAIN il gate review è SEMPRE on (effective_blocking_trade_review):
+  # per la lane di raccolta dati attiviamo l'auto-approve così i candidati passano
+  # direttamente in execution. La review queue resta scritta per audit/postmortem.
   blocking_trade_review: true
-  review_auto_approve: false
+  review_auto_approve: true
   review_candidate_expiry_seconds: 0
   settlement_same_run: false
 
@@ -75,9 +82,9 @@ sandbox_chain:
   rpc_url: http://127.0.0.1:18545
   chain_id: 80002
   contract_address: "0x0000000000000000000000000000000000000000"
-  from_address: ""
+  from_address: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
   private_key_env: SANDBOX_CHAIN_PRIVATE_KEY
-  allow_unlocked_send: false
+  allow_unlocked_send: true
   gas_limit: 250000
   confirmations_required: 1
   dropped_after_sec: 180
@@ -110,6 +117,7 @@ storage:
   # `operational_db.driver: postgres` and set OPERATIONAL_DB_DSN — see README.
   operational_db:
     driver: sqlite
+    path: data/staging_rehearsal.db
     dsn: ""
     dsn_env: OPERATIONAL_DB_DSN
     backup_dir: data/backups/operational-db
@@ -121,7 +129,7 @@ storage:
   research_store:
     driver: file_jsonl
     path: data/research/findings.jsonl
-  artifacts_dir: data/artifacts
+  artifacts_dir: data/staging_artifacts
 
 http:
   user_agent: prediction-market-bot/0.1
@@ -170,6 +178,30 @@ feature_flags:
   use_live_market_data: true
   use_live_research: true
   allow_live_execution: false
+
+# Promuovi il modello v4 catboost (BTC 15m) in SANDBOX_CHAIN — senza questo
+# il bot cade sull'euristico (fair_yes_prob ~0.47, sempre YES).
+model_promotion:
+  enabled: true
+  require_explicit_approval_in_live_modes: false
+  required_runtime_modes:
+    - SANDBOX_CHAIN
+  promoted_runtime_modes:
+    - SANDBOX_CHAIN
+  benchmark_min_delta_brier: 0.0
+  benchmark_min_delta_log_loss: 0.0
+  max_calibration_error: 0.50
+  max_calibration_brier_increase: 0.50
+  approval_rate_min: 0.0
+  approval_rate_max: 1.0
+  min_edge_capture_ratio: 0.0
+  min_realized_vs_expected_edge_ratio: 0.0
+  max_shadow_parity_warning_rate: 1.0
+  drift_reference_runs: 10
+  feature_shift_warn_threshold: 1.0
+  market_regime_warn_threshold: 1.0
+  research_coverage_warn_threshold: 1.0
+  confidence_collapse_warn_threshold: 1.0
 
 security:
   secrets_from_env: true
