@@ -30,7 +30,7 @@ thresholds:
   # Confidence floor 0.20 rejects only flat coin-flips where the model itself
   # signals no direction.
   min_confidence: 0.10   # Kelly already shrinks low-conviction stakes; edge filter is the real EV gate
-  min_edge_bps: 120      # gross edge; net ≈ 48 bps after 72 bps taker fee
+  min_edge_bps: 80       # lowered from 120 — Polymarket fees currently 0, catches more candidates
   max_spread_bps: 200    # BTC markets are tight (spread ~100 bps)
   min_liquidity_usd: 5000  # BTC 15 m markets have ~$10 K liquidity
   min_volume_24h_usd: 0    # 15 m markets don't accumulate much 24 h volume
