@@ -78,7 +78,7 @@ live_research:
 
 sandbox_chain:
   enabled: true
-  submit_tx: true
+  submit_tx: false
   rpc_url: http://127.0.0.1:18545
   chain_id: 80002
   contract_address: "0x0000000000000000000000000000000000000000"

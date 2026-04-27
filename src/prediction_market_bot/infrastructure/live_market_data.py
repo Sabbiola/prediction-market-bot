@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import time as _time_module
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import perf_counter
@@ -512,23 +511,22 @@ class PolymarketReadOnlyMarketDataAdapter(MarketDataPort):
 class BtcUpDown15mEventsAdapter(PolymarketReadOnlyMarketDataAdapter):
     """Fetches BTC Up/Down 15m markets via Gamma /events endpoint.
 
-    Queries events opened in the last 2h and filters for ticker prefix
-    'btc-updown-15m-', then flattens their nested markets list. This avoids
-    downloading 50+ general markets just to find 1-2 BTC 15m slots and works
-    reliably even when BTC slots don't appear in the top-N markets by liquidity.
+    Uses tag_slug=15M&closed=false to reliably find all active BTC 15m slots.
+    BTC 15m events carry the '15M' tag and are hidden from general listings
+    (hide-from-new tag), so start_date_min or active=true queries miss them.
+    Flattens nested markets from each event; the scanner's _enforce_btc_single_slot
+    then picks the one slot inside the 0.15–0.50h sweet spot.
     """
 
     _EVENTS_URL = "https://gamma-api.polymarket.com/events"
     _BTC_15M_TICKER_PREFIX = "btc-updown-15m-"
-    _LOOKBACK_SEC = 7200  # 2h window — catches current slot + next 3-4 slots
 
     def _fetch_payload(self, *, limit: int) -> tuple[Any, int, bool, float]:
         started = perf_counter()
-        start_date_min = int(_time_module.time()) - self._LOOKBACK_SEC
         response = self.http_client.fetch_json(
             source="polymarket_live_market_data",
             url=self._EVENTS_URL,
-            query_params={"start_date_min": str(start_date_min), "limit": str(max(limit, 30))},
+            query_params={"tag_slug": "15M", "closed": "false", "limit": str(max(limit, 50))},
             headers=self.headers,
             use_cache=False,
             cache_ttl_sec=0,
@@ -553,6 +551,9 @@ class BtcUpDown15mEventsAdapter(PolymarketReadOnlyMarketDataAdapter):
                     continue
                 for m in event.get("markets", []):
                     if isinstance(m, dict):
+                        # propagate event-level endDate into market if missing
+                        if "endDate" not in m and event.get("endDate"):
+                            m = {**m, "endDate": event["endDate"]}
                         markets.append(m)
             payload = markets
         return payload, response.retries_used, response.cache_hit, fetch_duration_ms
