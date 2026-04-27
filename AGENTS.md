@@ -75,32 +75,72 @@ prediction-market-bot/
   README.md
   pyproject.toml
   config/
-    agents.yaml
-    app.yaml
+    agents.yaml          ← catalogo agenti, soglie, metriche, policy
+    app.yaml             ← runtime, storage, scheduler, observability
+    app.staging.yaml     ← override per staging-data-collection / SANDBOX_CHAIN
   docs/
     ARCHITECTURE.md
     BETA_SCOPE.md
     BETA_GATE.md
-    OPERATIONS.md
+    BTC_TRAINING_PIPELINE.md
     DEVELOPMENT.md
     LEGACY_MAPPING.md
+    OPERATIONS.md
     REFACTOR_PLAN.md
+    RUNBOOK.md
+    STRATEGY_RESEARCH.md
+    MODEL_PROMOTION.md
   src/
     prediction_market_bot/
-      app/
-      domain/
-      interfaces/
+      app/               ← bootstrap, settings, application factory
+      cli/               ← comandi click (validate-startup, beta-dress-rehearsal, …)
+      domain/            ← dataclass, enum, value objects — niente I/O
+      interfaces/        ← porte astratte (MarketDataProvider, TradeExecutor, …)
+      ports/             ← [DEPRECATED] alias di interfaces/ — non usare in nuovo codice
       agents/
-      orchestration/
+        contracts.py     ← Protocol interfaces per type checking
+        scanner.py       ← ScanAgent (btc_only_mode + sweet-spot enforcer)
+        research.py      ← ResearchAgent
+        prediction.py    ← PredictionAgent (model_v2 + heuristic fallback)
+        risk.py          ← RiskAgent (Kelly, cap, circuit-breaker)
+        execution.py     ← ExecutionAgent
+        settlement.py    ← SettlementAgent
+        postmortem.py    ← PostmortemAgent
+        btc_feature_enricher.py      ← 32 feature BTC v2 (exchange APIs)
+        prediction_model_runtime.py  ← inferenza artefatto JSON (LightGBM/XGBoost)
+      orchestration/     ← PipelineCoordinator — orchestra il flusso
+      orchestrator/      ← [DEPRECATED] alias di orchestration/ — non usare in nuovo codice
+      infrastructure/    ← adapter concreti (HTTP, Postgres, SQLite, backup, …)
+        live_market_data.py           ← PolymarketReadOnlyMarketDataAdapter
+                                         BtcUpDown15mEventsAdapter (/events endpoint)
+        research.py                  ← LiveResearchIngestionPipeline
+        operational_postgres.py      ← PostgresOperationalRepositories
+        operational_sqlite.py        ← SqliteOperationalRepositories
+        operational_migrations.py    ← schema versioning + upgrade
+        operational_backup.py        ← backup/restore SQLite
+        sandbox_chain.py             ← SandboxChainExecutor (EVM rehearsal)
+        polymarket_clob_executor.py  ← PolymarketClobExecutor (live CLOB)
+        http_client.py               ← StructuredHttpClient
+        alt_data.py                  ← AltDataAdapterRegistry (RSS, Reddit, X)
+        mock_sources.py              ← stub per dry-run e test
+        persistence.py               ← JsonlPersistence
+      services/          ← servizi trasversali (alerting, metrics, …)
+      strategy_research/ ← pipeline offline: ingest, corpus, linkage, LLM enrichment
+      ui/                ← FastAPI + React SPA (operator control plane)
       main.py
   tests/
+  data/
+    models/v4/           ← artefatti modello versionati (btc_15m_best.json, .cbm)
+    metrics/             ← metrics.prom (Prometheus textfile exporter)
+    artifacts/           ← report, audit log, research findings
 ```
 
 ### `config/`
 Contiene la configurazione umana e machine-readable.
 
-- `agents.yaml`: catalogo agenti, soglie, metriche, policy
+- `agents.yaml`: catalogo agenti, soglie, metriche, policy, `btc_only_mode`
 - `app.yaml`: runtime, storage, scheduler, observability, feature flags
+- `app.staging.yaml`: override per `env: staging-data-collection` (SANDBOX_CHAIN, `review_auto_approve: true`, model_promotion permissivo)
 
 ### `docs/`
 Contiene documentazione di prodotto e migrazione.

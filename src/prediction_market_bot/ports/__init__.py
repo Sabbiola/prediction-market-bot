@@ -3,6 +3,15 @@
 Canonical imports should target ``prediction_market_bot.interfaces``.
 """
 
+import warnings
+
+warnings.warn(
+    "prediction_market_bot.ports is deprecated — "
+    "use prediction_market_bot.interfaces instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 from prediction_market_bot.interfaces.ports import (
     ExecutionPort,
     MarketDataPort,
