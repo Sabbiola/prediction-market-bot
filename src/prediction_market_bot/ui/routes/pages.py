@@ -81,13 +81,6 @@ def logout_page(
     return RedirectResponse(url="/", status_code=303)
 
 
-# ── Catch-all: serve SPA for any unmatched GET route ──────────────────────────
-# Must be registered AFTER all API routes in app.py for correct precedence.
-@router.get("/{path:path}", response_class=HTMLResponse)
-def spa_catchall(path: str) -> Response:  # noqa: ARG001
-    return _serve_spa()
-
-
 def _safe_next_path(next_path: str | None) -> str:
     if next_path is None:
         return "/"
@@ -288,3 +281,10 @@ def trader_view(
             "trades": trades,
         },
     )
+
+
+# ── Catch-all: serve SPA for any unmatched GET route ──────────────────────────
+# REGISTERED LAST so specific routes (/trader, /login, /api/...) take precedence.
+@router.get("/{path:path}", response_class=HTMLResponse)
+def spa_catchall(path: str) -> Response:  # noqa: ARG001
+    return _serve_spa()
