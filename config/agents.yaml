@@ -19,19 +19,15 @@ standards:
 
 thresholds:
   # --- ECONOMIC GUARDRAILS ---
-  # Polymarket taker fee ≈ 72 bps (0.72%).  Every approved trade must clear
-  # this fee PLUS leave meaningful expected profit.  Set min_edge_bps well
-  # above the fee break-even; 150 bps leaves ~78 bps net EV per trade.
-  # Single-slot BTC 15m mode — exactly one fresh BTC slot is scanned per tick
-  # (see ScanAgent._enforce_btc_single_slot, sweet spot 0.15-0.50 h_to_res).
-  # Fractional-Kelly sizing means low confidence → tiny stake; we don't need
-  # a high confidence threshold because the sizer already discounts uncertain
-  # trades. Main guardrail is gross edge ≥ 120 bps (net ≈ 48 bps after fee).
-  # Confidence floor 0.20 rejects only flat coin-flips where the model itself
-  # signals no direction.
-  min_confidence: 0.10   # Kelly already shrinks low-conviction stakes; edge filter is the real EV gate
-  min_edge_bps: 80       # lowered from 120 — Polymarket fees currently 0, catches more candidates
-  max_spread_bps: 200    # BTC markets are tight (spread ~100 bps)
+  # SANDBOX_CHAIN paper mode: taker_fee_bps=0 (no real fees).
+  # min_edge_bps is the net EV gate: any gross edge above this is worth taking.
+  # Kelly sizing already scales the stake down for low-conviction trades;
+  # min_bet_usd=1 provides the hard floor (a $0.50 Kelly bet is blocked).
+  # max_spread_bps raised to 400: BTC slots often have 200-400 bps spread
+  # when 10-20 min from resolution; the model edge is the real quality gate.
+  min_confidence: 0.10   # Kelly already shrinks low-conviction stakes
+  min_edge_bps: 30       # lowered from 80: with 0 fees, 30 bps net EV is profitable
+  max_spread_bps: 400    # raised from 200: BTC 15m spread can be 200-400 bps near resolution
   min_liquidity_usd: 5000  # BTC 15 m markets have ~$10 K liquidity
   min_volume_24h_usd: 0    # 15 m markets don't accumulate much 24 h volume
   min_hours_to_resolution: 0  # BTC Up/Down 15 m markets last only 15 minutes
@@ -44,7 +40,7 @@ risk:
   bankroll_usd: 500         # €500 production budget
   # Polymarket taker fee subtracted from raw edge before threshold check.
   # Keep aligned with actual Polymarket fee schedule.
-  taker_fee_bps: 72         # Polymarket taker fee (bps); used in fee-aware edge gate
+  taker_fee_bps: 0          # SANDBOX_CHAIN paper mode: no real fees applied
   fractional_kelly: 0.25
   max_position_pct: 0.02    # max 2% bankroll per trade = ~€10 at €500 bankroll
   max_event_bucket_pct: 0.40       # was 0.08 — BTC 15m series is one event, need headroom
