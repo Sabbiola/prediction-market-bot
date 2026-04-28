@@ -478,6 +478,8 @@
 
       /* Live card */
       .live-card__title { font-size: .85rem; }
+      .live-card__row { flex-direction: column; gap: 1px; margin: 5px 0; }
+      .live-card__row span:last-child { text-align: left; font-size: .85rem; }
 
       /* Winning pill wraps below title */
       .winning-pill { margin-left: 0; margin-top: 6px; display: flex; width: fit-content; }
@@ -567,6 +569,7 @@
     }
     .live-card__row {
       display: flex; justify-content: space-between; align-items: baseline;
+      gap: var(--space-2);
       margin: 6px 0;
       font-size: .82rem;
     }
@@ -576,10 +579,15 @@
       text-transform: uppercase;
       letter-spacing: .08em;
       font-weight: 600;
+      flex-shrink: 0;
     }
     .live-card__row span:last-child {
       font-variant-numeric: tabular-nums;
       font-weight: 600;
+      min-width: 0;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+      text-align: right;
     }
     .live-bar {
       display: flex;
