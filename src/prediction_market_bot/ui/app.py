@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 from time import perf_counter
 from typing import Literal
@@ -25,9 +26,13 @@ logger = logging.getLogger(__name__)
 
 def create_web_app(
     *,
-    config_path: str | Path = "config/app.yaml",
-    agents_config_path: str | Path = "config/agents.yaml",
+    config_path: str | Path = "",
+    agents_config_path: str | Path = "",
 ) -> FastAPI:
+    if not config_path:
+        config_path = os.environ.get("PM_BOT_CONFIG_PATH", "config/app.yaml")
+    if not agents_config_path:
+        agents_config_path = os.environ.get("PM_BOT_AGENTS_CONFIG_PATH", "config/agents.yaml")
     context = build_ui_runtime_context(str(config_path), str(agents_config_path))
     app = FastAPI(
         title="Prediction Market Bot Control Plane",
