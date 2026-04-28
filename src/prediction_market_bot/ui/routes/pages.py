@@ -108,11 +108,11 @@ def trader_view(
     reports_dir = Path("data/artifacts/reports")
     if context_obj is not None:
         settings = getattr(context_obj, "settings", None)
-        base = getattr(settings, "base_data_dir", None) if settings else None
-        if base:
-            candidate = Path(str(base)) / "artifacts" / "reports"
-            if candidate.exists():
-                reports_dir = candidate
+        storage = getattr(settings, "storage", None) if settings else None
+        artifacts_dir = getattr(storage, "artifacts_dir", None) if storage else None
+        if artifacts_dir:
+            candidate = Path(str(artifacts_dir)) / "reports"
+            reports_dir = candidate  # use configured path even if not yet created
 
     starting_balance = 500.0
     trades: list[dict[str, Any]] = []
@@ -188,15 +188,17 @@ def trader_view(
             async_row = async_settlements_by_market.get(market_id)
             if async_row is not None:
                 outcome = async_row["outcome_classification"]
-                pnl = async_row["pnl_usd"]
-                stake = async_row["stake_usd"] or settlement.get("stake_usd") or risk.get("stake_usd", 0)
+                pnl = float(async_row["pnl_usd"] or 0.0)
+                stake = float(async_row["stake_usd"] or settlement.get("stake_usd") or risk.get("stake_usd", 0) or 0)
                 side = async_row["side"] or prediction.get("selected_side", "")
             else:
                 outcome = settlement.get("outcome_classification", "")
                 if outcome not in ("WIN", "LOSS"):
-                    continue  # no resolution yet — skip this pending trade
-                pnl = settlement.get("pnl_usd", 0.0)
-                stake = settlement.get("stake_usd", risk.get("stake_usd", 0))
+                    outcome = "PENDING"
+                    pnl = 0.0
+                else:
+                    pnl = float(settlement.get("pnl_usd") or 0.0)
+                stake = float(settlement.get("stake_usd") or risk.get("stake_usd") or 0)
                 side = prediction.get("selected_side", settlement.get("side", ""))
 
             market_info = scan.get("market", {}).get("market", {})
@@ -212,21 +214,25 @@ def trader_view(
                 "confidence": prediction.get("confidence", 0),
             }
 
-    # Build final trade list sorted by PnL descending (wins first) for readability
-    trades = list(latest_by_market.values())
-    # Compute cumulative balance
+    # Build final trade list: settled trades first (sorted by pnl desc), then pending
+    settled = [t for t in latest_by_market.values() if t["outcome"] in ("WIN", "LOSS")]
+    pending = [t for t in latest_by_market.values() if t["outcome"] == "PENDING"]
+    trades = settled + pending
+
+    # Cumulative balance uses only settled trades (pending pnl = 0 anyway)
     cumulative_pnl = 0.0
     for t in trades:
         cumulative_pnl += t["pnl"]
         t["balance_after"] = starting_balance + cumulative_pnl
-        balance_history.append(starting_balance + cumulative_pnl)
+        if t["outcome"] != "PENDING":
+            balance_history.append(starting_balance + cumulative_pnl)
 
-
-    # Compute metrics
+    # Compute metrics (only settled trades count toward win/loss stats)
     total_trades = len(trades)
     wins = sum(1 for t in trades if t["outcome"] == "WIN")
     losses = sum(1 for t in trades if t["outcome"] == "LOSS")
-    win_rate = (wins / total_trades * 100) if total_trades > 0 else 0.0
+    pending_count = len(pending)
+    win_rate = (wins / (wins + losses) * 100) if (wins + losses) > 0 else 0.0
     total_pnl = cumulative_pnl
     balance = starting_balance + total_pnl
 
@@ -250,7 +256,7 @@ def trader_view(
     # Best win streak
     best_streak = 0
     current_streak = 0
-    for t in trades:
+    for t in settled:
         if t["outcome"] == "WIN":
             current_streak += 1
             best_streak = max(best_streak, current_streak)
@@ -270,6 +276,7 @@ def trader_view(
             "total_runs": total_runs,
             "wins": wins,
             "losses": losses,
+            "pending_count": pending_count,
             "win_rate": win_rate,
             "avg_win": avg_win,
             "avg_loss": avg_loss,

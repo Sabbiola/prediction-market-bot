@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from time import perf_counter
@@ -44,7 +45,9 @@ def create_web_app(
     app.state.auth = auth
     # Jinja2 templates kept for backward-compat (e.g. tests that import them).
     # The SPA cutover in pages.py serves static/dist/index.html instead.
-    app.state.templates = Jinja2Templates(directory=str(_templates_dir()))
+    _tmpl = Jinja2Templates(directory=str(_templates_dir()))
+    _tmpl.env.filters["tojson"] = lambda v, **_: json.dumps(v, ensure_ascii=False)
+    app.state.templates = _tmpl
     if context.settings.ui_auth.enabled:
         try:
             secret = secrets.get(
@@ -125,11 +128,11 @@ def create_web_app(
             )
             response.headers["Content-Security-Policy"] = (
                 "default-src 'self'; "
-                "script-src 'self' 'unsafe-inline'; "
+                "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
                 "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
                 "img-src 'self' data:; "
                 "font-src 'self' https://fonts.gstatic.com; "
-                "connect-src 'self'; "
+                "connect-src 'self' https://api.coinbase.com https://gamma-api.polymarket.com; "
                 "frame-ancestors 'none'"
             )
             return response

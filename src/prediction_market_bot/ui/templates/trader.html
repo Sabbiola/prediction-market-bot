@@ -194,6 +194,13 @@
       background: var(--text-dim);
     }
 
+    /* ── PENDING BADGE ─────────────────────────────────── */
+    .pill--pending {
+      background: rgba(245,158,11,.14);
+      color: #fbbf24;
+      border: 1px solid rgba(245,158,11,.3);
+    }
+
     /* ── STATS STRIP ───────────────────────────────────── */
     .stats {
       display: grid;
@@ -638,7 +645,8 @@
         {% if total_pnl >= 0 %}+{% endif %}${{ "%.2f"|format(total_pnl|abs) }}
       </div>
       <div class="hero-sub">
-        {{ total_trades }} trades
+        {{ wins + losses }} settled
+        {% if pending_count > 0 %}<span class="dot"></span>{{ pending_count }} pending{% endif %}
         <span class="dot"></span>
         {{ total_runs }} runs
       </div>
@@ -661,9 +669,10 @@
       <div class="hero-label">Win Rate</div>
       <div class="hero-value hero-value--amber">{{ "%.1f"|format(win_rate) }}%</div>
       <div class="hero-sub">
-        {{ wins }} wins
+        {{ wins }}W
         <span class="dot"></span>
-        {{ losses }} losses
+        {{ losses }}L
+        {% if pending_count > 0 %}<span class="dot"></span>{{ pending_count }} open{% endif %}
       </div>
     </div>
   </div>
@@ -718,8 +727,8 @@
   <!-- RECENT TRADES -->
   <section class="trades-section">
     <div class="trades-header">
-      <h2>Recent Trades</h2>
-      <span class="trades-count">{{ trades|length }} total</span>
+      <h2>Paper Trades</h2>
+      <span class="trades-count">{{ wins + losses }} settled{% if pending_count > 0 %} · {{ pending_count }} pending{% endif %}</span>
     </div>
     {% if trades %}
     <div class="trades-wrap">
@@ -744,9 +753,18 @@
             <td><span class="pill pill--{{ t.side|lower }}">{{ t.side }}</span></td>
             <td class="mono">${{ "%.0f"|format(t.stake) }}</td>
             <td><span class="pill pill--{{ t.outcome|lower }}">{{ t.outcome }}</span></td>
-            <td class="mono {{ 'pnl--pos' if t.pnl >= 0 else 'pnl--neg' }}">{% if t.pnl >= 0 %}+{% endif %}${{ "%.0f"|format(t.pnl|abs) }}</td>
+            <td class="mono {{ 'pnl--pos' if t.pnl > 0 else ('pnl--neg' if t.pnl < 0 else 'text-soft') }}">
+              {%- if t.outcome == "PENDING" -%}—
+              {%- elif t.pnl >= 0 -%}+${{ "%.0f"|format(t.pnl) }}
+              {%- else -%}-${{ "%.0f"|format(t.pnl|abs) }}
+              {%- endif -%}
+            </td>
             <td class="mono text-soft">{{ "%.0f"|format(t.edge_bps) }} bp</td>
-            <td class="mono">${{ "%.0f"|format(t.balance_after) }}</td>
+            <td class="mono">
+              {%- if t.outcome == "PENDING" -%}—
+              {%- else -%}${{ "%.0f"|format(t.balance_after) }}
+              {%- endif -%}
+            </td>
           </tr>
           {% endfor %}
         </tbody>
@@ -757,8 +775,8 @@
       <div class="empty__icon">
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
       </div>
-      <div class="empty__text">No trades settled yet</div>
-      <div class="empty__sub">The bot is running. Trades will appear here as they settle.</div>
+      <div class="empty__text">No paper trades yet</div>
+      <div class="empty__sub">The bot is running. Filled trades will appear here automatically.</div>
     </div>
     {% endif %}
   </section>
