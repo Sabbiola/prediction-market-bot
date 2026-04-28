@@ -56,9 +56,10 @@ def _resolve_db_path(request: Request) -> Path:
     if context is None:
         return Path("data/runtime.db")
     settings = getattr(context, "settings", None)
-    base = getattr(settings, "base_data_dir", None) if settings else None
-    if base:
-        candidate = Path(str(base)) / "runtime.db"
+    storage = getattr(settings, "storage", None) if settings else None
+    db_path = getattr(storage, "operational_db_path", None) if storage else None
+    if db_path:
+        candidate = Path(str(db_path))
         if candidate.exists():
             return candidate
     return Path("data/runtime.db")
