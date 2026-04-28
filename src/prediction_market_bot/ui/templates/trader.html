@@ -396,10 +396,104 @@
       text-shadow: 0 0 14px rgba(6,182,212,.5);
     }
 
+    /* ── RESPONSIVE: TABLET ≤768px ─────────────────────── */
     @media (max-width: 768px) {
+      .trader-page {
+        padding: var(--space-4) var(--space-3) var(--space-7);
+      }
+      .trader-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: var(--space-3);
+        margin-bottom: var(--space-4);
+      }
+      .trader-controls { width: 100%; justify-content: space-between; }
+
+      /* Hero: PnL full width on top, Balance + WinRate side by side */
+      .hero {
+        grid-template-columns: 1fr 1fr;
+      }
+      .hero-card:first-child { grid-column: 1 / -1; }
+      .hero-card { padding: var(--space-4) var(--space-4); }
+      .hero-value { font-size: 2rem; }
+
+      .chart-wrap { height: 200px; }
+
+      /* Live */
+      .live-grid { grid-template-columns: 1fr; }
+      .live-monitor { padding: var(--space-4); }
+      .live-pnl { font-size: 1.2rem; }
+
+      /* Stats: 2 cols */
+      .stats { grid-template-columns: repeat(2, 1fr); }
+
+      /* Trades table → card list */
+      .trades-wrap table, .trades-wrap tbody { display: block; }
+      .trades-wrap thead { display: none; }
+      .trades-wrap tbody tr {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 2px var(--space-3);
+        padding: var(--space-4);
+        border-bottom: 1px solid var(--border);
+      }
+      .trades-wrap tbody td {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        padding: 2px 0;
+      }
+      .trades-wrap tbody td::before {
+        content: attr(data-label);
+        font-size: .6rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: .1em;
+        color: var(--text-soft);
+      }
+      .td-market {
+        grid-column: 1 / -1;
+        max-width: 100%;
+        white-space: normal;
+        font-size: .88rem;
+      }
+      .td-num, .td-balance { display: none; }
+    }
+
+    /* ── RESPONSIVE: MOBILE ≤480px ──────────────────────── */
+    @media (max-width: 480px) {
+      .trader-page { padding: var(--space-3) var(--space-3) var(--space-7); }
+
+      /* Hero: single column stack */
       .hero { grid-template-columns: 1fr; }
-      .trader-header { flex-direction: column; align-items: flex-start; }
-      .chart-wrap { height: 240px; }
+      .hero-card:first-child { grid-column: 1; }
+      .hero-value { font-size: 1.85rem; }
+      .hero-label { font-size: .62rem; }
+      .hero-sub { font-size: .75rem; }
+
+      /* BTC strip: 2+1 layout */
+      .btc-strip { grid-template-columns: 1fr 1fr; gap: var(--space-2); }
+      .btc-strip__cell:last-child { grid-column: 1 / -1; }
+      .btc-strip__value { font-size: .95rem; }
+
+      /* Live card */
+      .live-card__title { font-size: .85rem; }
+
+      /* Winning pill wraps below title */
+      .winning-pill { margin-left: 0; margin-top: 6px; display: flex; width: fit-content; }
+
+      /* Live bar labels hidden on very narrow bars */
+      .live-bar { height: 28px; }
+      .live-bar__yes, .live-bar__no { font-size: .7rem; }
+
+      /* Refresh bar */
+      .refresh-bar { flex-direction: column; align-items: flex-start; gap: var(--space-2); }
+
+      /* Chart smaller */
+      .chart-wrap { height: 180px; }
+
+      /* Trades table: single col per row */
+      .trades-wrap tbody tr { grid-template-columns: 1fr 1fr; }
     }
 
     /* ── LIVE POSITION MONITOR ─────────────────────────── */
@@ -748,19 +842,19 @@
         <tbody>
           {% for t in trades|reverse %}
           <tr>
-            <td class="mono text-soft">{{ trades|length - loop.index0 }}</td>
-            <td class="td-market" title="{{ t.title }}">{{ t.title[:54] }}{% if t.title|length > 54 %}…{% endif %}</td>
-            <td><span class="pill pill--{{ t.side|lower }}">{{ t.side }}</span></td>
-            <td class="mono">${{ "%.0f"|format(t.stake) }}</td>
-            <td><span class="pill pill--{{ t.outcome|lower }}">{{ t.outcome }}</span></td>
-            <td class="mono {{ 'pnl--pos' if t.pnl > 0 else ('pnl--neg' if t.pnl < 0 else 'text-soft') }}">
+            <td class="td-num mono text-soft" data-label="#">{{ trades|length - loop.index0 }}</td>
+            <td class="td-market" data-label="Market" title="{{ t.title }}">{{ t.title[:54] }}{% if t.title|length > 54 %}…{% endif %}</td>
+            <td data-label="Side"><span class="pill pill--{{ t.side|lower }}">{{ t.side }}</span></td>
+            <td class="mono" data-label="Stake">${{ "%.0f"|format(t.stake) }}</td>
+            <td data-label="Result"><span class="pill pill--{{ t.outcome|lower }}">{{ t.outcome }}</span></td>
+            <td class="mono {{ 'pnl--pos' if t.pnl > 0 else ('pnl--neg' if t.pnl < 0 else 'text-soft') }}" data-label="P&L">
               {%- if t.outcome == "PENDING" -%}—
               {%- elif t.pnl >= 0 -%}+${{ "%.0f"|format(t.pnl) }}
               {%- else -%}-${{ "%.0f"|format(t.pnl|abs) }}
               {%- endif -%}
             </td>
-            <td class="mono text-soft">{{ "%.0f"|format(t.edge_bps) }} bp</td>
-            <td class="mono">
+            <td class="mono text-soft" data-label="Edge">{{ "%.0f"|format(t.edge_bps) }} bp</td>
+            <td class="td-balance mono" data-label="Balance">
               {%- if t.outcome == "PENDING" -%}—
               {%- else -%}${{ "%.0f"|format(t.balance_after) }}
               {%- endif -%}
@@ -1096,7 +1190,7 @@
     const totC = total >= 0 ? 'live-pnl--pos' : 'live-pnl--neg';
 
     body.innerHTML =
-      '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:var(--space-3);margin-bottom:var(--space-4);">' +
+      '<div class="btc-strip">' +
       '<div><div style="font-size:.7rem;color:var(--text-soft);text-transform:uppercase;letter-spacing:.12em;font-weight:700;">Realized</div><div class="live-pnl ' + realC + '">' + fmtUsd(realized) + '</div></div>' +
       '<div><div style="font-size:.7rem;color:var(--text-soft);text-transform:uppercase;letter-spacing:.12em;font-weight:700;">Unrealized</div><div class="live-pnl ' + unrC + '">' + fmtUsd(unreal) + '</div></div>' +
       '<div><div style="font-size:.7rem;color:var(--text-soft);text-transform:uppercase;letter-spacing:.12em;font-weight:700;">Total</div><div class="live-pnl ' + totC + '">' + fmtUsd(total) + '</div></div>' +
