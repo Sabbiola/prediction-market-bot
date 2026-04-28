@@ -47,8 +47,12 @@ risk:
   max_category_bucket_pct: 0.50    # was 0.10 — same category domination, widened
   max_portfolio_exposure_pct: 0.40 # was 0.10 — with settlement_same_run=false positions accumulate for ~15min until UMA resolves → need more concurrent headroom
   max_per_market_exposure_pct: 0.02
-  max_daily_loss_pct: 0.05  # circuit-breaker: -5% daily = -€25 on €500 bankroll
-  daily_stop_loss_pct: 0.05
+  # Paper-test mode: NO daily stop loss — keep collecting data uninterrupted.
+  # Auto-refill: when realized_pnl_usd drives balance ≤ 0, reset PnL to 0
+  # (effectively "topping up" the $500 bankroll). Implemented via watcher
+  # script (scripts/auto_refill_bankroll.py) running as systemd timer.
+  max_daily_loss_pct: 0.0   # disabled (was 0.05) — paper mode collects data
+  daily_stop_loss_pct: 0.0  # disabled (was 0.05) — paper mode collects data
   max_snapshot_age_sec: 900
   global_circuit_breaker: false
   manual_pause: false
@@ -58,7 +62,7 @@ risk:
     - edge_below_threshold
     - stake_below_min_bet
     - venue_rejected
-    - daily_loss_limit
+    # daily_loss_limit removed — paper mode collects data without circuit breaker
 
 observability:
   required_fields:
