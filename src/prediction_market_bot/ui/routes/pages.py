@@ -210,8 +210,8 @@ def trader_view(
                 "stake": stake,
                 "pnl": pnl,
                 "outcome": outcome,
-                "edge_bps": prediction.get("edge_bps", 0),
-                "confidence": prediction.get("confidence", 0),
+                "edge_bps": int(prediction.get("edge_bps") or 0),
+                "confidence": float(prediction.get("confidence") or 0),
             }
 
     # Build final trade list: settled trades first (sorted by pnl desc), then pending
