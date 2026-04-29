@@ -21,7 +21,7 @@ const PositionsPage   = lazy(() => import('@/pages/tabs/PositionsPage'))
 const SettlementPage  = lazy(() => import('@/pages/tabs/SettlementPage'))
 const ReportsPage     = lazy(() => import('@/pages/tabs/ReportsPage'))
 const SystemPage      = lazy(() => import('@/pages/tabs/SystemPage'))
-const TraderLivePage  = lazy(() => import('@/pages/tabs/TraderLivePage'))
+const TraderDashboardPage = lazy(() => import('@/pages/tabs/TraderDashboardPage'))
 
 function TabContent({ section }: { section: TabSection }) {
   switch (section) {
@@ -37,8 +37,7 @@ function TabContent({ section }: { section: TabSection }) {
     case 'settlement':   return <SettlementPage />
     case 'reports':      return <ReportsPage />
     case 'system':       return <SystemPage />
-    case 'trader-a':     return <TraderLivePage endpoint="/api/trader/live/a" modelLabel="Model A — v4 (current)" />
-    case 'trader-b':     return <TraderLivePage endpoint="/api/trader/live/b" modelLabel="Model B — v5 (candidate)" />
+    case 'trader':       return <TraderDashboardPage />
   }
 }
 
@@ -49,7 +48,10 @@ interface AppShellProps {
 }
 
 export default function AppShell({ username, role, authEnabled }: AppShellProps) {
-  const [section, setSection] = useState<TabSection>('overview')
+  const [section, setSection] = useState<TabSection>(() => {
+    const path = window.location.pathname.replace(/^\//, '')
+    return (SECTIONS as string[]).includes(path) ? (path as TabSection) : 'overview'
+  })
   const [mobileOpen, setMobileOpen] = useState(false)
   const { status: sseStatus } = useSSE()
 

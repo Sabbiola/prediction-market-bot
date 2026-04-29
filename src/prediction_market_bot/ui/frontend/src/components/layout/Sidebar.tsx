@@ -59,12 +59,8 @@ const NAV_ITEMS: NavItem[] = [
     icon: <svg viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="7" stroke="currentColor" strokeWidth="1.5"/><path d="M2 9h2l2-4 3 8 2-6 1.5 2H16" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>,
   },
   {
-    section: 'trader-a', label: 'Model A (v4)', tooltip: 'Live Trader - Model A (v4)',
-    icon: <svg viewBox="0 0 18 18" fill="none"><polyline points="2,14 5,9 8,11 11,5 14,8 16,6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/><circle cx="16" cy="6" r="1.5" fill="currentColor"/></svg>,
-  },
-  {
-    section: 'trader-b', label: 'Model B (v5)', tooltip: 'Live Trader - Model B (v5)',
-    icon: <svg viewBox="0 0 18 18" fill="none"><polyline points="2,14 5,9 8,11 11,5 14,8 16,6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/><circle cx="16" cy="6" r="1.5" fill="var(--color-ok, #22c55e)"/></svg>,
+    section: 'trader', label: 'Trader', tooltip: 'Trader Dashboard — Model A vs B',
+    icon: <svg viewBox="0 0 18 18" fill="none"><polyline points="2,14 5,9 8,11 11,5 14,8 16,6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" fill="none"/><circle cx="16" cy="6" r="1.5" fill="currentColor"/><circle cx="11" cy="5" r="1.2" fill="var(--color-ok, #22c55e)" opacity=".9"/></svg>,
   },
 ]
 
@@ -72,7 +68,7 @@ const CORE_SECTIONS: TabSection[] = ['overview']
 const INTEL_SECTIONS: TabSection[] = ['scanner', 'research', 'prediction', 'risk']
 const OPS_SECTIONS: TabSection[] = ['review-queue', 'execution', 'sandbox-tx', 'positions', 'settlement']
 const REPORT_SECTIONS: TabSection[] = ['reports', 'system']
-const TRADER_SECTIONS: TabSection[] = ['trader-a', 'trader-b']
+const TRADER_SECTIONS: TabSection[] = ['trader']
 
 interface SidebarProps {
   active: TabSection

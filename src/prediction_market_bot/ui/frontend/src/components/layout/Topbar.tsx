@@ -16,8 +16,7 @@ const TAB_LABELS: Record<TabSection, string> = {
   settlement: 'Settlement',
   reports: 'Reports',
   system: 'System Health',
-  'trader-a': 'Model A (v4)',
-  'trader-b': 'Model B (v5)',
+  'trader': 'Trader Dashboard',
 }
 
 interface TopbarProps {

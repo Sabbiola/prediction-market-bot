@@ -833,8 +833,7 @@ export type SseSection =
   | 'settlement'
   | 'reports'
   | 'system'
-  | 'trader-a'
-  | 'trader-b'
+  | 'trader'
 
 export type TabSection = SseSection
 
@@ -851,8 +850,7 @@ export const TAB_SECTIONS: TabSection[] = [
   'settlement',
   'reports',
   'system',
-  'trader-a',
-  'trader-b',
+  'trader',
 ]
 
 // ── Trader Live (per-model position monitor) ────────────────────────────────

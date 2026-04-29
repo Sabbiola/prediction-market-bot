@@ -87,9 +87,9 @@ def _safe_next_path(next_path: str | None) -> str:
 
 
 @router.get("/trader", response_class=HTMLResponse)
-def trader_redirect() -> Response:
-    """Old Jinja2 trader page — replaced by React SPA. Redirect to root."""
-    return RedirectResponse(url="/", status_code=301)
+def trader_page() -> Response:
+    """Trader dashboard — served by React SPA (auto-selects trader tab via URL path)."""
+    return _serve_spa()
 
 
 # ── Catch-all: serve SPA for any unmatched GET route ──────────────────────────
