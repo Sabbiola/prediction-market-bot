@@ -311,6 +311,16 @@ class RuntimeCalibrationContract:
                 if base <= boundary:
                     return _clamp_probability(value)
             return _clamp_probability(values_raw[-1])
+        if method == "temperature":
+            T = float(_as_float(self.parameters.get("T"), default=1.0))
+            T = max(T, 1e-6)
+            logit = math.log(base / (1.0 - base))
+            value = logit / T
+            if value >= 0.0:
+                exp_neg = math.exp(-value)
+                return _clamp_probability(1.0 / (1.0 + exp_neg))
+            exp_pos = math.exp(value)
+            return _clamp_probability(exp_pos / (1.0 + exp_pos))
         raise PredictionModelArtifactError(f"unsupported_calibration_method={self.method}")
 
 
@@ -555,6 +565,17 @@ class PredictionModelArtifactLoader:
                 calibration_version=calibration_version,
                 method="isotonic",
                 parameters={"boundaries": boundaries, "values": values},
+            )
+        if method == "temperature":
+            if not isinstance(parameters_raw, Mapping):
+                raise PredictionModelArtifactError(f"invalid_temperature_parameters path={source_path}")
+            T_raw = parameters_raw.get("T")
+            if not isinstance(T_raw, (int, float)):
+                raise PredictionModelArtifactError(f"invalid_temperature_T path={source_path}")
+            return RuntimeCalibrationContract(
+                calibration_version=calibration_version,
+                method="temperature",
+                parameters={"T": float(T_raw)},
             )
         raise PredictionModelArtifactError(
             f"unsupported_calibration_method path={source_path} method={method or 'unset'}"

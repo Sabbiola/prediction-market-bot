@@ -188,6 +188,33 @@ def enrich_with_btc_features(
     )
 
 
+def enrich_with_slot_features(
+    base: RuntimePredictionFeatures,
+    slot_features: dict[str, float],
+) -> RuntimePredictionFeatures:
+    """Overlay slot-specific latency arbitrage features onto the existing feature dict.
+
+    New keys added:
+      f_slot_elapsed_frac  — fraction of 15-min slot elapsed [0, 1)
+      f_btc_vs_anchor_pct  — (BTC_now - slot_anchor) / slot_anchor * 100, clipped [-3, 3]
+      f_poly_misprice      — Polymarket YES price minus sigmoid-implied fair value
+
+    Returns `base` unchanged when slot_features is empty (graceful degradation).
+    Schema version is preserved so the model artifact's parity check is unaffected.
+    """
+    if not slot_features:
+        return base
+    merged = dict(base.values)
+    for key, value in slot_features.items():
+        if math.isfinite(value):
+            merged[key] = value
+    return RuntimePredictionFeatures(
+        schema_version=base.schema_version,
+        decision_timestamp_utc=base.decision_timestamp_utc,
+        values=merged,
+    )
+
+
 def build_alt_shadow_prediction_features(
     candidate: MarketCandidate,
     research: ResearchPacket,

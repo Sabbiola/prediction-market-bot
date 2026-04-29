@@ -1,13 +1,20 @@
+# Model B (v5) agents config — uses v5 artifact as primary model.
+# All other agent config is identical to agents.yaml.
+# Run with:
+#   python -m prediction_market_bot.main run \
+#     --config config/app_model_b.yaml \
+#     --agents-config config/agents_model_b.yaml
+
 version: 2
 project:
-  name: prediction-market-bot
+  name: prediction-market-bot-v5
   mode: dry-run
   venue: polymarket
   timezone: UTC
   architecture: multi-agent
   source_of_truth:
-    agent_catalog: config/agents.yaml
-    runtime_settings: config/app.yaml
+    agent_catalog: config/agents_model_b.yaml
+    runtime_settings: config/app_model_b.yaml
     contracts: src/prediction_market_bot/domain/models.py
 
 standards:
@@ -18,84 +25,34 @@ standards:
   allow_business_logic_in_ui: false
 
 thresholds:
-  # --- ECONOMIC GUARDRAILS ---
-  # SANDBOX_CHAIN paper mode: taker_fee_bps=0 (no real fees).
-  # min_edge_bps is the net EV gate: any gross edge above this is worth taking.
-  # Kelly sizing already scales the stake down for low-conviction trades;
-  # min_bet_usd=1 provides the hard floor (a $0.50 Kelly bet is blocked).
-  # max_spread_bps raised to 400: BTC slots often have 200-400 bps spread
-  # when 10-20 min from resolution; the model edge is the real quality gate.
-  min_confidence: 0.10   # Kelly already shrinks low-conviction stakes
-  min_edge_bps: 30       # lowered from 80: with 0 fees, 30 bps net EV is profitable
-  max_spread_bps: 400    # raised from 200: BTC 15m spread can be 200-400 bps near resolution
-  min_liquidity_usd: 5000  # BTC 15 m markets have ~$10 K liquidity
-  min_volume_24h_usd: 0    # 15 m markets don't accumulate much 24 h volume
-  min_hours_to_resolution: 0  # BTC Up/Down 15 m markets last only 15 minutes
-  # Filtra i mercati non-BTC subito dopo il fetch (prima di research/prediction).
-  # Il bot processa solo lo slot BTC Up/Down 15m corretto: ~1 candidato per
-  # tick invece di ~43, RAM e CPU minimi (sufficiente VPS 1 vCPU/1 GB).
+  min_confidence: 0.10
+  min_edge_bps: 30
+  max_spread_bps: 400
+  min_liquidity_usd: 5000
+  min_volume_24h_usd: 0
+  min_hours_to_resolution: 0
   btc_only_mode: true
 
 risk:
-  bankroll_usd: 500         # €500 production budget
-  # Polymarket taker fee subtracted from raw edge before threshold check.
-  # Keep aligned with actual Polymarket fee schedule.
-  taker_fee_bps: 0          # SANDBOX_CHAIN paper mode: no real fees applied
+  bankroll_usd: 500
+  taker_fee_bps: 0
   fractional_kelly: 0.25
-  max_position_pct: 0.02    # max 2% bankroll per trade = ~€10 at €500 bankroll
-  max_event_bucket_pct: 0.40       # was 0.08 — BTC 15m series is one event, need headroom
-  max_category_bucket_pct: 0.50    # was 0.10 — same category domination, widened
-  max_portfolio_exposure_pct: 0.40 # was 0.10 — with settlement_same_run=false positions accumulate for ~15min until UMA resolves → need more concurrent headroom
+  max_position_pct: 0.02
+  max_event_bucket_pct: 0.40
+  max_category_bucket_pct: 0.50
+  max_portfolio_exposure_pct: 0.40
   max_per_market_exposure_pct: 0.02
-  # Paper-test mode: NO daily stop loss — keep collecting data uninterrupted.
-  # Auto-refill: when realized_pnl_usd drives balance ≤ 0, reset PnL to 0
-  # (effectively "topping up" the $500 bankroll). Implemented via watcher
-  # script (scripts/auto_refill_bankroll.py) running as systemd timer.
-  max_daily_loss_pct: 0.0   # disabled (was 0.05) — paper mode collects data
-  daily_stop_loss_pct: 0.0  # disabled (was 0.05) — paper mode collects data
+  max_daily_loss_pct: 0.0
+  daily_stop_loss_pct: 0.0
   max_snapshot_age_sec: 900
   global_circuit_breaker: false
   manual_pause: false
-  min_bet_usd: 1            # min trade size in USD (1 USDC)
+  min_bet_usd: 1
   hard_blocks:
     - confidence_below_threshold
     - edge_below_threshold
     - stake_below_min_bet
     - venue_rejected
-    # daily_loss_limit removed — paper mode collects data without circuit breaker
-
-observability:
-  required_fields:
-    - run_id
-    - market_id
-    - agent_name
-    - started_at
-    - finished_at
-    - duration_ms
-    - outcome
-    - reason_codes
-  metrics:
-    - pipeline_runs_total
-    - pipeline_failures_total
-    - trades_approved_total
-    - orders_submitted_total
-    - settled_pnl_usd_total
-    - postmortems_total
-
-persistence:
-  artifacts:
-    - market_candidates
-    - research_packets
-    - prediction_results
-    - risk_decisions
-    - order_intents
-    - execution_results
-    - settled_trades
-    - postmortem_reports
-  retention:
-    runtime_days: 90
-    research_days: 180
-    postmortem_days: 365
 
 agents:
   scanner:
@@ -168,30 +125,28 @@ agents:
       - prediction_result
     model_family: xgboost_plus_llm
     components:
-      # market_weight reduced to 0.10: giving the crowd price 45% weight caused
-      # fair_yes_prob ≈ market_yes_prob (circular), yielding near-zero edge.
-      # Research-driven signals now dominate the heuristic blend.
       market_weight: 0.10
       narrative_weight: 0.65
       structure_weight: 0.25
     model_inference:
+      # ---- v5 model as PRIMARY (trades) ----
       engine: model_v2
-      model_artifact_path: data/models/v4/btc_15m_best.json
-      calibration_artifact_path: ""   # calibration embedded in artifact JSON
+      model_artifact_path: data/models/v5/btc_15m_best.json
+      calibration_artifact_path: ""
       feature_schema_version: btc-v2-15m
       strict_feature_parity: true
       fallback_to_heuristic: true
       forced_heuristic_reason: ""
       alt_shadow:
+        # v4 model runs as shadow-only observer
         enabled: true
-        model_artifact_path: data/models/v5/btc_15m_best.json
-        calibration_artifact_path: ""   # calibration embedded in artifact JSON
+        model_artifact_path: data/models/v4/btc_15m_best.json
+        calibration_artifact_path: ""
         feature_schema_version: btc-v2-15m
         strict_feature_parity: true
-        promoted_enabled: false         # shadow only — never trades, only compares
-        promoted_runtime_modes:
-          - SANDBOX_CHAIN
-        required_source_coverage: []    # BTC slot model — no LLM source required
+        promoted_enabled: false
+        promoted_runtime_modes: []
+        required_source_coverage: []
         require_llm_enrichment: false
     responsibilities:
       - estimate_fair_probability

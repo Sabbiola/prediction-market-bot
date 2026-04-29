@@ -21,6 +21,7 @@ from prediction_market_bot.agents.prediction_runtime_features import (
     RuntimePredictionFeatures,
     build_runtime_prediction_features,
     enrich_with_btc_features,
+    enrich_with_slot_features,
 )
 from prediction_market_bot.agents.btc_feature_enricher import BtcFeatureEnricher, is_btc_updown_market
 from prediction_market_bot.agents.prediction_shadow_engine import run_shadow_mode
@@ -89,6 +90,14 @@ class PredictionAgent:
                     btc_feats,
                     schema_version=expected_schema or "btc-v2-15m",
                 )
+            # Slot-specific latency arb features: elapsed fraction, BTC vs anchor, Polymarket misprice.
+            # Safe to call even when btc_feats is empty; degrades gracefully.
+            slot_feats = self._btc_enricher.get_slot_features(
+                hours_to_resolution=float(candidate.market.hours_to_resolution),
+                market_updated_at=candidate.market.market.updated_at,
+                yes_price=float(candidate.market.yes_price),
+            )
+            runtime_features = enrich_with_slot_features(runtime_features, slot_feats)
         self.last_runtime_features = {
             "schema_version": runtime_features.schema_version,
             "decision_timestamp_utc": runtime_features.decision_timestamp_utc.isoformat(),

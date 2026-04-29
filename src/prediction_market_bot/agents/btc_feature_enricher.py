@@ -31,7 +31,7 @@ import logging
 import math
 import time
 import urllib.request
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from threading import Lock
 from typing import Any, Protocol
 
@@ -70,6 +70,60 @@ CACHE_TTL_SEC = 60  # re-fetch at most once per minute
 ALTME_FNG_URL = "https://api.alternative.me/fng/?limit=1"
 COINBASE_SPOT_URL = "https://api.coinbase.com/v2/prices/BTC-USD/spot"
 KRAKEN_TICKER_URL = "https://api.kraken.com/0/public/Ticker?pair=XBTUSD"
+
+
+# Slot anchor cache: once a slot has started its BTC reference price never changes.
+# Key = slot_start ISO string, value = BTC open price (float).
+_SLOT_ANCHOR_CACHE: dict[str, float] = {}
+
+
+def _fetch_slot_anchor_btc(
+    slot_start_iso: str,
+    *,
+    timeout_sec: float = 8.0,
+    http_client: _HttpClientLike | None = None,
+) -> float | None:
+    """BTC open price at the start of a Polymarket 15-min slot.
+
+    Fetches the Coinbase Exchange 1-minute candle whose timestamp matches
+    slot_start and returns its open.  Result cached forever per slot_start_iso
+    because the anchor is immutable once the slot opens.
+    """
+    cached = _SLOT_ANCHOR_CACHE.get(slot_start_iso)
+    if cached is not None:
+        return cached
+    try:
+        cleaned = slot_start_iso.replace("Z", "+00:00")
+        slot_start = datetime.fromisoformat(cleaned)
+        if slot_start.tzinfo is None:
+            slot_start = slot_start.replace(tzinfo=UTC)
+    except ValueError:
+        return None
+    end = slot_start + timedelta(minutes=2)
+    url = (
+        "https://api.exchange.coinbase.com/products/BTC-USD/candles"
+        f"?granularity=60"
+        f"&start={slot_start.isoformat().replace('+00:00', 'Z')}"
+        f"&end={end.isoformat().replace('+00:00', 'Z')}"
+    )
+    candles = _safe_json_get(url, timeout=timeout_sec, http_client=http_client, source="slot_anchor")
+    if not isinstance(candles, list) or not candles:
+        return None
+    # Coinbase returns DESC: [[time, low, high, open, close, vol], ...]
+    target_unix = int(slot_start.timestamp())
+    chosen = None
+    for c in candles:
+        if isinstance(c, list) and len(c) >= 4 and int(c[0]) == target_unix:
+            chosen = c
+            break
+    if chosen is None:
+        chosen = sorted(candles, key=lambda x: x[0])[0]
+    try:
+        anchor = float(chosen[3])  # open
+    except (ValueError, TypeError, IndexError):
+        return None
+    _SLOT_ANCHOR_CACHE[slot_start_iso] = anchor
+    return anchor
 
 
 def is_btc_updown_market(slug: str, question: str) -> bool:
@@ -180,6 +234,63 @@ class BtcFeatureEnricher:
             return feats
         except Exception as exc:
             logger.warning("btc_feature_enricher_compute_error error=%s", exc)
+            return {}
+
+    def get_btc_spot(self) -> float | None:
+        """Return the most recently cached Coinbase BTC/USD spot price."""
+        return self._get_cached_data().get("cb_price")
+
+    def get_slot_features(
+        self,
+        *,
+        hours_to_resolution: float,
+        market_updated_at: datetime,
+        yes_price: float,
+    ) -> dict[str, float]:
+        """Slot-specific latency arbitrage features for BTC Up/Down 15-min markets.
+
+        Three signals:
+          f_slot_elapsed_frac  — fraction of the 15-min slot already elapsed [0, 1)
+          f_btc_vs_anchor_pct  — (BTC_now - BTC_slot_anchor) / BTC_slot_anchor * 100
+          f_poly_misprice      — Polymarket YES price minus sigmoid-implied fair value
+
+        Returns an empty dict on any error so the prediction pipeline degrades gracefully.
+        """
+        try:
+            now_utc = datetime.now(UTC)
+            updated = market_updated_at if market_updated_at.tzinfo else market_updated_at.replace(tzinfo=UTC)
+            slot_close = updated + timedelta(hours=float(hours_to_resolution))
+            slot_start = slot_close - timedelta(minutes=15)
+            slot_start_iso = slot_start.isoformat().replace("+00:00", "Z")
+
+            elapsed_sec = (now_utc - slot_start).total_seconds()
+            f_slot_elapsed_frac = _clamp(elapsed_sec / 900.0, 0.0, 1.0)
+
+            btc_spot = self.get_btc_spot()
+            anchor = _fetch_slot_anchor_btc(
+                slot_start_iso,
+                timeout_sec=self.timeout_sec,
+                http_client=self._http_client,
+            )
+
+            feats: dict[str, float] = {"f_slot_elapsed_frac": f_slot_elapsed_frac}
+
+            if btc_spot is None or anchor is None or anchor <= 0:
+                return feats
+
+            raw_delta_pct = (btc_spot - anchor) / anchor * 100.0
+            f_btc_vs_anchor_pct = _clamp(raw_delta_pct, -3.0, 3.0)
+            feats["f_btc_vs_anchor_pct"] = f_btc_vs_anchor_pct
+
+            # Sigmoid-implied fair YES given BTC position vs anchor.
+            # Calibration: ±0.3 % move → ~95 % certainty for the slot winner.
+            implied_fair_yes = 1.0 / (1.0 + math.exp(-raw_delta_pct * 10.0))
+            f_poly_misprice = _clamp(float(yes_price) - implied_fair_yes, -0.5, 0.5)
+            feats["f_poly_misprice"] = f_poly_misprice
+
+            return feats
+        except Exception as exc:
+            logger.warning("btc_slot_features_error: %s", exc)
             return {}
 
     # ------------------------------------------------------------------

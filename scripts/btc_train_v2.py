@@ -150,6 +150,9 @@ FEATURE_NAMES = [
     # Cross-timeframe & gap features [NEW]
     "f_btc_gap_open",       # (curr_open - prev_close) / prev_close — known at candle start
     "f_btc_rsi_1h",         # RSI(14) on 1h bars (resampled from 5m, no extra data)
+    # Slot-specific latency arb features [NEW]
+    "f_slot_elapsed_frac",  # fraction of 15-min slot elapsed at decision time [0, 1)
+    "f_btc_vs_anchor_pct",  # (BTC_now - slot_anchor) / slot_anchor * 100, clipped [-3, 3]
 ]
 N_FEATURES = len(FEATURE_NAMES)
 
@@ -446,6 +449,26 @@ def compute_features(
     rsi_1h_raw = _rsi(hourly_closes, min(14, max(len(hourly_closes) - 1, 1)))
     f_rsi_1h = _clamp((rsi_1h_raw - 0.5) * 2.0, -1.0, 1.0)
 
+    # --- Slot latency arb features [NEW] ---
+    # Align to the 15-min UTC slot boundary: slot_start_ms = floor(open_time_ms / 900_000) * 900_000.
+    # For 5m candles: three decision points per slot (elapsed ≈ 0, 0.33, 0.67).
+    # For 15m candles: always at slot start (elapsed = 0, anchor_pct ≈ 0) — harmless near-zero features.
+    slot_start_ms = (candles[idx]["open_time_ms"] // 900_000) * 900_000
+    elapsed_ms = candles[idx]["open_time_ms"] - slot_start_ms
+    f_slot_elapsed_frac = _clamp(elapsed_ms / 900_000, 0.0, 1.0)
+
+    # BTC anchor = open of the first candle in the current slot.
+    # Walk back from idx until we reach the slot boundary.
+    anchor_open = candles[idx]["open"]
+    for _k in range(min(4, idx)):
+        _cand = candles[idx - _k]
+        if _cand["open_time_ms"] <= slot_start_ms:
+            anchor_open = _cand["open"]
+            break
+    f_btc_vs_anchor_pct = _clamp(
+        (prev["close"] - anchor_open) / max(anchor_open, 1e-8) * 100, -3.0, 3.0
+    )
+
     return [
         _clamp(r1,  -0.10, 0.10),
         _clamp(r3,  -0.15, 0.15),
@@ -465,7 +488,8 @@ def compute_features(
         cb_r1, cb_r3,
         cb_bn_spread1, cb_bn_spread3, cb_vol_dom, cb_mom_lead,
         funding, ls_log, taker_log, oi_chg,
-        gap_open, f_rsi_1h,  # NEW
+        gap_open, f_rsi_1h,
+        f_slot_elapsed_frac, f_btc_vs_anchor_pct,  # slot latency arb
     ]
 
 
@@ -755,29 +779,29 @@ def print_analysis_report(
     dpnl = compute_detailed_pnl(probs, labels)
     report["detailed_pnl"] = dpnl
     if not dpnl.get("too_few"):
-        print(f"\n  ┌─────────────────────────────────────────────────────────────")
-        print(f"  │ DETAILED PnL — {algo_name.upper()} on {split_name.upper()} set")
-        print(f"  ├─────────────────────────────────────────────────────────────")
-        print(f"  │ Trades:          {dpnl['n_trades']:>8}")
-        print(f"  │ Win rate:        {dpnl['win_rate']:>8.2%}")
-        print(f"  │ Total PnL:       {dpnl['total_pnl']:>+8.4f}")
-        print(f"  │ Avg PnL/trade:   {dpnl['avg_pnl_per_trade']:>+8.6f}")
-        print(f"  │ Profit factor:   {dpnl['profit_factor']:>8.2f}")
-        print(f"  │ Gross profit:    {dpnl['gross_profit']:>+8.4f}")
-        print(f"  │ Gross loss:      {dpnl['gross_loss']:>8.4f}")
-        print(f"  │ Avg win:         {dpnl['avg_win']:>+8.6f}")
-        print(f"  │ Avg loss:        {dpnl['avg_loss']:>+8.6f}")
-        print(f"  │ Max drawdown:    {dpnl['max_drawdown']:>+8.4f}")
-        print(f"  │ Max win streak:  {dpnl['max_win_streak']:>8}")
-        print(f"  │ Max loss streak: {dpnl['max_loss_streak']:>8}")
-        print(f"  │ Avg edge (bps):  {dpnl['avg_edge_bps']:>8.1f}")
-        print(f"  │ Med edge (bps):  {dpnl['median_edge_bps']:>8.1f}")
-        print(f"  └─────────────────────────────────────────────────────────────")
+        print(f"\n  +-------------------------------------------------------------")
+        print(f"  | DETAILED PnL -- {algo_name.upper()} on {split_name.upper()} set")
+        print(f"  +-------------------------------------------------------------")
+        print(f"  | Trades:          {dpnl['n_trades']:>8}")
+        print(f"  | Win rate:        {dpnl['win_rate']:>8.2%}")
+        print(f"  | Total PnL:       {dpnl['total_pnl']:>+8.4f}")
+        print(f"  | Avg PnL/trade:   {dpnl['avg_pnl_per_trade']:>+8.6f}")
+        print(f"  | Profit factor:   {dpnl['profit_factor']:>8.2f}")
+        print(f"  | Gross profit:    {dpnl['gross_profit']:>+8.4f}")
+        print(f"  | Gross loss:      {dpnl['gross_loss']:>8.4f}")
+        print(f"  | Avg win:         {dpnl['avg_win']:>+8.6f}")
+        print(f"  | Avg loss:        {dpnl['avg_loss']:>+8.6f}")
+        print(f"  | Max drawdown:    {dpnl['max_drawdown']:>+8.4f}")
+        print(f"  | Max win streak:  {dpnl['max_win_streak']:>8}")
+        print(f"  | Max loss streak: {dpnl['max_loss_streak']:>8}")
+        print(f"  | Avg edge (bps):  {dpnl['avg_edge_bps']:>8.1f}")
+        print(f"  | Med edge (bps):  {dpnl['median_edge_bps']:>8.1f}")
+        print(f"  +-------------------------------------------------------------")
 
         if dpnl["edge_buckets"]:
             print(f"\n  Edge bucket breakdown:")
             print(f"  {'Bucket':<14} {'Trades':>7} {'WinRate':>8} {'PnL':>10} {'AvgEdge':>8}")
-            print(f"  {'─'*14} {'─'*7} {'─'*8} {'─'*10} {'─'*8}")
+            print(f"  {'-'*14} {'-'*7} {'-'*8} {'-'*10} {'-'*8}")
             for bk, bv in dpnl["edge_buckets"].items():
                 print(f"  {bk:<14} {bv['count']:>7} {bv['win_rate']:>7.1%} {bv['total_pnl']:>+10.4f} {bv['avg_edge_bps']:>7.1f}")
 
@@ -787,11 +811,11 @@ def print_analysis_report(
     if cal_table:
         mean_cal_err = sum(r["calibration_error"] * r["count"] for r in cal_table) / max(sum(r["count"] for r in cal_table), 1)
         report["mean_calibration_error"] = round(mean_cal_err, 4)
-        print(f"\n  Calibration table ({split_name}) — mean CE = {mean_cal_err:.4f}:")
+        print(f"\n  Calibration table ({split_name}) -- mean CE = {mean_cal_err:.4f}:")
         print(f"  {'Bin':<10} {'Count':>6} {'Predicted':>10} {'Actual':>10} {'Error':>8}")
-        print(f"  {'─'*10} {'─'*6} {'─'*10} {'─'*10} {'─'*8}")
+        print(f"  {'-'*10} {'-'*6} {'-'*10} {'-'*10} {'-'*8}")
         for row in cal_table:
-            star = " ⚠" if row["calibration_error"] > 0.05 else ""
+            star = " !" if row["calibration_error"] > 0.05 else ""
             print(f"  {row['bin']:<10} {row['count']:>6} {row['predicted_avg']:>10.4f} {row['actual_avg']:>10.4f} {row['calibration_error']:>8.4f}{star}")
 
     # --- 3. Multi-threshold sensitivity ---
@@ -799,9 +823,9 @@ def print_analysis_report(
     report["threshold_sensitivity"] = sensitivity
     print(f"\n  Threshold sensitivity ({split_name}):")
     print(f"  {'MinEdge':>8} {'Trades':>7} {'WinRate':>8} {'PnL':>10} {'Sharpe':>8}")
-    print(f"  {'─'*8} {'─'*7} {'─'*8} {'─'*10} {'─'*8}")
+    print(f"  {'-'*8} {'-'*7} {'-'*8} {'-'*10} {'-'*8}")
     for row in sensitivity:
-        marker = "  ← current" if row["min_edge_bps"] == 300 else ""
+        marker = "  <- current" if row["min_edge_bps"] == 300 else ""
         print(f"  {row['min_edge_bps']:>7}  {row['n_trades']:>7} {row['win_rate']:>7.1%} {row['pnl']:>+10.4f} {row['sharpe']:>8.2f}{marker}")
 
     # --- 4. Feature importance ---
@@ -811,9 +835,9 @@ def print_analysis_report(
         if algo_key.lower() == algo_name.lower() or (algo_name in ("ensemble", "stacking") and algo_key == list(fi.keys())[0]):
             print(f"\n  Feature importance ({algo_key}):")
             print(f"  {'#':>3} {'Feature':<30} {'Importance %':>12}")
-            print(f"  {'─'*3} {'─'*30} {'─'*12}")
+            print(f"  {'-'*3} {'-'*30} {'-'*12}")
             for rank, (fname, fval) in enumerate(importances, 1):
-                bar = '█' * int(fval / 2)
+                bar = '#' * int(fval / 2)
                 print(f"  {rank:>3} {fname:<30} {fval:>10.2f}%  {bar}")
 
     return report
@@ -975,7 +999,7 @@ def train_lgbm(
             model = _lgbm_train_params(grid_params, X_train, y_train, X_val, y_val)
             probs = model.predict(X_val)
             m = compute_pnl_metrics(probs, y_val)
-            marker = "  ← best" if m["sharpe"] > best_sharpe else ""
+            marker = "  <- best" if m["sharpe"] > best_sharpe else ""
             if m["sharpe"] > best_sharpe:
                 best_sharpe, best_model, best_probs = m["sharpe"], model, probs
             print(f"    LGBM [{i+1}/{len(_LGBM_GRID)}] sharpe={m['sharpe']:.3f} "
@@ -1047,7 +1071,7 @@ def train_xgb(
             dv = xgb.DMatrix(X_val, feature_names=FEATURE_NAMES)
             probs = model.predict(dv)
             m = compute_pnl_metrics(probs, y_val)
-            marker = "  ← best" if m["sharpe"] > best_sharpe else ""
+            marker = "  <- best" if m["sharpe"] > best_sharpe else ""
             if m["sharpe"] > best_sharpe:
                 best_sharpe, best_model, best_probs = m["sharpe"], model, probs
             print(f"    XGB  [{i+1}/{len(_XGB_GRID)}] sharpe={m['sharpe']:.3f} "
@@ -1094,7 +1118,7 @@ def train_lr_sklearn(
             model.fit(X_train, y_train)
             probs = model.predict_proba(X_val)[:, 1]
             m = compute_pnl_metrics(probs, y_val)
-            marker = "  ← best" if m["sharpe"] > best_sharpe else ""
+            marker = "  <- best" if m["sharpe"] > best_sharpe else ""
             if m["sharpe"] > best_sharpe:
                 best_sharpe, best_model, best_probs = m["sharpe"], model, probs
             print(f"    LR   [{i+1}/{len(_LR_GRID)}] sharpe={m['sharpe']:.3f} n={m['n_trades']} C={gp['C']}{marker}", flush=True)
@@ -1456,7 +1480,7 @@ def train_tcn(
 
 
 # ---------------------------------------------------------------------------
-# Calibration (isotonic regression)
+# Calibration (isotonic regression + temperature scaling)
 # ---------------------------------------------------------------------------
 
 def calibrate(probs_val: np.ndarray, y_val: np.ndarray) -> IsotonicRegression:
@@ -1468,6 +1492,55 @@ def calibrate(probs_val: np.ndarray, y_val: np.ndarray) -> IsotonicRegression:
 
 def apply_calibration(iso: IsotonicRegression, probs: np.ndarray) -> np.ndarray:
     return iso.predict(probs.reshape(-1, 1))
+
+
+def _compute_ece(probs: np.ndarray, labels: np.ndarray, n_bins: int = 10) -> float:
+    """Expected Calibration Error — lower is better calibrated."""
+    bins = np.linspace(0.0, 1.0, n_bins + 1)
+    ece = 0.0
+    n = len(probs)
+    for i in range(n_bins):
+        mask = (probs >= bins[i]) & (probs < bins[i + 1])
+        if not mask.any():
+            continue
+        ece += mask.sum() / n * abs(float(labels[mask].mean()) - float(probs[mask].mean()))
+    return ece
+
+
+def calibrate_temperature(probs_val: np.ndarray, y_val: np.ndarray) -> float:
+    """Find temperature T that minimises NLL on the validation set.
+
+    Temperature scaling: p_cal = sigmoid(logit(p) / T).
+    T > 1 → shrinks confidence toward 0.5 (less over-confident).
+    T < 1 → sharpens confidence toward 0/1 (rarely needed).
+    NLL is convex in T, so ternary search finds the global minimum.
+    """
+    _eps = 1e-8
+    p = np.clip(probs_val, _eps, 1 - _eps)
+    logits = np.log(p / (1 - p))
+    y = y_val.astype(float)
+
+    def _nll(T: float) -> float:
+        p_cal = np.clip(1.0 / (1.0 + np.exp(-logits / max(T, _eps))), _eps, 1 - _eps)
+        return -float(np.mean(y * np.log(p_cal) + (1 - y) * np.log(1 - p_cal)))
+
+    lo, hi = 0.05, 10.0
+    for _ in range(60):
+        m1 = lo + (hi - lo) / 3
+        m2 = hi - (hi - lo) / 3
+        if _nll(m1) < _nll(m2):
+            hi = m2
+        else:
+            lo = m1
+    return (lo + hi) / 2.0
+
+
+def apply_temperature(T: float, probs: np.ndarray) -> np.ndarray:
+    """Apply temperature scaling to a probability array."""
+    _eps = 1e-8
+    p = np.clip(probs, _eps, 1 - _eps)
+    logits = np.log(p / (1 - p))
+    return np.clip(1.0 / (1.0 + np.exp(-logits / max(T, _eps))), _eps, 1 - _eps)
 
 
 # ---------------------------------------------------------------------------
@@ -1483,6 +1556,8 @@ def _export_lgbm_artifact(
     out_dir: Path,
     interval: str,
     suffix: str = "best",
+    *,
+    temperature: float | None = None,
 ) -> Path:
     model_fname = f"btc_{interval}_{suffix}_lgbm.model"
     model.save_model(str(out_dir / model_fname))
@@ -1506,7 +1581,7 @@ def _export_lgbm_artifact(
             "scaler_means":   [round(float(m), 8) for m in means],
             "scaler_stds":    [round(float(s), 8) for s in stds],
         },
-        "calibration": _calibration_payload(calibrator),
+        "calibration": _calibration_payload(calibrator, temperature=temperature),
     }
     path = out_dir / f"btc_{interval}_{suffix}.json"
     path.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
@@ -1522,6 +1597,8 @@ def _export_xgb_artifact(
     out_dir: Path,
     interval: str,
     suffix: str = "best",
+    *,
+    temperature: float | None = None,
 ) -> Path:
     model_fname = f"btc_{interval}_{suffix}_xgb.model"
     model.save_model(str(out_dir / model_fname))
@@ -1545,7 +1622,7 @@ def _export_xgb_artifact(
             "scaler_means":  [round(float(m), 8) for m in means],
             "scaler_stds":   [round(float(s), 8) for s in stds],
         },
-        "calibration": _calibration_payload(calibrator),
+        "calibration": _calibration_payload(calibrator, temperature=temperature),
     }
     path = out_dir / f"btc_{interval}_{suffix}.json"
     path.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
@@ -1561,6 +1638,8 @@ def _export_catboost_artifact(
     out_dir: Path,
     interval: str,
     suffix: str = "best",
+    *,
+    temperature: float | None = None,
 ) -> Path:
     model_fname = f"btc_{interval}_{suffix}_catboost.cbm"
     model.save_model(str(out_dir / model_fname))
@@ -1584,7 +1663,7 @@ def _export_catboost_artifact(
             "scaler_means":       [round(float(m), 8) for m in means],
             "scaler_stds":        [round(float(s), 8) for s in stds],
         },
-        "calibration": _calibration_payload(calibrator),
+        "calibration": _calibration_payload(calibrator, temperature=temperature),
     }
     path = out_dir / f"btc_{interval}_{suffix}.json"
     path.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
@@ -1600,6 +1679,8 @@ def _export_lr_artifact(
     out_dir: Path,
     interval: str,
     suffix: str = "best",
+    *,
+    temperature: float | None = None,
 ) -> Path:
     weights = model.coef_[0].tolist()
     bias    = float(model.intercept_[0])
@@ -1620,7 +1701,7 @@ def _export_lr_artifact(
             "weights":        [round(float(w), 8) for w in weights],
             "bias":           round(bias, 8),
         },
-        "calibration": _calibration_payload(calibrator),
+        "calibration": _calibration_payload(calibrator, temperature=temperature),
     }
     path = out_dir / f"btc_{interval}_{suffix}.json"
     path.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
@@ -1633,7 +1714,23 @@ def _export_dl_pth(model: Any, out_path: Path) -> None:
     torch.save(model.state_dict(), str(out_path))
 
 
-def _calibration_payload(calibrator: IsotonicRegression | None) -> dict:
+def _calibration_payload(
+    calibrator: IsotonicRegression | None,
+    *,
+    temperature: float | None = None,
+) -> dict:
+    """Build the calibration sub-dict for the model artifact JSON.
+
+    Prefers temperature scaling when ``temperature`` is provided (single
+    parameter → less prone to overfitting on small validation sets).
+    Falls back to isotonic regression when only a fitted calibrator is given.
+    """
+    if temperature is not None:
+        return {
+            "method":              "temperature",
+            "calibration_version": "v1.1.0",
+            "parameters":          {"T": round(float(temperature), 6)},
+        }
     if calibrator is None:
         return {"method": "none", "calibration_version": "none", "parameters": {}}
     try:
@@ -1677,8 +1774,8 @@ def train_interval(
     has_cb   = len(data["coinbase"]) > REQUIRED_LOOKBACK
     has_deriv = len(data["derivatives"]) > 0
     print(f"  Binance: {len(data['binance'])} candles | "
-          f"Coinbase: {len(data['coinbase'])} ({'OK' if has_cb else 'MISSING — CB features=0'}) | "
-          f"Derivatives: {len(data['derivatives'])} rows ({'OK' if has_deriv else 'MISSING — deriv features=0'})")
+          f"Coinbase: {len(data['coinbase'])} ({'OK' if has_cb else 'MISSING -- CB features=0'}) | "
+          f"Derivatives: {len(data['derivatives'])} rows ({'OK' if has_deriv else 'MISSING -- deriv features=0'})")
 
     print("  Building feature dataset ...")
     X, y = build_dataset(data["binance"], data["coinbase"], data["derivatives"])
@@ -1724,7 +1821,7 @@ def train_interval(
         print(f"    LGBM: val_acc={acc:.4f}  pnl_sharpe={pnl['sharpe']:.3f}  "
               f"n_trades={pnl['n_trades']}  ({results['lgbm']['elapsed_s']}s)")
     elif "lgbm" in algorithms:
-        print("  LGBM: skipped (lightgbm not installed — pip install lightgbm)")
+        print("  LGBM: skipped (lightgbm not installed - pip install lightgbm)")
 
     if "xgb" in algorithms and HAS_XGB:
         print(f"  Training XGBoost ({opt_mode}, {n_optuna_trials} trials) ...")
@@ -1739,7 +1836,7 @@ def train_interval(
         print(f"    XGB:  val_acc={acc:.4f}  pnl_sharpe={pnl['sharpe']:.3f}  "
               f"n_trades={pnl['n_trades']}  ({results['xgb']['elapsed_s']}s)")
     elif "xgb" in algorithms:
-        print("  XGB: skipped (xgboost not installed — pip install xgboost)")
+        print("  XGB: skipped (xgboost not installed - pip install xgboost)")
 
     if "catboost" in algorithms and HAS_CATBOOST:
         print(f"  Training CatBoost ({opt_mode}, {n_optuna_trials} trials) ...")
@@ -1754,7 +1851,7 @@ def train_interval(
         print(f"    CB:   val_acc={acc:.4f}  pnl_sharpe={pnl['sharpe']:.3f}  "
               f"n_trades={pnl['n_trades']}  ({results['catboost']['elapsed_s']}s)")
     elif "catboost" in algorithms and not HAS_CATBOOST:
-        print("  CatBoost: skipped (catboost not installed — pip install catboost)")
+        print("  CatBoost: skipped (catboost not installed - pip install catboost)")
 
     if "lr" in algorithms:
         print(f"  Training Logistic Regression ({opt_mode}) ...")
@@ -1781,7 +1878,7 @@ def train_interval(
         print(f"    LSTM: val_acc={acc:.4f}  pnl_sharpe={pnl['sharpe']:.3f}  "
               f"n_trades={pnl['n_trades']}  ({results['lstm']['elapsed_s']}s)")
     elif "lstm" in algorithms:
-        print("  LSTM: skipped (torch not installed — pip install torch)")
+        print("  LSTM: skipped (torch not installed - pip install torch)")
 
     if "tcn" in algorithms and HAS_TORCH:
         print("  Training TCN ...")
@@ -1795,7 +1892,7 @@ def train_interval(
         print(f"    TCN:  val_acc={acc:.4f}  pnl_sharpe={pnl['sharpe']:.3f}  "
               f"n_trades={pnl['n_trades']}  ({results['tcn']['elapsed_s']}s)")
     elif "tcn" in algorithms:
-        print("  TCN: skipped (torch not installed — pip install torch)")
+        print("  TCN: skipped (torch not installed - pip install torch)")
 
     if not results:
         print("  ERROR: no algorithms produced results.")
@@ -1845,9 +1942,9 @@ def train_interval(
     # --- Algorithm comparison table ---
     print(f"\n  Algorithm comparison:")
     print(f"  {'Algo':<12} {'ValAcc':>8} {'Sharpe':>8} {'PnL':>10} {'Trades':>7} {'WinRate':>8} {'Time':>7}")
-    print(f"  {'─'*12} {'─'*8} {'─'*8} {'─'*10} {'─'*7} {'─'*8} {'─'*7}")
+    print(f"  {'-'*12} {'-'*8} {'-'*8} {'-'*10} {'-'*7} {'-'*8} {'-'*7}")
     for algo_key, algo_res in results.items():
-        marker = " ★" if algo_key == best_algo else ""
+        marker = " *" if algo_key == best_algo else ""
         print(f"  {algo_key:<12} {algo_res['val_acc']:>7.4f} {algo_res['pnl']['sharpe']:>8.3f} "
               f"{algo_res['pnl']['pnl']:>+10.4f} {algo_res['pnl']['n_trades']:>7} "
               f"{algo_res['pnl']['win_rate']:>7.1%} {algo_res['elapsed_s']:>6.1f}s{marker}")
@@ -1907,6 +2004,20 @@ def train_interval(
     else:
         export_calibrator = calibrator
 
+    # Compare isotonic regression vs temperature scaling by ECE.
+    # Temperature scaling uses a single parameter → robust with limited val data.
+    export_temperature: float | None = None
+    if non_dl_best_algo and HAS_SKLEARN:
+        _export_probs_val = results[non_dl_best_algo]["probs_val"]
+        _iso_ece = _compute_ece(apply_calibration(export_calibrator, _export_probs_val), y_val)
+        _T = calibrate_temperature(_export_probs_val, y_val)
+        _temp_ece = _compute_ece(apply_temperature(_T, _export_probs_val), y_val)
+        if _temp_ece < _iso_ece:
+            export_temperature = _T
+            print(f"  Calibration: temperature T={_T:.4f} chosen (ECE {_temp_ece:.4f} < isotonic {_iso_ece:.4f})")
+        else:
+            print(f"  Calibration: isotonic chosen (ECE {_iso_ece:.4f} <= temperature {_temp_ece:.4f}  T={_T:.4f})")
+
     if non_dl_best_algo:
         non_dl_probs_test: np.ndarray | None = None
         if non_dl_best_algo == "lgbm" and models.get("lgbm"):
@@ -1923,7 +2034,7 @@ def train_interval(
             pnl_test = compute_pnl_metrics(non_dl_probs_test_cal, y_test)
             test_acc = float(((non_dl_probs_test > 0.5) == y_test).mean())
             print(f"\n{'='*64}")
-            print(f"  HOLDOUT TEST ({non_dl_best_algo.upper()}) — BLIND EVALUATION")
+            print(f"  HOLDOUT TEST ({non_dl_best_algo.upper()}) -- BLIND EVALUATION")
             print(f"{'='*64}")
             print(f"  acc={test_acc:.4f}  pnl_sharpe={pnl_test['sharpe']:.3f}  "
                   f"n_trades={pnl_test['n_trades']}  cumulative_pnl={pnl_test['pnl']:.4f}")
@@ -1982,21 +2093,25 @@ def train_interval(
         artifact_path = _export_lgbm_artifact(
             models["lgbm"], export_calibrator, means, stds,
             metrics_payload, export_dir, interval,
+            temperature=export_temperature,
         )
     elif export_algo == "xgb" and models.get("xgb"):
         artifact_path = _export_xgb_artifact(
             models["xgb"], export_calibrator, means, stds,
             metrics_payload, export_dir, interval,
+            temperature=export_temperature,
         )
     elif export_algo == "catboost" and models.get("catboost"):
         artifact_path = _export_catboost_artifact(
             models["catboost"], export_calibrator, means, stds,
             metrics_payload, export_dir, interval,
+            temperature=export_temperature,
         )
     else:
         artifact_path = _export_lr_artifact(
             models.get("lr") or list(models.values())[0],
             export_calibrator, means, stds, metrics_payload, export_dir, interval,
+            temperature=export_temperature,
         )
     print(f"\n  Artifact saved: {artifact_path}")
 
@@ -2042,7 +2157,7 @@ def check_promotion(metrics: dict, interval: str, export_dir: Path) -> bool:
         if not gate(metrics.get(k, -999))
     ]
     if failures:
-        print(f"\n  [auto-promo] NOT promoted — gate failures: {'; '.join(failures)}")
+        print(f"\n  [auto-promo] NOT promoted -- gate failures: {'; '.join(failures)}")
         return False
 
     # Check improvement over current deployed model
@@ -2066,7 +2181,7 @@ def check_promotion(metrics: dict, interval: str, export_dir: Path) -> bool:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="BTC Up/Down v2 training — PnL-optimised, LGBM+XGB+LSTM+TCN"
+        description="BTC Up/Down v2 training -- PnL-optimised, LGBM+XGB+LSTM+TCN"
     )
     parser.add_argument(
         "--interval", default="5m",
@@ -2124,7 +2239,7 @@ def main() -> None:
             check_promotion(metrics, interval, export_dir)
 
     print(f"\nDone. Training log: data/btc/training_log.jsonl")
-    print(f"Next step: update config/agents.yaml → model_artifact_path")
+    print(f"Next step: update config/agents.yaml -> model_artifact_path")
 
 
 if __name__ == "__main__":

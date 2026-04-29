@@ -261,15 +261,8 @@ def _seconds_until(iso: str | None) -> int | None:
     return int(round((dt - now).total_seconds()))
 
 
-@router.get("/api/trader/live")
-def trader_live(request: Request) -> dict[str, Any]:
-    """Snapshot of open positions + live Polymarket prices.
-
-    Designed for short-interval polling (3-5 s) from the /trader page.
-    Failures degrade gracefully: missing DB, missing positions, or a
-    transient Gamma API error all return partial data rather than 500.
-    """
-    db_path = _resolve_db_path(request)
+def _build_trader_response(db_path: Path) -> dict[str, Any]:
+    """Shared implementation for both /api/trader/live/a and /api/trader/live/b."""
     state = _read_latest_open_positions_state(db_path) or {}
 
     btc_spot = _fetch_btc_spot()
@@ -299,7 +292,6 @@ def trader_live(request: Request) -> dict[str, Any]:
                 market_payload.get("outcomePrices")
             )
             slot_close_iso = _parse_slot_close_iso(market_payload)
-            # BTC Up/Down 15m: slot_start = endDate - 15min
             if slot_close_iso:
                 try:
                     cleaned = slot_close_iso.replace("Z", "+00:00")
@@ -316,7 +308,6 @@ def trader_live(request: Request) -> dict[str, Any]:
         slot_anchor_btc = (
             _fetch_slot_anchor_price(slot_start_iso) if slot_start_iso else None
         )
-        # "currently winning?" — for BTC slots, YES wins iff BTC_now > BTC_anchor.
         currently_yes = None
         btc_delta = None
         if btc_spot is not None and slot_anchor_btc is not None:
@@ -327,7 +318,6 @@ def trader_live(request: Request) -> dict[str, Any]:
             our_side_is_yes = side == "YES"
             currently_winning = our_side_is_yes == currently_yes
 
-        # mark price in side's frame (YES side uses yes_price; NO side uses no_price)
         side_mark = None
         if side == "YES" and yes_price is not None:
             side_mark = yes_price
@@ -382,3 +372,24 @@ def trader_live(request: Request) -> dict[str, Any]:
         ),
         "positions": positions_out,
     }
+
+
+_MODEL_B_DB = Path("data/runtime_v5.db")
+
+
+@router.get("/api/trader/live")
+def trader_live(request: Request) -> dict[str, Any]:
+    """Snapshot of open positions + live Polymarket prices (Model A / main DB)."""
+    return _build_trader_response(_resolve_db_path(request))
+
+
+@router.get("/api/trader/live/a")
+def trader_live_a(request: Request) -> dict[str, Any]:
+    """Model A (v4) — same as /api/trader/live, explicit alias."""
+    return _build_trader_response(_resolve_db_path(request))
+
+
+@router.get("/api/trader/live/b")
+def trader_live_b() -> dict[str, Any]:
+    """Model B (v5) — reads from data/runtime_v5.db (separate bankroll)."""
+    return _build_trader_response(_MODEL_B_DB)
