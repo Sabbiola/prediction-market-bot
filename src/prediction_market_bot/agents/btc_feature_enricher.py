@@ -69,6 +69,7 @@ CACHE_TTL_SEC = 60  # re-fetch at most once per minute
 # Third-party data sources (no auth required)
 ALTME_FNG_URL = "https://api.alternative.me/fng/?limit=1"
 COINBASE_SPOT_URL = "https://api.coinbase.com/v2/prices/BTC-USD/spot"
+COINBASE_CANDLES_URL = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
 KRAKEN_TICKER_URL = "https://api.kraken.com/0/public/Ticker?pair=XBTUSD"
 
 
@@ -190,6 +191,54 @@ def _safe_json_get(
         return None
 
 
+def _compute_cb_features(
+    completed: list[dict[str, Any]],
+    cb_candles_by_ts: dict[int, dict[str, float]],
+) -> dict[str, float]:
+    """Compute the 6 Coinbase lead-lag features using the same formulas as btc_train_v2.py."""
+    zeros = {
+        "f_btc_cb_return_1c": 0.0,
+        "f_btc_cb_return_3c": 0.0,
+        "f_btc_cb_bn_spread_1c": 0.0,
+        "f_btc_cb_bn_spread_3c": 0.0,
+        "f_btc_cb_vol_dominance": 0.0,
+        "f_btc_cb_momentum_lead": 0.0,
+    }
+    if not cb_candles_by_ts or len(completed) < 3:
+        return zeros
+
+    prev = completed[-1]
+    candle_3c = completed[-3]
+
+    cb_prev = cb_candles_by_ts.get(prev["open_time_ms"])
+    cb_3c   = cb_candles_by_ts.get(candle_3c["open_time_ms"])
+
+    if cb_prev is None:
+        return zeros
+
+    r1 = (prev["close"] - prev["open"]) / max(prev["open"], 1e-8)
+    r3 = (prev["close"] - candle_3c["close"]) / max(candle_3c["close"], 1e-8)
+
+    cb_r1 = _clamp((cb_prev["close"] - cb_prev["open"]) / max(cb_prev["open"], 1e-8), -0.05, 0.05)
+    cb_r3 = _clamp((cb_prev["close"] - cb_3c["close"]) / max(cb_3c["close"], 1e-8), -0.10, 0.10) if cb_3c else 0.0
+
+    cb_bn_spread1 = _clamp(cb_r1 - _clamp(r1, -0.05, 0.05), -0.05, 0.05)
+    cb_bn_spread3 = _clamp(cb_r3 - _clamp(r3, -0.10, 0.10), -0.10, 0.10)
+
+    bn_vol = prev.get("volume", 0.0)
+    cb_vol = cb_prev.get("volume", 0.0)
+    cb_vol_dom = _clamp(cb_vol / (cb_vol + bn_vol) - 0.5, -0.5, 0.5) if (cb_vol + bn_vol) > 0 else 0.0
+
+    return {
+        "f_btc_cb_return_1c":     cb_r1,
+        "f_btc_cb_return_3c":     cb_r3,
+        "f_btc_cb_bn_spread_1c":  cb_bn_spread1,
+        "f_btc_cb_bn_spread_3c":  cb_bn_spread3,
+        "f_btc_cb_vol_dominance": cb_vol_dom,
+        "f_btc_cb_momentum_lead": cb_bn_spread3,  # mirrors training formula
+    }
+
+
 class BtcFeatureEnricher:
     """Fetches live BTC/USDT data and computes features for the BTC model.
 
@@ -229,7 +278,7 @@ class BtcFeatureEnricher:
             logger.warning("btc_feature_enricher_insufficient_candles n=%d", len(candles))
             return {}
         try:
-            feats = self._compute_ohlcv_features(candles)
+            feats = self._compute_ohlcv_features(candles, data)
             feats.update(self._compute_derivatives_features(data))
             return feats
         except Exception as exc:
@@ -424,18 +473,23 @@ class BtcFeatureEnricher:
             except (KeyError, IndexError, TypeError, ValueError):
                 pass
 
+        # Coinbase OHLCV candles — last 8 candles at this interval's granularity.
+        # Used to compute lead-lag return/spread features (cb_return_1c, cb_bn_spread, etc.)
+        cb_candles_by_ts: dict[int, dict[str, float]] = self._fetch_cb_candles()
+
         return {
-            "candles":      candles,
-            "funding_rate": funding_rate,
-            "ls_ratio":     ls_ratio,
-            "taker_ratio":  taker_ratio,
-            "oi_current":   oi_current,
-            "oi_prev":      oi_prev,
-            "ob_imbalance": ob_imbalance,
-            "ob_spread_bps": ob_spread_bps,
-            "fng_value":    fng_value,
-            "cb_price":     cb_price,
-            "kr_price":     kr_price,
+            "candles":          candles,
+            "funding_rate":     funding_rate,
+            "ls_ratio":         ls_ratio,
+            "taker_ratio":      taker_ratio,
+            "oi_current":       oi_current,
+            "oi_prev":          oi_prev,
+            "ob_imbalance":     ob_imbalance,
+            "ob_spread_bps":    ob_spread_bps,
+            "fng_value":        fng_value,
+            "cb_price":         cb_price,
+            "kr_price":         kr_price,
+            "cb_candles_by_ts": cb_candles_by_ts,
         }
 
     def _fetch_candles(self) -> list[dict[str, Any]]:
@@ -469,11 +523,57 @@ class BtcFeatureEnricher:
             })
         return candles
 
+    def _fetch_cb_candles(self) -> dict[int, dict[str, float]]:
+        """Fetch the last 8 Coinbase BTC-USD OHLCV candles at the current interval.
+
+        Returns a dict keyed by open_time_ms so callers can align by timestamp
+        with Binance candles.  Returns empty dict on any failure (non-fatal).
+        """
+        _interval_granularity = {
+            "1m": 60, "3m": 180, "5m": 300, "15m": 900,
+            "30m": 1800, "1h": 3600, "4h": 14400,
+        }
+        granularity = _interval_granularity.get(self.interval, 900)
+        end_dt   = datetime.now(UTC)
+        start_dt = end_dt - timedelta(seconds=granularity * 10)  # 10 candles of headroom
+        url = (
+            f"{COINBASE_CANDLES_URL}"
+            f"?granularity={granularity}"
+            f"&start={start_dt.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+            f"&end={end_dt.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+        )
+        try:
+            raw = _safe_json_get(
+                url,
+                timeout=self.timeout_sec,
+                http_client=self._http_client,
+                source="btc_feature_enricher.cb_candles",
+            )
+            if not isinstance(raw, list):
+                return {}
+            # Coinbase returns [[time, low, high, open, close, volume], ...] newest-first
+            result: dict[int, dict[str, float]] = {}
+            for c in raw:
+                if not isinstance(c, list) or len(c) < 6:
+                    continue
+                ts_ms = int(c[0]) * 1000
+                result[ts_ms] = {
+                    "open":   float(c[3]),
+                    "high":   float(c[2]),
+                    "low":    float(c[1]),
+                    "close":  float(c[4]),
+                    "volume": float(c[5]),
+                }
+            return result
+        except Exception as exc:
+            logger.debug("btc_feature_enricher_cb_candles_error: %s", exc)
+            return {}
+
     # ------------------------------------------------------------------
     # OHLCV feature computation
     # ------------------------------------------------------------------
 
-    def _compute_ohlcv_features(self, candles: list[dict[str, Any]]) -> dict[str, float]:
+    def _compute_ohlcv_features(self, candles: list[dict[str, Any]], data: dict[str, Any] | None = None) -> dict[str, float]:
         completed = candles[:-1]
         if len(completed) < 14:
             return {}
@@ -639,13 +739,8 @@ class BtcFeatureEnricher:
             # Cross-timeframe & gap (v2)
             "f_btc_gap_open":          f_btc_gap_open,
             "f_btc_rsi_1h":            f_btc_rsi_1h,
-            # Coinbase lead-lag (zero when CB data not fetched live; model trained with CB data)
-            "f_btc_cb_return_1c":      0.0,
-            "f_btc_cb_return_3c":      0.0,
-            "f_btc_cb_bn_spread_1c":   0.0,
-            "f_btc_cb_bn_spread_3c":   0.0,
-            "f_btc_cb_vol_dominance":  0.0,
-            "f_btc_cb_momentum_lead":  0.0,
+            # Coinbase lead-lag features — live CB OHLCV candles fetched in _fetch_cb_candles()
+            **_compute_cb_features(completed, data.get("cb_candles_by_ts", {}) if data else {}),
         }
 
     # ------------------------------------------------------------------

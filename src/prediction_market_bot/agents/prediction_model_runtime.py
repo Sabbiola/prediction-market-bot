@@ -114,10 +114,18 @@ class _DecisionStumpRuntimeModel:
 
 
 class _XGBoostRuntimeModel:
-    """Runtime model that wraps a saved XGBoost JSON model file."""
+    """Runtime model that wraps a saved XGBoost model file."""
 
-    def __init__(self, feature_names: tuple[str, ...], model_path: Path) -> None:
+    def __init__(
+        self,
+        feature_names: tuple[str, ...],
+        model_path: Path,
+        scaler_means: tuple[float, ...] | None = None,
+        scaler_stds: tuple[float, ...] | None = None,
+    ) -> None:
         self._feature_names = feature_names
+        self._scaler_means = scaler_means
+        self._scaler_stds = scaler_stds
         xgb = _try_import_xgboost()
         if xgb is None:
             raise PredictionModelArtifactError(
@@ -140,6 +148,10 @@ class _XGBoostRuntimeModel:
             [[float(features.get(name, 0.0)) for name in self._feature_names]],
             dtype=np.float32,
         )
+        if self._scaler_means is not None and self._scaler_stds is not None:
+            means = np.array(self._scaler_means, dtype=np.float32)
+            stds  = np.array(self._scaler_stds,  dtype=np.float32)
+            row = (row - means) / np.maximum(stds, 1e-8)
         dm = self._DMatrix(row, feature_names=list(self._feature_names))
         prob = float(self._booster.predict(dm)[0])
         return _clamp_probability(prob)
@@ -485,7 +497,14 @@ class PredictionModelArtifactLoader:
             xgb_model_rel = str(payload.get("xgb_model_path") or "").strip()
             if not xgb_model_rel:
                 raise PredictionModelArtifactError(f"missing_xgb_model_path path={path}")
-            return _XGBoostRuntimeModel(feature_names=feature_names, model_path=path.parent / xgb_model_rel)
+            scaler_means = self._coerce_float_tuple(payload.get("scaler_means"), name="scaler_means", path=path) or None
+            scaler_stds  = self._coerce_float_tuple(payload.get("scaler_stds"),  name="scaler_stds",  path=path) or None
+            return _XGBoostRuntimeModel(
+                feature_names=feature_names,
+                model_path=path.parent / xgb_model_rel,
+                scaler_means=scaler_means,
+                scaler_stds=scaler_stds,
+            )
         if algorithm == "lightgbm":
             feature_names = _as_str_tuple(payload.get("feature_names")) or feature_columns
             lgbm_rel = str(payload.get("lgbm_model_path") or "").strip()

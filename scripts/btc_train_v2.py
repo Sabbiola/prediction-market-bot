@@ -2004,19 +2004,36 @@ def train_interval(
     else:
         export_calibrator = calibrator
 
-    # Compare isotonic regression vs temperature scaling by ECE.
-    # Temperature scaling uses a single parameter → robust with limited val data.
+    # Compare isotonic vs temperature scaling using a held-out 20% of val.
+    # In-sample isotonic ECE is always 0 (it memorises its training data), so we must
+    # evaluate on data the isotonic calibrator has NOT seen.  Temperature has 1 parameter
+    # and generalises by construction; isotonic needs enough samples to be reliable.
+    _MIN_VAL_FOR_ISOTONIC = 5_000
     export_temperature: float | None = None
     if non_dl_best_algo and HAS_SKLEARN:
         _export_probs_val = results[non_dl_best_algo]["probs_val"]
-        _iso_ece = _compute_ece(apply_calibration(export_calibrator, _export_probs_val), y_val)
         _T = calibrate_temperature(_export_probs_val, y_val)
-        _temp_ece = _compute_ece(apply_temperature(_T, _export_probs_val), y_val)
-        if _temp_ece < _iso_ece:
+        if len(y_val) < _MIN_VAL_FOR_ISOTONIC:
+            # Too few samples for reliable isotonic regression.
             export_temperature = _T
-            print(f"  Calibration: temperature T={_T:.4f} chosen (ECE {_temp_ece:.4f} < isotonic {_iso_ece:.4f})")
+            _temp_ece = _compute_ece(apply_temperature(_T, _export_probs_val), y_val)
+            print(f"  Calibration: temperature T={_T:.4f} forced "
+                  f"(n_val={len(y_val)} < {_MIN_VAL_FOR_ISOTONIC}, ECE {_temp_ece:.4f})")
         else:
-            print(f"  Calibration: isotonic chosen (ECE {_iso_ece:.4f} <= temperature {_temp_ece:.4f}  T={_T:.4f})")
+            # Held-out ECE: fit isotonic on 80 % of val, evaluate both methods on the other 20 %.
+            _n_fit = int(len(y_val) * 0.80)
+            _iso_heldout = calibrate(_export_probs_val[:_n_fit], y_val[:_n_fit])
+            _probs_eval   = _export_probs_val[_n_fit:]
+            _y_eval       = y_val[_n_fit:]
+            _iso_ece  = _compute_ece(apply_calibration(_iso_heldout, _probs_eval), _y_eval)
+            _temp_ece = _compute_ece(apply_temperature(_T, _probs_eval), _y_eval)
+            if _temp_ece < _iso_ece:
+                export_temperature = _T
+                print(f"  Calibration: temperature T={_T:.4f} chosen "
+                      f"(held-out ECE {_temp_ece:.4f} < isotonic {_iso_ece:.4f})")
+            else:
+                print(f"  Calibration: isotonic chosen "
+                      f"(held-out ECE {_iso_ece:.4f} <= temperature {_temp_ece:.4f}  T={_T:.4f})")
 
     if non_dl_best_algo:
         non_dl_probs_test: np.ndarray | None = None
