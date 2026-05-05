@@ -279,7 +279,7 @@ class HyperliquidClient:
                 "coin": self.config.coin,
                 "is_buy": is_long,
                 "sz": size_btc,
-                "limit_px": round(slip_px, 1),
+                "limit_px": _round_price(slip_px, self.config.coin),
                 "order_type": {"limit": {"tif": "Ioc"}},
                 "reduce_only": False,
             })
@@ -288,8 +288,8 @@ class HyperliquidClient:
                     "coin": self.config.coin,
                     "is_buy": close_is_buy,
                     "sz": size_btc,
-                    "limit_px": round(take_profit_px, 1),
-                    "order_type": {"trigger": {"triggerPx": round(take_profit_px, 1), "isMarket": True, "tpsl": "tp"}},
+                    "limit_px": _round_price(take_profit_px, self.config.coin),
+                    "order_type": {"trigger": {"triggerPx": _round_price(take_profit_px, self.config.coin), "isMarket": True, "tpsl": "tp"}},
                     "reduce_only": True,
                 })
             if stop_loss_px is not None:
@@ -297,8 +297,8 @@ class HyperliquidClient:
                     "coin": self.config.coin,
                     "is_buy": close_is_buy,
                     "sz": size_btc,
-                    "limit_px": round(stop_loss_px, 1),
-                    "order_type": {"trigger": {"triggerPx": round(stop_loss_px, 1), "isMarket": True, "tpsl": "sl"}},
+                    "limit_px": _round_price(stop_loss_px, self.config.coin),
+                    "order_type": {"trigger": {"triggerPx": _round_price(stop_loss_px, self.config.coin), "isMarket": True, "tpsl": "sl"}},
                     "reduce_only": True,
                 })
             resp = exchange.bulk_orders(orders, grouping="normalTpsl")
@@ -331,6 +331,28 @@ class HyperliquidClient:
         except Exception as exc:
             logger.warning("hl_cancel_failed err=%s", exc)
             return False
+
+
+# Hyperliquid price tick sizes per asset (px must be divisible by tick).
+# Reference: https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint
+# BTC perp tick = 1.0 (integer dollars), ETH = 0.1, SOL = 0.001, etc.
+_PRICE_TICKS: Mapping[str, float] = {
+    "BTC": 1.0,
+    "ETH": 0.1,
+    "SOL": 0.001,
+    "ARB": 0.0001,
+    "MATIC": 0.0001,
+}
+
+
+def _round_price(px: float, coin: str) -> float:
+    """Round a price down/up to the nearest valid tick for the given coin."""
+    tick = _PRICE_TICKS.get(coin.upper(), 0.1)
+    # round-to-nearest, then snap to tick grid
+    snapped = round(px / tick) * tick
+    # avoid float drift (e.g. 80565.0000001) by formatting with tick decimals
+    decimals = max(0, -int(round(__import__("math").log10(tick)))) if tick < 1 else 0
+    return float(f"{snapped:.{decimals}f}")
 
 
 def _parse_response(resp: Mapping[str, Any] | None) -> OrderResult:
