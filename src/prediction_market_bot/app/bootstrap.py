@@ -442,6 +442,29 @@ def _build_executor_for_mode(
             retry_backoff_sec=clob.retry_backoff_sec,
             dry_run=clob.dry_run,
         )
+    if mode in (
+        ExecutionMode.HYPERLIQUID_DRY_RUN,
+        ExecutionMode.HYPERLIQUID_TESTNET,
+        ExecutionMode.HYPERLIQUID_LIVE,
+    ):
+        from prediction_market_bot.infrastructure.hyperliquid_executor import (
+            HyperliquidExecutor,
+            build_default_client_for_mode,
+        )
+        hl = settings.hyperliquid
+        client = build_default_client_for_mode(
+            mode, private_key_env=hl.private_key_env or "HL_PRIVATE_KEY",
+        )
+        return HyperliquidExecutor(
+            execution_mode=mode,
+            client=client,
+            leverage=hl.leverage,
+            take_profit_pct=hl.take_profit_pct,
+            stop_loss_pct=hl.stop_loss_pct,
+            time_exit_seconds=hl.time_exit_seconds,
+            min_order_usd=hl.min_order_usd,
+            max_size_usd=hl.max_size_usd,
+        )
     return LiveDisabledExecutor()
 
 

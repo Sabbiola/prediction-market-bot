@@ -44,6 +44,13 @@ class ExecutionMode(str, Enum):
     # Polygon mainnet.  Requires POLYMARKET_PRIVATE_KEY env var and funded wallet.
     # Enable only after passing dress-rehearsal in SANDBOX_CHAIN mode.
     POLYMARKET_LIVE = "POLYMARKET_LIVE"
+    # Hyperliquid perp execution (Bot E):
+    #   HYPERLIQUID_DRY_RUN: bot computes order, logs intent, NO network call
+    #   HYPERLIQUID_TESTNET: real orders on app.hyperliquid-testnet.xyz (mock USDC)
+    #   HYPERLIQUID_LIVE: real orders on mainnet (real USDC) — requires explicit allow flag
+    HYPERLIQUID_DRY_RUN = "HYPERLIQUID_DRY_RUN"
+    HYPERLIQUID_TESTNET = "HYPERLIQUID_TESTNET"
+    HYPERLIQUID_LIVE = "HYPERLIQUID_LIVE"
     LIVE_DISABLED = "LIVE_DISABLED"
 
 

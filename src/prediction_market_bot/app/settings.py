@@ -225,6 +225,22 @@ class PredictionSettings:
     alt_shadow_require_llm_enrichment: bool = True
     alt_shadow_promoted_enabled: bool = False
     alt_shadow_promoted_runtime_modes: tuple[str, ...] = ("SANDBOX_CHAIN",)
+    # Regime gate: empirically-derived filter to veto high-loss patterns.
+    # See agents/regime_gate.py for details.
+    regime_gate_enabled: bool = False
+    regime_gate_trend_follow_threshold: float = 0.003
+    regime_gate_fill_price_skip_min: float = 0.45
+    regime_gate_fill_price_skip_max: float = 0.48
+    regime_gate_skip_extreme_rsi: bool = False
+    regime_gate_skip_bad_hours_utc: bool = False
+    # LLM-only engine (Bot D). When engine == "llm_only" the agent uses these.
+    llm_provider: str = "groq"
+    llm_endpoint_url: str = "https://api.groq.com/openai/v1/chat/completions"
+    llm_model: str = "llama-3.3-70b-versatile"
+    llm_api_key_env: str = "GROQ_API_KEY"
+    llm_temperature: float = 0.2
+    llm_timeout_sec: float = 12.0
+    llm_max_retries: int = 1
 
 
 @dataclass(slots=True, frozen=True)
@@ -444,6 +460,29 @@ class AltDataSettings:
 
 
 @dataclass(slots=True, frozen=True)
+class HyperliquidSettings:
+    """Settings for the Hyperliquid perp executor (Bot E).
+
+    Modes are driven by ``execution.mode`` in app YAML:
+      HYPERLIQUID_DRY_RUN, HYPERLIQUID_TESTNET, HYPERLIQUID_LIVE.
+
+    The private key is NEVER stored in YAML — read from the env var named
+    by ``private_key_env`` (default ``HL_PRIVATE_KEY``).
+    """
+
+    enabled: bool = False
+    coin: str = "BTC"
+    private_key_env: str = "HL_PRIVATE_KEY"
+    leverage: int = 1
+    take_profit_pct: float = 0.0030
+    stop_loss_pct: float = 0.0020
+    time_exit_seconds: int = 900
+    min_order_usd: float = 10.0
+    max_size_usd: float = 100.0
+    default_slippage: float = 0.005
+
+
+@dataclass(slots=True, frozen=True)
 class PolymarketClobSettings:
     """Settings for the live Polymarket CLOB order executor.
 
@@ -657,6 +696,7 @@ class AppSettings:
     alt_data: AltDataSettings
     polymarket_clob: PolymarketClobSettings
     sandbox_chain: SandboxChainSettings
+    hyperliquid: HyperliquidSettings
     strategy_research: StrategyResearchSettings
     ui_auth: UiAuthSettings
     security: SecuritySettings
@@ -836,6 +876,34 @@ class AppSettings:
             alt_shadow_promoted_runtime_modes=_as_str_seq(
                 alt_shadow_inference.get("promoted_runtime_modes") or ["SANDBOX_CHAIN"]
             ),
+            regime_gate_enabled=_as_bool(
+                model_inference.get("regime_gate_enabled"), False
+            ),
+            regime_gate_trend_follow_threshold=float(
+                model_inference.get("regime_gate_trend_follow_threshold", 0.003)
+            ),
+            regime_gate_fill_price_skip_min=float(
+                model_inference.get("regime_gate_fill_price_skip_min", 0.45)
+            ),
+            regime_gate_fill_price_skip_max=float(
+                model_inference.get("regime_gate_fill_price_skip_max", 0.48)
+            ),
+            regime_gate_skip_extreme_rsi=_as_bool(
+                model_inference.get("regime_gate_skip_extreme_rsi"), False
+            ),
+            regime_gate_skip_bad_hours_utc=_as_bool(
+                model_inference.get("regime_gate_skip_bad_hours_utc"), False
+            ),
+            llm_provider=_as_str(model_inference.get("llm_provider"), "groq"),
+            llm_endpoint_url=_as_str(
+                model_inference.get("llm_endpoint_url"),
+                "https://api.groq.com/openai/v1/chat/completions",
+            ),
+            llm_model=_as_str(model_inference.get("llm_model"), "llama-3.3-70b-versatile"),
+            llm_api_key_env=_as_str(model_inference.get("llm_api_key_env"), "GROQ_API_KEY"),
+            llm_temperature=float(model_inference.get("llm_temperature", 0.2)),
+            llm_timeout_sec=float(model_inference.get("llm_timeout_sec", 12.0)),
+            llm_max_retries=int(model_inference.get("llm_max_retries", 1)),
         )
         risk = RiskSettings(
             bankroll_usd=float(risk_section.get("bankroll_usd", 10_000.0)),
@@ -1120,6 +1188,19 @@ class AppSettings:
             retry_backoff_sec=max(float(polymarket_clob_section.get("retry_backoff_sec", 1.0)), 0.0),
             dry_run=_as_bool(polymarket_clob_section.get("dry_run"), True),
         )
+        hyperliquid_section = _as_dict(app_config.get("hyperliquid"))
+        hyperliquid = HyperliquidSettings(
+            enabled=_as_bool(hyperliquid_section.get("enabled"), False),
+            coin=_as_str(hyperliquid_section.get("coin"), "BTC"),
+            private_key_env=_as_str(hyperliquid_section.get("private_key_env"), "HL_PRIVATE_KEY"),
+            leverage=max(int(hyperliquid_section.get("leverage", 1)), 1),
+            take_profit_pct=max(float(hyperliquid_section.get("take_profit_pct", 0.0030)), 0.0),
+            stop_loss_pct=max(float(hyperliquid_section.get("stop_loss_pct", 0.0020)), 0.0),
+            time_exit_seconds=max(int(hyperliquid_section.get("time_exit_seconds", 900)), 0),
+            min_order_usd=max(float(hyperliquid_section.get("min_order_usd", 10.0)), 0.0),
+            max_size_usd=max(float(hyperliquid_section.get("max_size_usd", 100.0)), 0.0),
+            default_slippage=max(float(hyperliquid_section.get("default_slippage", 0.005)), 0.0),
+        )
         sandbox_chain = SandboxChainSettings(
             enabled=_as_bool(sandbox_chain_section.get("enabled"), False),
             rpc_url=str(sandbox_chain_section.get("rpc_url", "")),
@@ -1393,6 +1474,7 @@ class AppSettings:
             alt_data=alt_data,
             polymarket_clob=polymarket_clob,
             sandbox_chain=sandbox_chain,
+            hyperliquid=hyperliquid,
             strategy_research=strategy_research,
             ui_auth=ui_auth,
             security=security,
