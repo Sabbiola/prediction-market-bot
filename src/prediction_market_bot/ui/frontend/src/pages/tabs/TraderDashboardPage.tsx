@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { type ColumnDef } from '@tanstack/react-table'
 import { api } from '@/api/client'
-import type { TraderLiveResponse, TraderLivePosition } from '@/types/api'
+import type { TraderLiveResponse, TraderLivePosition, TraderHistoryResponse, TraderHistoryTrade } from '@/types/api'
 import DataTable from '@/components/ui/DataTable'
 import MetricCard from '@/components/ui/MetricCard'
 import Badge from '@/components/ui/Badge'
@@ -10,8 +10,11 @@ import Badge from '@/components/ui/Badge'
 const STARTING_BALANCE = 500
 
 const MODELS = [
-  { key: 'a' as const, label: 'Model A — v4', endpoint: '/api/trader/live/a' },
-  { key: 'b' as const, label: 'Model B — v5', endpoint: '/api/trader/live/b' },
+  { key: 'a' as const, label: 'Model A — v4', endpoint: '/api/trader/live/a', historyEndpoint: '/api/trader/history/a' },
+  { key: 'b' as const, label: 'Model B — v5', endpoint: '/api/trader/live/b', historyEndpoint: '/api/trader/history/b' },
+  { key: 'c' as const, label: 'Model C — v6 (gate)', endpoint: '/api/trader/live/c', historyEndpoint: '/api/trader/history/c' },
+  { key: 'd' as const, label: 'Model D — LLM (Groq)', endpoint: '/api/trader/live/d', historyEndpoint: '/api/trader/history/d' },
+  { key: 'e' as const, label: 'Model E — Hyperliquid testnet (3x perp)', endpoint: '/api/trader/live/e', historyEndpoint: '/api/trader/history/e' },
 ]
 
 function pnlVariant(v: number): 'ok' | 'error' | 'default' {
@@ -70,12 +73,57 @@ const COLUMNS: ColumnDef<TraderLivePosition, unknown>[] = [
   },
 ]
 
-function ModelPanel({ endpoint }: { endpoint: string }) {
+const HISTORY_COLUMNS: ColumnDef<TraderHistoryTrade, unknown>[] = [
+  {
+    accessorKey: 'created_at', header: 'Time', size: 130,
+    cell: i => new Date(String(i.getValue())).toLocaleString('en-GB', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+  },
+  { accessorKey: 'market_id', header: 'Market ID', size: 80 },
+  {
+    accessorKey: 'side', header: 'Side', size: 50,
+    cell: i => <Badge variant={String(i.getValue()) === 'YES' ? 'ok' : 'error'}>{String(i.getValue())}</Badge>,
+  },
+  { accessorKey: 'stake_usd', header: 'Stake $', size: 65, cell: i => '$' + Number(i.getValue()).toFixed(2) },
+  { accessorKey: 'fill_price', header: 'Entry', size: 60, cell: i => Number(i.getValue()).toFixed(4) },
+  {
+    accessorKey: 'state', header: 'State', size: 70,
+    cell: i => {
+      const v = String(i.getValue())
+      return <Badge variant={v === 'SETTLED' ? 'default' : 'accent'}>{v}</Badge>
+    },
+  },
+  {
+    accessorKey: 'won', header: 'Result', size: 65,
+    cell: i => {
+      const v = i.getValue()
+      if (v === null) return <span className="muted">—</span>
+      return v ? <Badge variant="ok">WIN</Badge> : <Badge variant="error">LOSS</Badge>
+    },
+  },
+  {
+    accessorKey: 'pnl_usd', header: 'PnL $', size: 72,
+    cell: i => {
+      const v = i.getValue()
+      if (v === null) return <span className="muted">—</span>
+      const n = Number(v)
+      return <span className={n > 0 ? 'text-ok' : n < 0 ? 'text-error' : ''}>${n.toFixed(2)}</span>
+    },
+  },
+]
+
+function ModelPanel({ endpoint, historyEndpoint }: { endpoint: string; historyEndpoint: string }) {
   const { data, isLoading, error } = useQuery<TraderLiveResponse>({
     queryKey: ['trader-live', endpoint],
     queryFn: () => api.get<TraderLiveResponse>(endpoint),
     refetchInterval: 4_000,
     staleTime: 3_000,
+  })
+
+  const { data: historyData, isLoading: historyLoading } = useQuery<TraderHistoryResponse>({
+    queryKey: ['trader-history', historyEndpoint],
+    queryFn: () => api.get<TraderHistoryResponse>(historyEndpoint),
+    refetchInterval: 30_000,
+    staleTime: 20_000,
   })
 
   if (error) return <div className="tab-placeholder text-error">{(error as Error).message}</div>
@@ -133,15 +181,22 @@ function ModelPanel({ endpoint }: { endpoint: string }) {
         </div>
       )}
 
-      <div className="card" style={{ padding: 0 }}>
+      <div className="card" style={{ padding: 0, marginBottom: '16px' }}>
         <DataTable data={data?.positions ?? []} columns={COLUMNS} isLoading={isLoading} />
+      </div>
+
+      <div style={{ fontSize: '12px', fontWeight: 600, letterSpacing: '0.04em', color: 'var(--text-muted)', marginBottom: '6px', textTransform: 'uppercase' }}>
+        Storico Trade ({historyData?.count ?? '—'})
+      </div>
+      <div className="card" style={{ padding: 0 }}>
+        <DataTable data={historyData?.trades ?? []} columns={HISTORY_COLUMNS} isLoading={historyLoading} />
       </div>
     </>
   )
 }
 
 export default function TraderDashboardPage() {
-  const [active, setActive] = useState<'a' | 'b'>('a')
+  const [active, setActive] = useState<'a' | 'b' | 'c' | 'd' | 'e'>('a')
   const model = MODELS.find(m => m.key === active)!
 
   return (
@@ -158,7 +213,7 @@ export default function TraderDashboardPage() {
         ))}
       </div>
 
-      <ModelPanel endpoint={model.endpoint} />
+      <ModelPanel endpoint={model.endpoint} historyEndpoint={model.historyEndpoint} />
     </div>
   )
 }

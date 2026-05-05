@@ -244,7 +244,8 @@ hyperliquid:
   # Force-close any position still open after 15 minutes so the trade
   # window aligns with the model's 15m prediction horizon.
   time_exit_seconds: 900
-  min_order_usd: 1.0
+  # HL enforces $10 minimum NOTIONAL (stake × leverage). At 3x, stake must be ≥ $3.34.
+  min_order_usd: 10.0
   max_size_usd: 50.0
   default_slippage: 0.005
 
