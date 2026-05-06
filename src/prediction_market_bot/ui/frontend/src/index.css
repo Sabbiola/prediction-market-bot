@@ -124,6 +124,7 @@ html, body, #root {
 .app-shell { display: flex; height: 100vh; overflow: hidden; }
 .app-layout { display: flex; flex-direction: column; flex: 1; min-width: 0; overflow: hidden; }
 .content-area { flex: 1; overflow-y: auto; padding: 24px 28px; }
+@media (max-width: 768px) { .content-area { padding: 14px; } }
 
 /* ── Sidebar ── */
 .sidebar {
@@ -199,7 +200,7 @@ html, body, #root {
   display: none; background: none; border: none; color: var(--color-muted);
   cursor: pointer; padding: 4px;
 }
-@media (max-width: 640px) { .topbar__menu-btn { display: flex; } }
+@media (max-width: 900px) { .topbar__menu-btn { display: flex; } }
 .topbar__breadcrumb { font-size: 13px; font-weight: 600; color: var(--color-text); letter-spacing: -0.01em; }
 .topbar__status-row { display: flex; align-items: center; gap: 8px; margin-left: 12px; flex: 1; }
 .topbar__auth { display: flex; align-items: center; gap: 8px; margin-left: auto; }
@@ -633,4 +634,91 @@ html, body, #root {
 button:focus-visible, input:focus-visible, textarea:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
+}
+
+/* ── Mobile / responsive layout ──────────────────────────────────────── */
+@media (max-width: 900px) {
+  /* Hero: stack vertically, allow wrap */
+  .hero {
+    padding: 16px;
+    gap: 14px;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .hero__divider { display: none; }
+  .hero__price { font-size: 24px; }
+  .hero__meta { width: 100%; }
+
+  /* KPI tiles: 2-up on tablet, 1-up on phone */
+  .metrics-row { gap: 10px; }
+  .kpi-tile {
+    min-width: calc(50% - 5px);
+    flex: 0 1 calc(50% - 5px);
+    padding: 14px;
+  }
+  .kpi-tile__value { font-size: 20px; }
+
+  /* Cards: tighter padding */
+  .card { padding: 14px; }
+  .card__title { margin-bottom: 12px; }
+  .card__title--with-actions { flex-direction: column; align-items: flex-start; gap: 4px; }
+
+  /* Leaderboard: simpler grid (rank | name | total only) */
+  .leaderboard__row {
+    grid-template-columns: 28px 1fr auto;
+    gap: 10px;
+    padding: 10px 12px;
+    text-align: left;
+  }
+  .leaderboard__row > div:nth-child(3),
+  .leaderboard__row > div:nth-child(4) {
+    display: none;  /* hide Realized + uPnL columns on mobile */
+  }
+  .leaderboard__metric { min-width: 0; font-size: 12px; }
+  .leaderboard__name { font-size: 12px; }
+  .leaderboard__name-sub { font-size: 10px; }
+
+  /* Topbar: compact */
+  .topbar { padding: 0 12px; height: 46px; gap: 8px; }
+  .topbar__breadcrumb { font-size: 12px; }
+  .topbar__status-row { gap: 6px; margin-left: 6px; }
+
+  /* Sidebar always overlays on mobile */
+  .sidebar {
+    position: fixed; left: 0; top: 0; bottom: 0; z-index: 50;
+    transform: translateX(-100%); transition: transform 200ms ease;
+  }
+  .app-shell--mobile-open .sidebar { transform: translateX(0); }
+
+  /* Tables: smaller font + touch-friendly rows */
+  .data-table          { font-size: 11px; }
+  .data-table th,
+  .data-table td       { padding: 8px 10px; }
+
+  /* Segmented control wraps */
+  .segmented { width: 100%; flex-wrap: wrap; }
+  .segmented__btn { flex: 1; padding: 7px 10px; font-size: 11px; }
+
+  /* Trader page section spacing */
+  .tab-section { gap: 12px; }
+}
+
+@media (max-width: 540px) {
+  /* Phone: 1-up KPI tiles + smaller charts */
+  .kpi-tile { min-width: 100%; flex: 1 1 100%; }
+  .hero__price { font-size: 22px; }
+  .hero__meta-value { font-size: 13px; }
+
+  /* Tighter table cells, allow horizontal scroll on the wrap */
+  .data-table-scroll { -webkit-overflow-scrolling: touch; }
+  .data-table        { min-width: 560px; }
+
+  /* Leaderboard: drop the family subtitle to one line */
+  .leaderboard__name-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* Hero status pill stays compact */
+  .hero__live-pill { padding: 3px 8px; font-size: 9px; }
+
+  /* Login card */
+  .login-card { width: calc(100% - 28px); padding: 28px 22px; }
 }

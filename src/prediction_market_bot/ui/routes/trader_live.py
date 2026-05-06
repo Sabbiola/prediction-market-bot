@@ -375,6 +375,88 @@ def _build_trader_response(db_path: Path) -> dict[str, Any]:
 
 
 _MODEL_B_DB = Path("data/runtime_v5.db")
+_MODEL_C_DB = Path("data/runtime_v6.db")
+_MODEL_D_DB = Path("data/runtime_llm.db")
+_MODEL_E_DB = Path("data/runtime_e.db")
+
+
+def _read_trade_history(db_path: Path, limit: int = 300) -> list[dict[str, Any]]:
+    if not db_path.exists():
+        return []
+    try:
+        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        cur = con.cursor()
+        cur.execute(
+            "SELECT state, updated_at, payload_json FROM pending_settlements ORDER BY updated_at DESC LIMIT ?",
+            (limit,),
+        )
+        rows = cur.fetchall()
+        con.close()
+    except sqlite3.Error as exc:
+        logger.warning("trader_history_db_error: %s", exc)
+        return []
+
+    result = []
+    for db_state, db_updated_at, payload_json in rows:
+        try:
+            p: dict[str, Any] = json.loads(payload_json)
+        except (TypeError, ValueError):
+            continue
+        side = str(p.get("side") or "")
+        stake = float(p.get("stake_usd") or 0)
+        price = float(p.get("fill_price") or 0)
+        resolved_yes = p.get("resolved_yes")
+        state = str(db_state or p.get("state") or "")
+        won: bool | None = None
+        pnl: float | None = None
+        if state == "SETTLED" and resolved_yes is not None:
+            won = (side == "YES") == bool(resolved_yes)
+            pnl = round(stake * (1 / price - 1) if (won and price > 0) else -stake, 2)
+        result.append({
+            "market_id": str(p.get("market_id") or ""),
+            "side": side,
+            "stake_usd": round(stake, 2),
+            "fill_price": round(price, 4),
+            "order_id": str(p.get("order_id") or ""),
+            "state": state,
+            "resolution_status": str(p.get("resolution_status") or ""),
+            "resolved_yes": resolved_yes,
+            "won": won,
+            "pnl_usd": pnl,
+            "created_at": str(p.get("created_at") or ""),
+            "updated_at": str(db_updated_at or ""),
+        })
+    return result
+
+
+@router.get("/api/trader/history/a")
+def trader_history_a(request: Request) -> dict[str, Any]:
+    trades = _read_trade_history(_resolve_db_path(request))
+    return {"trades": trades, "count": len(trades)}
+
+
+@router.get("/api/trader/history/b")
+def trader_history_b() -> dict[str, Any]:
+    trades = _read_trade_history(_MODEL_B_DB)
+    return {"trades": trades, "count": len(trades)}
+
+
+@router.get("/api/trader/history/c")
+def trader_history_c() -> dict[str, Any]:
+    trades = _read_trade_history(_MODEL_C_DB)
+    return {"trades": trades, "count": len(trades)}
+
+
+@router.get("/api/trader/history/d")
+def trader_history_d() -> dict[str, Any]:
+    trades = _read_trade_history(_MODEL_D_DB)
+    return {"trades": trades, "count": len(trades)}
+
+
+@router.get("/api/trader/history/e")
+def trader_history_e() -> dict[str, Any]:
+    trades = _read_trade_history(_MODEL_E_DB)
+    return {"trades": trades, "count": len(trades)}
 
 
 @router.get("/api/trader/live")
@@ -393,3 +475,111 @@ def trader_live_a(request: Request) -> dict[str, Any]:
 def trader_live_b() -> dict[str, Any]:
     """Model B (v5) — reads from data/runtime_v5.db (separate bankroll)."""
     return _build_trader_response(_MODEL_B_DB)
+
+
+@router.get("/api/trader/live/c")
+def trader_live_c() -> dict[str, Any]:
+    """Model C (v6 = v5 + regime gate) — reads from data/runtime_v6.db."""
+    return _build_trader_response(_MODEL_C_DB)
+
+
+@router.get("/api/trader/live/d")
+def trader_live_d() -> dict[str, Any]:
+    """Model D (LLM-only Groq Llama 3.3 70B) — reads from data/runtime_llm.db."""
+    return _build_trader_response(_MODEL_D_DB)
+
+
+# ── Hyperliquid live account (Model E) ─────────────────────────────────
+# The model E "balance" is *actually* HL testnet collateral (USDC), not the
+# Polymarket paper bankroll.  We fetch it via the SDK on every request and
+# cache for a few seconds so the dashboard reflects the real on-chain state.
+
+_HL_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_HL_CACHE_TTL_SEC = 8.0
+
+
+def _fetch_hl_account_snapshot() -> dict[str, Any]:
+    """Return real HL testnet account state for the env-configured wallet.
+
+    Shape: { account_value_usd, withdrawable_usd, spot_usdc, total_ntl_pos,
+             positions: [{coin, szi, entry_px, unrealized_pnl, leverage}],
+             address, available }
+    """
+    now = time.time()
+    cached = _HL_CACHE.get("e")
+    if cached and (now - cached[0]) < _HL_CACHE_TTL_SEC:
+        return cached[1]
+
+    snapshot: dict[str, Any] = {
+        "available": False,
+        "address": "",
+        "account_value_usd": 0.0,
+        "withdrawable_usd": 0.0,
+        "spot_usdc": 0.0,
+        "total_ntl_pos": 0.0,
+        "positions": [],
+    }
+    try:
+        import os as _os
+        priv = _os.environ.get("HL_PRIVATE_KEY", "")
+        if not priv:
+            return snapshot
+        if not priv.startswith("0x"):
+            priv = "0x" + priv
+        import eth_account  # lazy import: SDK only loaded when E is queried
+        from hyperliquid.info import Info
+        from hyperliquid.utils import constants
+
+        wallet = eth_account.Account.from_key(priv)
+        addr = wallet.address
+        info = Info(constants.TESTNET_API_URL, skip_ws=True)
+        state = info.user_state(addr) or {}
+        margin = state.get("marginSummary") or {}
+        spot = info.spot_user_state(addr) or {}
+        usdc_bal = next(
+            (b for b in (spot.get("balances") or []) if b.get("coin") == "USDC"),
+            {},
+        )
+        positions: list[dict[str, Any]] = []
+        for p in state.get("assetPositions") or []:
+            pos = p.get("position") or {}
+            try:
+                positions.append({
+                    "coin": pos.get("coin", ""),
+                    "szi": float(pos.get("szi") or 0),
+                    "entry_px": float(pos.get("entryPx") or 0),
+                    "unrealized_pnl": float(pos.get("unrealizedPnl") or 0),
+                    "leverage": (pos.get("leverage") or {}).get("value", 1),
+                    "position_value_usd": float(pos.get("positionValue") or 0),
+                    "margin_used_usd": float(pos.get("marginUsed") or 0),
+                })
+            except (TypeError, ValueError):
+                continue
+
+        snapshot = {
+            "available": True,
+            "address": addr,
+            "account_value_usd": float(margin.get("accountValue") or 0),
+            "withdrawable_usd": float(state.get("withdrawable") or 0),
+            "spot_usdc": float(usdc_bal.get("total") or 0),
+            "total_ntl_pos": float(margin.get("totalNtlPos") or 0),
+            "positions": positions,
+        }
+    except Exception as exc:
+        logger.debug("hl_account_snapshot_failed err=%s", exc)
+    _HL_CACHE["e"] = (now, snapshot)
+    return snapshot
+
+
+@router.get("/api/trader/live/e")
+def trader_live_e() -> dict[str, Any]:
+    """Model E (Hyperliquid perp testnet) — runtime_e.db + live HL account state."""
+    base = _build_trader_response(_MODEL_E_DB)
+    base["hl_account"] = _fetch_hl_account_snapshot()
+    return base
+
+
+@router.get("/api/trader/hl/account")
+def trader_hl_account() -> dict[str, Any]:
+    """Standalone HL testnet account probe (used by Model E hero)."""
+    return _fetch_hl_account_snapshot()

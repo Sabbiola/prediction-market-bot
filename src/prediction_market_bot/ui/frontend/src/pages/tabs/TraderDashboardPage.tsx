@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useQueries } from '@tanstack/react-query'
 import { type ColumnDef } from '@tanstack/react-table'
 import { api } from '@/api/client'
-import type { TraderLiveResponse, TraderLivePosition, TraderHistoryResponse, TraderHistoryTrade } from '@/types/api'
+import type { TraderLiveResponse, TraderLivePosition, TraderHistoryResponse, TraderHistoryTrade, HlAccount } from '@/types/api'
 import DataTable from '@/components/ui/DataTable'
 import Badge from '@/components/ui/Badge'
 import KpiTile from '@/components/ui/KpiTile'
@@ -13,7 +13,7 @@ import ProgressBar from '@/components/ui/ProgressBar'
 
 type ModelKey = 'a' | 'b' | 'c' | 'd' | 'e'
 
-const STARTING_BALANCE = 500
+const POLYMARKET_BANKROLL = 500
 
 interface ModelDef {
   key: ModelKey
@@ -24,14 +24,16 @@ interface ModelDef {
   historyEndpoint: string
   /** Polymarket binary needs WR > 50%, HL perp with 0.30/0.20 TP/SL needs > 40% */
   breakEven: number
+  /** "venue" tag shown in the hero — Polymarket paper vs Hyperliquid testnet */
+  venue: 'polymarket' | 'hyperliquid'
 }
 
 const MODELS: ModelDef[] = [
-  { key: 'a', short: 'A', label: 'Model A',         family: 'v4 · CatBoost (heuristic fallback)', endpoint: '/api/trader/live/a', historyEndpoint: '/api/trader/history/a', breakEven: 0.50 },
-  { key: 'b', short: 'B', label: 'Model B',         family: 'v5 · CatBoost + Coinbase lead-lag',  endpoint: '/api/trader/live/b', historyEndpoint: '/api/trader/history/b', breakEven: 0.50 },
-  { key: 'c', short: 'C', label: 'Model C',         family: 'v6 · v5 + regime gate',              endpoint: '/api/trader/live/c', historyEndpoint: '/api/trader/history/c', breakEven: 0.50 },
-  { key: 'd', short: 'D', label: 'Model D',         family: 'LLM · Llama-3.3 70B (Groq)',         endpoint: '/api/trader/live/d', historyEndpoint: '/api/trader/history/d', breakEven: 0.50 },
-  { key: 'e', short: 'E', label: 'Model E',         family: 'Hyperliquid testnet · 3x perp',      endpoint: '/api/trader/live/e', historyEndpoint: '/api/trader/history/e', breakEven: 0.40 },
+  { key: 'a', short: 'A', label: 'Model A', family: 'v4 · CatBoost (heuristic fallback)', endpoint: '/api/trader/live/a', historyEndpoint: '/api/trader/history/a', breakEven: 0.50, venue: 'polymarket' },
+  { key: 'b', short: 'B', label: 'Model B', family: 'v5 · CatBoost + Coinbase lead-lag',  endpoint: '/api/trader/live/b', historyEndpoint: '/api/trader/history/b', breakEven: 0.50, venue: 'polymarket' },
+  { key: 'c', short: 'C', label: 'Model C', family: 'v6 · v5 + regime gate',              endpoint: '/api/trader/live/c', historyEndpoint: '/api/trader/history/c', breakEven: 0.50, venue: 'polymarket' },
+  { key: 'd', short: 'D', label: 'Model D', family: 'LLM · Llama-3.3 70B (Groq)',         endpoint: '/api/trader/live/d', historyEndpoint: '/api/trader/history/d', breakEven: 0.50, venue: 'polymarket' },
+  { key: 'e', short: 'E', label: 'Model E', family: 'Hyperliquid testnet · 3x perp',      endpoint: '/api/trader/live/e', historyEndpoint: '/api/trader/history/e', breakEven: 0.40, venue: 'hyperliquid' },
 ]
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -54,6 +56,11 @@ function fmtSecs(secs: number | null): string {
 
 function fmtUsd(v: number): string {
   return (v >= 0 ? '+$' : '-$') + Math.abs(v).toFixed(2)
+}
+
+function fmtAddr(addr: string): string {
+  if (!addr || addr.length < 10) return addr
+  return addr.slice(0, 6) + '…' + addr.slice(-4)
 }
 
 function buildEquityCurve(trades: TraderHistoryTrade[], starting: number): EquityPoint[] {
@@ -244,9 +251,23 @@ function ModelPanel({ model }: { model: ModelDef }) {
     [histQ.data?.trades],
   )
 
+  const live = liveQ.data
+  const isHl = model.venue === 'hyperliquid'
+  const hl: HlAccount | undefined = live?.hl_account
+  const hlAvailable = !!(isHl && hl?.available)
+
+  // Effective bankroll basis:
+  //  - Polymarket bots: $500 paper start
+  //  - HL bot E (when SDK is reachable): real wallet = account_value + spot
+  //    starting balance ≈ wallet - realized_pnl (we don't have a perfect
+  //    "before" snapshot, so we approximate by anchoring to the current wallet)
+  const startingBalance = hlAvailable
+    ? Math.max(1, (hl!.account_value_usd + hl!.spot_usdc) - (live?.realized_pnl_usd ?? 0))
+    : POLYMARKET_BANKROLL
+
   const equity = useMemo(
-    () => buildEquityCurve(histQ.data?.trades ?? [], STARTING_BALANCE),
-    [histQ.data?.trades],
+    () => buildEquityCurve(histQ.data?.trades ?? [], startingBalance),
+    [histQ.data?.trades, startingBalance],
   )
   const sparkline = useMemo(() => equity.map(p => ({ value: p.balance })), [equity])
 
@@ -254,10 +275,17 @@ function ModelPanel({ model }: { model: ModelDef }) {
     return <div className="tab-placeholder text-error">{(liveQ.error as Error).message}</div>
   }
 
-  const live = liveQ.data
-  const balance = live ? STARTING_BALANCE + live.realized_pnl_usd : null
-  const balanceDelta = balance !== null ? balance - STARTING_BALANCE : null
-  const balancePct   = balanceDelta !== null ? (balanceDelta / STARTING_BALANCE) * 100 : null
+  // Polymarket: balance = paper bankroll + paper PnL
+  // HL: balance = real wallet (spot + perp account_value); the "PnL" in
+  // Polymarket-paper terms is what the strategy logged, separate from the
+  // actual on-chain perp PnL which is encoded in account_value already.
+  const balance = hlAvailable
+    ? hl!.account_value_usd + hl!.spot_usdc
+    : (live ? POLYMARKET_BANKROLL + live.realized_pnl_usd : null)
+  const balanceDelta = balance !== null ? balance - startingBalance : null
+  const balancePct   = balanceDelta !== null && startingBalance > 0
+    ? (balanceDelta / startingBalance) * 100
+    : null
 
   return (
     <div className="tab-section">
@@ -277,7 +305,7 @@ function ModelPanel({ model }: { model: ModelDef }) {
           <span className="hero__meta-value">{model.label} <span className="muted" style={{ fontSize: 11 }}>· {model.family}</span></span>
         </div>
         <div className="hero__meta">
-          <span className="hero__meta-label">Equity</span>
+          <span className="hero__meta-label">{hlAvailable ? 'HL wallet' : 'Equity'}</span>
           <span className="hero__meta-value tabular" style={{ color: balanceDelta != null && balanceDelta < 0 ? 'var(--color-error)' : balanceDelta != null && balanceDelta > 0 ? 'var(--color-ok)' : undefined }}>
             {balance !== null ? '$' + balance.toFixed(2) : '—'}
             {balancePct !== null && (
@@ -286,6 +314,11 @@ function ModelPanel({ model }: { model: ModelDef }) {
               </span>
             )}
           </span>
+          {hlAvailable && (
+            <span className="muted" style={{ fontSize: 10, marginTop: 2 }}>
+              wallet {fmtAddr(hl!.address)} · testnet
+            </span>
+          )}
         </div>
         <div className="hero__meta" style={{ marginLeft: 'auto' }}>
           <span className="hero__meta-label">Live</span>
@@ -295,6 +328,88 @@ function ModelPanel({ model }: { model: ModelDef }) {
           </div>
         </div>
       </div>
+
+      {/* Hyperliquid live wallet (only for Model E) */}
+      {isHl && (
+        <div className="card">
+          <div className="card__title card__title--with-actions">
+            <span>Hyperliquid testnet — wallet on-chain</span>
+            {hl?.address && (
+              <a
+                className="muted"
+                style={{ fontSize: 11, fontWeight: 400, textTransform: 'none', letterSpacing: 0, textDecoration: 'none' }}
+                href={`https://app.hyperliquid-testnet.xyz/explorer/address/${hl.address}`}
+                target="_blank" rel="noopener noreferrer"
+              >
+                {fmtAddr(hl.address)} ↗
+              </a>
+            )}
+          </div>
+          {!hlAvailable ? (
+            <div className="muted" style={{ fontSize: 12 }}>
+              SDK non raggiungibile (HL_PRIVATE_KEY non impostato sulla VPS o testnet API down).
+            </div>
+          ) : (
+            <div className="metrics-row">
+              <KpiTile
+                label="Perp account"
+                value={'$' + hl!.account_value_usd.toFixed(2)}
+                variant="accent"
+                hint="margin balance"
+              />
+              <KpiTile
+                label="Spot USDC"
+                value={'$' + hl!.spot_usdc.toFixed(2)}
+                hint="unified collateral"
+              />
+              <KpiTile
+                label="Notional position"
+                value={'$' + hl!.total_ntl_pos.toFixed(2)}
+                variant={hl!.total_ntl_pos > 0 ? 'accent' : 'default'}
+                hint={hl!.positions.length + ' open perp'}
+              />
+              <KpiTile
+                label="Withdrawable"
+                value={'$' + hl!.withdrawable_usd.toFixed(2)}
+                hint="free margin"
+              />
+            </div>
+          )}
+          {hl?.positions && hl.positions.length > 0 && (
+            <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {hl.positions.map((p, i) => {
+                const isLong = p.szi >= 0
+                return (
+                  <div key={i} style={{
+                    display: 'flex', alignItems: 'center', gap: 12,
+                    padding: '10px 12px',
+                    background: 'var(--color-bg-2)',
+                    border: '1px solid var(--color-border)',
+                    borderRadius: 'var(--radius-sm)',
+                    flexWrap: 'wrap',
+                  }}>
+                    <Badge variant={isLong ? 'ok' : 'error'}>{isLong ? 'LONG' : 'SHORT'}</Badge>
+                    <span style={{ fontWeight: 600 }}>{p.coin}</span>
+                    <span className="muted tabular" style={{ fontSize: 11 }}>
+                      {Math.abs(p.szi).toFixed(5)} @ ${p.entry_px.toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                    </span>
+                    <span className="muted" style={{ fontSize: 11 }}>{p.leverage}x cross</span>
+                    <span className="muted tabular" style={{ fontSize: 11 }}>
+                      ntl ${p.position_value_usd.toFixed(2)} · margin ${p.margin_used_usd.toFixed(2)}
+                    </span>
+                    <span
+                      className={'tabular' + (p.unrealized_pnl > 0 ? ' text-ok' : p.unrealized_pnl < 0 ? ' text-error' : '')}
+                      style={{ marginLeft: 'auto', fontWeight: 600, fontSize: 13 }}
+                    >
+                      {fmtUsd(p.unrealized_pnl)}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* KPI ROW */}
       <div className="metrics-row">
@@ -340,10 +455,10 @@ function ModelPanel({ model }: { model: ModelDef }) {
           <div className="card__title card__title--with-actions">
             <span>Equity curve</span>
             <span className="muted" style={{ fontSize: 11, fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>
-              start ${STARTING_BALANCE} · {summary.totalSettled} settled trades
+              start ${startingBalance.toFixed(0)} · {summary.totalSettled} settled trades
             </span>
           </div>
-          <EquityCurve data={equity} startingBalance={STARTING_BALANCE} height={260} />
+          <EquityCurve data={equity} startingBalance={startingBalance} height={260} />
         </div>
         <div className="card">
           <div className="card__title">Win rate</div>

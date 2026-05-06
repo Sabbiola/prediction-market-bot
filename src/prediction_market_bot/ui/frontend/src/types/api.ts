@@ -853,6 +853,28 @@ export const TAB_SECTIONS: TabSection[] = [
   'trader',
 ]
 
+// ── Trader History (settled / pending settlements) ──────────────────────────
+
+export interface TraderHistoryTrade {
+  market_id: string
+  side: string
+  stake_usd: number
+  fill_price: number
+  order_id: string
+  state: string
+  resolution_status: string
+  resolved_yes: boolean | null
+  won: boolean | null
+  pnl_usd: number | null
+  created_at: string
+  updated_at: string
+}
+
+export interface TraderHistoryResponse {
+  trades: TraderHistoryTrade[]
+  count: number
+}
+
 // ── Trader Live (per-model position monitor) ────────────────────────────────
 
 export interface TraderLivePosition {
@@ -876,6 +898,26 @@ export interface TraderLivePosition {
   currently_winning: boolean | null
 }
 
+export interface HlPosition {
+  coin: string
+  szi: number
+  entry_px: number
+  unrealized_pnl: number
+  leverage: number
+  position_value_usd: number
+  margin_used_usd: number
+}
+
+export interface HlAccount {
+  available: boolean
+  address: string
+  account_value_usd: number
+  withdrawable_usd: number
+  spot_usdc: number
+  total_ntl_pos: number
+  positions: HlPosition[]
+}
+
 export interface TraderLiveResponse {
   as_of: string
   btc_spot_usd: number | null
@@ -885,4 +927,6 @@ export interface TraderLiveResponse {
   unrealized_pnl_usd: number
   total_exposure_usd: number
   positions: TraderLivePosition[]
+  /** Populated only for Model E (Hyperliquid perp testnet). */
+  hl_account?: HlAccount
 }
