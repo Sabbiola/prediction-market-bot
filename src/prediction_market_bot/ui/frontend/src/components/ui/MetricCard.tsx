@@ -16,12 +16,12 @@ export default function MetricCard({ label, value, sub, variant = 'default', mon
   }[variant]
 
   return (
-    <div className="metric-card">
-      <span className="metric-card__label muted">{label}</span>
-      <span className={'metric-card__value' + (mono ? ' mono' : '') + (valueClass ? ' ' + valueClass : '')}>
+    <div className={'metric-card metric-card--' + variant}>
+      <span className="metric-card__label">{label}</span>
+      <span className={'metric-card__value tabular' + (mono ? ' mono' : '') + (valueClass ? ' ' + valueClass : '')}>
         {value}
       </span>
-      {sub && <span className="metric-card__sub muted">{sub}</span>}
+      {sub && <span className="metric-card__sub">{sub}</span>}
     </div>
   )
 }

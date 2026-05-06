@@ -1,24 +1,47 @@
-import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMemo, useState } from 'react'
+import { useQueries } from '@tanstack/react-query'
 import { type ColumnDef } from '@tanstack/react-table'
 import { api } from '@/api/client'
 import type { TraderLiveResponse, TraderLivePosition, TraderHistoryResponse, TraderHistoryTrade } from '@/types/api'
 import DataTable from '@/components/ui/DataTable'
-import MetricCard from '@/components/ui/MetricCard'
 import Badge from '@/components/ui/Badge'
+import KpiTile from '@/components/ui/KpiTile'
+import EquityCurve, { type EquityPoint } from '@/components/ui/EquityCurve'
+import WinRateGauge from '@/components/ui/WinRateGauge'
+import PnlDistribution from '@/components/ui/PnlDistribution'
+import ProgressBar from '@/components/ui/ProgressBar'
+
+type ModelKey = 'a' | 'b' | 'c' | 'd' | 'e'
 
 const STARTING_BALANCE = 500
 
-const MODELS = [
-  { key: 'a' as const, label: 'Model A — v4', endpoint: '/api/trader/live/a', historyEndpoint: '/api/trader/history/a' },
-  { key: 'b' as const, label: 'Model B — v5', endpoint: '/api/trader/live/b', historyEndpoint: '/api/trader/history/b' },
-  { key: 'c' as const, label: 'Model C — v6 (gate)', endpoint: '/api/trader/live/c', historyEndpoint: '/api/trader/history/c' },
-  { key: 'd' as const, label: 'Model D — LLM (Groq)', endpoint: '/api/trader/live/d', historyEndpoint: '/api/trader/history/d' },
-  { key: 'e' as const, label: 'Model E — Hyperliquid testnet (3x perp)', endpoint: '/api/trader/live/e', historyEndpoint: '/api/trader/history/e' },
+interface ModelDef {
+  key: ModelKey
+  short: string
+  label: string
+  family: string
+  endpoint: string
+  historyEndpoint: string
+  /** Polymarket binary needs WR > 50%, HL perp with 0.30/0.20 TP/SL needs > 40% */
+  breakEven: number
+}
+
+const MODELS: ModelDef[] = [
+  { key: 'a', short: 'A', label: 'Model A',         family: 'v4 · CatBoost (heuristic fallback)', endpoint: '/api/trader/live/a', historyEndpoint: '/api/trader/history/a', breakEven: 0.50 },
+  { key: 'b', short: 'B', label: 'Model B',         family: 'v5 · CatBoost + Coinbase lead-lag',  endpoint: '/api/trader/live/b', historyEndpoint: '/api/trader/history/b', breakEven: 0.50 },
+  { key: 'c', short: 'C', label: 'Model C',         family: 'v6 · v5 + regime gate',              endpoint: '/api/trader/live/c', historyEndpoint: '/api/trader/history/c', breakEven: 0.50 },
+  { key: 'd', short: 'D', label: 'Model D',         family: 'LLM · Llama-3.3 70B (Groq)',         endpoint: '/api/trader/live/d', historyEndpoint: '/api/trader/history/d', breakEven: 0.50 },
+  { key: 'e', short: 'E', label: 'Model E',         family: 'Hyperliquid testnet · 3x perp',      endpoint: '/api/trader/live/e', historyEndpoint: '/api/trader/history/e', breakEven: 0.40 },
 ]
+
+// ── Helpers ───────────────────────────────────────────────────────────────
 
 function pnlVariant(v: number): 'ok' | 'error' | 'default' {
   return v > 0 ? 'ok' : v < 0 ? 'error' : 'default'
+}
+
+function pnlDirection(v: number): 'up' | 'down' | 'flat' {
+  return v > 0 ? 'up' : v < 0 ? 'down' : 'flat'
 }
 
 function fmtSecs(secs: number | null): string {
@@ -29,45 +52,69 @@ function fmtSecs(secs: number | null): string {
   return `${m}m ${s}s`
 }
 
-const COLUMNS: ColumnDef<TraderLivePosition, unknown>[] = [
+function fmtUsd(v: number): string {
+  return (v >= 0 ? '+$' : '-$') + Math.abs(v).toFixed(2)
+}
+
+function buildEquityCurve(trades: TraderHistoryTrade[], starting: number): EquityPoint[] {
+  // Trades come newest-first by default; use only settled (resolution_status complete) and reverse
+  const settled = trades
+    .filter(t => t.pnl_usd !== null && t.created_at)
+    .slice()
+    .reverse()
+  if (!settled.length) return []
+  let bal = starting
+  const points: EquityPoint[] = [{ t: settled[0].created_at, balance: starting }]
+  for (const t of settled) {
+    bal += t.pnl_usd ?? 0
+    points.push({ t: t.updated_at || t.created_at, balance: bal, pnl: t.pnl_usd ?? 0 })
+  }
+  return points
+}
+
+function summariseTrades(trades: TraderHistoryTrade[]) {
+  const settled = trades.filter(t => t.pnl_usd !== null)
+  const wins   = settled.filter(t => t.won === true).length
+  const losses = settled.filter(t => t.won === false).length
+  const pnls   = settled.map(t => t.pnl_usd as number)
+  const totalPnl = pnls.reduce((a, b) => a + b, 0)
+  const totalSettled = wins + losses
+  const wr = totalSettled ? wins / totalSettled : 0
+  const avgWin  = wins   ? pnls.filter(p => p > 0).reduce((a, b) => a + b, 0) / wins   : 0
+  const avgLoss = losses ? pnls.filter(p => p < 0).reduce((a, b) => a + b, 0) / losses : 0
+  const totalStaked = settled.reduce((a, t) => a + (t.stake_usd ?? 0), 0)
+  const roi = totalStaked > 0 ? totalPnl / totalStaked : 0
+  return { wins, losses, totalSettled, wr, totalPnl, avgWin, avgLoss, totalStaked, roi, pnls }
+}
+
+// ── Columns ───────────────────────────────────────────────────────────────
+
+const POSITION_COLUMNS: ColumnDef<TraderLivePosition, unknown>[] = [
   {
-    accessorKey: 'title',
-    header: 'Market',
+    accessorKey: 'title', header: 'Market',
     cell: i => <span title={String(i.getValue())}>{String(i.getValue()).slice(0, 42)}</span>,
   },
   {
     accessorKey: 'side', header: 'Side', size: 50,
     cell: i => <Badge variant={String(i.getValue()) === 'YES' ? 'ok' : 'error'}>{String(i.getValue())}</Badge>,
   },
-  { accessorKey: 'shares', header: 'Shares', size: 70, cell: i => Number(i.getValue()).toFixed(2) },
-  { accessorKey: 'entry_price', header: 'Entry', size: 65, cell: i => Number(i.getValue()).toFixed(4) },
-  { accessorKey: 'side_mark_price', header: 'Mark', size: 65, cell: i => i.getValue() !== null ? Number(i.getValue()).toFixed(4) : '—' },
-  { accessorKey: 'cost_basis_usd', header: 'Cost $', size: 65, cell: i => '$' + Number(i.getValue()).toFixed(2) },
+  { accessorKey: 'shares',          header: 'Shares', size: 70, cell: i => Number(i.getValue()).toFixed(2) },
+  { accessorKey: 'entry_price',     header: 'Entry',  size: 65, cell: i => Number(i.getValue()).toFixed(4) },
+  { accessorKey: 'side_mark_price', header: 'Mark',   size: 65, cell: i => i.getValue() !== null ? Number(i.getValue()).toFixed(4) : '—' },
+  { accessorKey: 'cost_basis_usd',  header: 'Cost $', size: 65, cell: i => '$' + Number(i.getValue()).toFixed(2) },
   {
-    accessorKey: 'unrealized_pnl_usd', header: 'uPnL $', size: 72,
+    accessorKey: 'unrealized_pnl_usd', header: 'uPnL $', size: 75,
     cell: i => {
       const v = Number(i.getValue())
-      return <span className={v > 0 ? 'text-ok' : v < 0 ? 'text-error' : ''}>${v.toFixed(2)}</span>
+      return <span className={v > 0 ? 'text-ok' : v < 0 ? 'text-error' : ''}>{fmtUsd(v)}</span>
     },
   },
   { accessorKey: 'seconds_to_close', header: 'Closes In', size: 80, cell: i => fmtSecs(i.getValue() as number | null) },
   {
-    accessorKey: 'slot_anchor_btc', header: 'BTC Anchor', size: 90,
-    cell: i => i.getValue() !== null ? '$' + Number(i.getValue()).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—',
-  },
-  {
-    accessorKey: 'btc_delta_usd', header: 'BTC Delta', size: 80,
-    cell: i => {
-      if (i.getValue() === null) return '—'
-      const v = Number(i.getValue())
-      return <span className={v > 0 ? 'text-ok' : v < 0 ? 'text-error' : ''}>${v.toFixed(0)}</span>
-    },
-  },
-  {
-    accessorKey: 'currently_winning', header: 'Winning?', size: 72,
+    accessorKey: 'currently_winning', header: 'On track?', size: 80,
     cell: i => {
       const v = i.getValue()
-      if (v === null) return <span className="muted">—</span>
+      if (v === null) return <span className="muted2">—</span>
       return v ? <Badge variant="ok">YES</Badge> : <Badge variant="error">NO</Badge>
     },
   },
@@ -75,145 +122,339 @@ const COLUMNS: ColumnDef<TraderLivePosition, unknown>[] = [
 
 const HISTORY_COLUMNS: ColumnDef<TraderHistoryTrade, unknown>[] = [
   {
-    accessorKey: 'created_at', header: 'Time', size: 130,
+    accessorKey: 'created_at', header: 'When', size: 130,
     cell: i => new Date(String(i.getValue())).toLocaleString('en-GB', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
   },
-  { accessorKey: 'market_id', header: 'Market ID', size: 80 },
+  { accessorKey: 'market_id', header: 'Market', size: 80 },
   {
     accessorKey: 'side', header: 'Side', size: 50,
     cell: i => <Badge variant={String(i.getValue()) === 'YES' ? 'ok' : 'error'}>{String(i.getValue())}</Badge>,
   },
-  { accessorKey: 'stake_usd', header: 'Stake $', size: 65, cell: i => '$' + Number(i.getValue()).toFixed(2) },
+  { accessorKey: 'stake_usd',  header: 'Stake', size: 65, cell: i => '$' + Number(i.getValue()).toFixed(2) },
   { accessorKey: 'fill_price', header: 'Entry', size: 60, cell: i => Number(i.getValue()).toFixed(4) },
   {
-    accessorKey: 'state', header: 'State', size: 70,
-    cell: i => {
-      const v = String(i.getValue())
-      return <Badge variant={v === 'SETTLED' ? 'default' : 'accent'}>{v}</Badge>
-    },
-  },
-  {
-    accessorKey: 'won', header: 'Result', size: 65,
+    accessorKey: 'won', header: 'Result', size: 70,
     cell: i => {
       const v = i.getValue()
-      if (v === null) return <span className="muted">—</span>
+      if (v === null) return <span className="muted2">—</span>
       return v ? <Badge variant="ok">WIN</Badge> : <Badge variant="error">LOSS</Badge>
     },
   },
   {
-    accessorKey: 'pnl_usd', header: 'PnL $', size: 72,
+    accessorKey: 'pnl_usd', header: 'PnL', size: 80,
     cell: i => {
       const v = i.getValue()
-      if (v === null) return <span className="muted">—</span>
+      if (v === null) return <span className="muted2">—</span>
       const n = Number(v)
-      return <span className={n > 0 ? 'text-ok' : n < 0 ? 'text-error' : ''}>${n.toFixed(2)}</span>
+      return <span className={n > 0 ? 'text-ok' : n < 0 ? 'text-error' : ''}>{fmtUsd(n)}</span>
     },
   },
 ]
 
-function ModelPanel({ endpoint, historyEndpoint }: { endpoint: string; historyEndpoint: string }) {
-  const { data, isLoading, error } = useQuery<TraderLiveResponse>({
-    queryKey: ['trader-live', endpoint],
-    queryFn: () => api.get<TraderLiveResponse>(endpoint),
-    refetchInterval: 4_000,
-    staleTime: 3_000,
-  })
+// ── Cross-model leaderboard ────────────────────────────────────────────────
 
-  const { data: historyData, isLoading: historyLoading } = useQuery<TraderHistoryResponse>({
-    queryKey: ['trader-history', historyEndpoint],
-    queryFn: () => api.get<TraderHistoryResponse>(historyEndpoint),
-    refetchInterval: 30_000,
-    staleTime: 20_000,
-  })
+interface ModelStats {
+  key: ModelKey
+  label: string
+  family: string
+  realizedPnl: number
+  unrealizedPnl: number
+  open: number
+  settled: number
+  wr: number
+  loaded: boolean
+}
 
-  if (error) return <div className="tab-placeholder text-error">{(error as Error).message}</div>
-
-  const balance = data !== undefined ? STARTING_BALANCE + data.realized_pnl_usd : null
-  const balanceDelta = balance !== null ? balance - STARTING_BALANCE : null
-  const balancePct = balanceDelta !== null ? (balanceDelta / STARTING_BALANCE * 100).toFixed(2) : null
-
+function ModelLeaderboard({
+  stats, active, onPick,
+}: {
+  stats: ModelStats[]
+  active: ModelKey
+  onPick: (k: ModelKey) => void
+}) {
+  // Best→worst by realized PnL
+  const ranked = stats.slice().sort((a, b) => b.realizedPnl - a.realizedPnl)
   return (
-    <>
-      <div className="card" style={{ marginBottom: '10px', padding: '7px 12px', display: 'flex', alignItems: 'center', gap: '16px' }}>
-        {data?.btc_spot_usd != null && (
-          <span className="muted" style={{ fontSize: '12px' }}>
-            BTC ${data.btc_spot_usd.toLocaleString('en-US', { maximumFractionDigits: 0 })}
-          </span>
-        )}
-        {data?.as_of && (
-          <span className="muted" style={{ fontSize: '11px' }}>
-            updated {new Date(data.as_of).toLocaleTimeString()}
-          </span>
-        )}
-        {data?.open_count === 0 && data.settled_count >= 0 && (
-          <span className="muted" style={{ fontSize: '11px' }}>Waiting for next slot...</span>
-        )}
-      </div>
-
-      <div className="metrics-row" style={{ marginBottom: '10px' }}>
-        <MetricCard label="Open" value={data?.open_count ?? '—'} />
-        <MetricCard label="Settled" value={data?.settled_count ?? '—'} />
-        <MetricCard
-          label="Balance"
-          value={balance !== null ? '$' + balance.toFixed(2) : '—'}
-          variant={balanceDelta !== null ? pnlVariant(balanceDelta) : 'default'}
-        />
-        <MetricCard
-          label="Realized PnL"
-          value={data !== undefined ? '$' + data.realized_pnl_usd.toFixed(2) : '—'}
-          variant={data !== undefined ? pnlVariant(data.realized_pnl_usd) : 'default'}
-        />
-        <MetricCard
-          label="uPnL"
-          value={data !== undefined ? '$' + data.unrealized_pnl_usd.toFixed(2) : '—'}
-          variant={data !== undefined ? pnlVariant(data.unrealized_pnl_usd) : 'default'}
-        />
-        <MetricCard
-          label="Exposure"
-          value={data !== undefined ? '$' + data.total_exposure_usd.toFixed(2) : '—'}
-          variant="accent"
-        />
-      </div>
-
-      {balancePct !== null && (
-        <div style={{ marginBottom: '10px', fontSize: '12px' }} className="muted">
-          from ${STARTING_BALANCE.toFixed(2)} &bull; {Number(balancePct) >= 0 ? '+' : ''}{balancePct}%
-        </div>
-      )}
-
-      <div className="card" style={{ padding: 0, marginBottom: '16px' }}>
-        <DataTable data={data?.positions ?? []} columns={COLUMNS} isLoading={isLoading} />
-      </div>
-
-      <div style={{ fontSize: '12px', fontWeight: 600, letterSpacing: '0.04em', color: 'var(--text-muted)', marginBottom: '6px', textTransform: 'uppercase' }}>
-        Storico Trade ({historyData?.count ?? '—'})
-      </div>
-      <div className="card" style={{ padding: 0 }}>
-        <DataTable data={historyData?.trades ?? []} columns={HISTORY_COLUMNS} isLoading={historyLoading} />
-      </div>
-    </>
+    <div className="leaderboard">
+      {ranked.map((s, i) => {
+        const total = s.realizedPnl + s.unrealizedPnl
+        const isActive = s.key === active
+        return (
+          <button
+            key={s.key}
+            className={'leaderboard__row' + (isActive ? ' leaderboard__row--active' : '')}
+            onClick={() => onPick(s.key)}
+          >
+            <span className="leaderboard__rank">#{i + 1}</span>
+            <div style={{ overflow: 'hidden' }}>
+              <div className="leaderboard__name">
+                {s.label} <span className="muted" style={{ fontWeight: 400 }}>· {s.family}</span>
+              </div>
+              <div className="leaderboard__name-sub">
+                {s.settled} settled · {(s.wr * 100).toFixed(1)}% WR · {s.open} open
+              </div>
+            </div>
+            <div>
+              <div className="leaderboard__metric-label">Realized</div>
+              <div className={'leaderboard__metric ' + (s.realizedPnl > 0 ? 'text-ok' : s.realizedPnl < 0 ? 'text-error' : '')}>
+                {fmtUsd(s.realizedPnl)}
+              </div>
+            </div>
+            <div>
+              <div className="leaderboard__metric-label">uPnL</div>
+              <div className={'leaderboard__metric ' + (s.unrealizedPnl > 0 ? 'text-ok' : s.unrealizedPnl < 0 ? 'text-error' : '')}>
+                {fmtUsd(s.unrealizedPnl)}
+              </div>
+            </div>
+            <div>
+              <div className="leaderboard__metric-label">Total</div>
+              <div className={'leaderboard__metric ' + (total > 0 ? 'text-ok' : total < 0 ? 'text-error' : '')}>
+                {fmtUsd(total)}
+              </div>
+            </div>
+          </button>
+        )
+      })}
+    </div>
   )
 }
 
-export default function TraderDashboardPage() {
-  const [active, setActive] = useState<'a' | 'b' | 'c' | 'd' | 'e'>('a')
-  const model = MODELS.find(m => m.key === active)!
+// ── Per-model panel (rich layout) ──────────────────────────────────────────
+
+function ModelPanel({ model }: { model: ModelDef }) {
+  const queries = useQueries({
+    queries: [
+      {
+        queryKey: ['trader-live', model.endpoint],
+        queryFn: () => api.get<TraderLiveResponse>(model.endpoint),
+        refetchInterval: 4_000, staleTime: 3_000,
+      },
+      {
+        queryKey: ['trader-history', model.historyEndpoint],
+        queryFn: () => api.get<TraderHistoryResponse>(model.historyEndpoint),
+        refetchInterval: 30_000, staleTime: 20_000,
+      },
+    ],
+  })
+  const liveQ = queries[0] as { data?: TraderLiveResponse; isLoading: boolean; error: unknown }
+  const histQ = queries[1] as { data?: TraderHistoryResponse; isLoading: boolean }
+
+  const summary = useMemo(
+    () => summariseTrades(histQ.data?.trades ?? []),
+    [histQ.data?.trades],
+  )
+
+  const equity = useMemo(
+    () => buildEquityCurve(histQ.data?.trades ?? [], STARTING_BALANCE),
+    [histQ.data?.trades],
+  )
+  const sparkline = useMemo(() => equity.map(p => ({ value: p.balance })), [equity])
+
+  if (liveQ.error) {
+    return <div className="tab-placeholder text-error">{(liveQ.error as Error).message}</div>
+  }
+
+  const live = liveQ.data
+  const balance = live ? STARTING_BALANCE + live.realized_pnl_usd : null
+  const balanceDelta = balance !== null ? balance - STARTING_BALANCE : null
+  const balancePct   = balanceDelta !== null ? (balanceDelta / STARTING_BALANCE) * 100 : null
 
   return (
     <div className="tab-section">
-      <div style={{ display: 'flex', gap: '6px', marginBottom: '14px' }}>
-        {MODELS.map(m => (
-          <button
-            key={m.key}
-            className={'btn btn--sm' + (active === m.key ? ' btn--active' : ' btn--ghost')}
-            onClick={() => setActive(m.key)}
-          >
-            {m.label}
-          </button>
-        ))}
+      {/* HERO */}
+      <div className="hero">
+        <div className="hero__price-block">
+          <span className="hero__price-label">BTC spot</span>
+          <span className="hero__price hero__price--btc">
+            {live?.btc_spot_usd != null
+              ? '$' + live.btc_spot_usd.toLocaleString('en-US', { maximumFractionDigits: 0 })
+              : '—'}
+          </span>
+        </div>
+        <div className="hero__divider" />
+        <div className="hero__meta">
+          <span className="hero__meta-label">Model</span>
+          <span className="hero__meta-value">{model.label} <span className="muted" style={{ fontSize: 11 }}>· {model.family}</span></span>
+        </div>
+        <div className="hero__meta">
+          <span className="hero__meta-label">Equity</span>
+          <span className="hero__meta-value tabular" style={{ color: balanceDelta != null && balanceDelta < 0 ? 'var(--color-error)' : balanceDelta != null && balanceDelta > 0 ? 'var(--color-ok)' : undefined }}>
+            {balance !== null ? '$' + balance.toFixed(2) : '—'}
+            {balancePct !== null && (
+              <span className="muted" style={{ fontSize: 11, marginLeft: 8 }}>
+                {balancePct >= 0 ? '+' : ''}{balancePct.toFixed(2)}%
+              </span>
+            )}
+          </span>
+        </div>
+        <div className="hero__meta" style={{ marginLeft: 'auto' }}>
+          <span className="hero__meta-label">Live</span>
+          <div className="hero__live-pill">
+            <span className="pulse-dot pulse-dot--live" />
+            {live?.as_of ? new Date(live.as_of).toLocaleTimeString() : 'connecting'}
+          </div>
+        </div>
       </div>
 
-      <ModelPanel endpoint={model.endpoint} historyEndpoint={model.historyEndpoint} />
+      {/* KPI ROW */}
+      <div className="metrics-row">
+        <KpiTile
+          label="Open positions"
+          value={live?.open_count ?? '—'}
+          variant="accent"
+          hint={live?.total_exposure_usd != null ? '$' + live.total_exposure_usd.toFixed(2) + ' exposure' : undefined}
+        />
+        <KpiTile
+          label="Realized PnL"
+          value={live ? fmtUsd(live.realized_pnl_usd) : '—'}
+          variant={live ? pnlVariant(live.realized_pnl_usd) : 'default'}
+          deltaDirection={live ? pnlDirection(live.realized_pnl_usd) : undefined}
+          delta={live && summary.totalSettled > 0 ? `${summary.totalSettled} settled · ${(summary.wr * 100).toFixed(1)}% WR` : undefined}
+          sparkline={sparkline.length > 1 ? sparkline : undefined}
+        />
+        <KpiTile
+          label="Unrealized PnL"
+          value={live ? fmtUsd(live.unrealized_pnl_usd) : '—'}
+          variant={live ? pnlVariant(live.unrealized_pnl_usd) : 'default'}
+        />
+        <KpiTile
+          label="ROI"
+          value={summary.totalStaked > 0 ? (summary.roi * 100).toFixed(2) + '%' : '—'}
+          variant={pnlVariant(summary.roi)}
+          deltaDirection={pnlDirection(summary.roi)}
+          delta={summary.totalStaked > 0 ? '$' + summary.totalStaked.toFixed(0) + ' staked' : undefined}
+        />
+        <KpiTile
+          label="Avg win / loss"
+          value={summary.totalSettled > 0
+            ? '+$' + summary.avgWin.toFixed(2) + ' / -$' + Math.abs(summary.avgLoss).toFixed(2)
+            : '—'
+          }
+          hint={summary.avgLoss !== 0 ? 'ratio ' + Math.abs(summary.avgWin / summary.avgLoss).toFixed(2) + 'x' : undefined}
+        />
+      </div>
+
+      {/* CHARTS ROW */}
+      <div className="grid-charts">
+        <div className="card">
+          <div className="card__title card__title--with-actions">
+            <span>Equity curve</span>
+            <span className="muted" style={{ fontSize: 11, fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>
+              start ${STARTING_BALANCE} · {summary.totalSettled} settled trades
+            </span>
+          </div>
+          <EquityCurve data={equity} startingBalance={STARTING_BALANCE} height={260} />
+        </div>
+        <div className="card">
+          <div className="card__title">Win rate</div>
+          <WinRateGauge rate={summary.wr} total={summary.totalSettled} breakEven={model.breakEven} />
+          <div style={{ marginTop: 16 }}>
+            <div className="muted" style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 6 }}>
+              vs break-even ({(model.breakEven * 100).toFixed(0)}%)
+            </div>
+            <ProgressBar
+              value={summary.wr}
+              variant={summary.wr >= model.breakEven ? 'ok' : 'error'}
+            />
+            <div className="muted" style={{ fontSize: 10, marginTop: 4 }}>
+              {summary.wins} wins / {summary.losses} losses
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* PNL DISTRIBUTION */}
+      {summary.pnls.length > 4 && (
+        <div className="card">
+          <div className="card__title">Trade PnL distribution</div>
+          <PnlDistribution pnls={summary.pnls} height={200} bins={20} />
+        </div>
+      )}
+
+      {/* OPEN POSITIONS */}
+      <div className="card" style={{ padding: 0 }}>
+        <div className="card__title" style={{ padding: '14px 18px 0 18px' }}>
+          Open positions
+          {live?.open_count != null && (
+            <span className="muted" style={{ marginLeft: 8, fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>
+              · {live.open_count}
+            </span>
+          )}
+        </div>
+        <DataTable data={live?.positions ?? []} columns={POSITION_COLUMNS} isLoading={liveQ.isLoading} />
+      </div>
+
+      {/* HISTORY */}
+      <div className="card" style={{ padding: 0 }}>
+        <div className="card__title" style={{ padding: '14px 18px 0 18px' }}>
+          Storico trade
+          {histQ.data?.count != null && (
+            <span className="muted" style={{ marginLeft: 8, fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>
+              · {histQ.data.count} totali
+            </span>
+          )}
+        </div>
+        <DataTable data={histQ.data?.trades ?? []} columns={HISTORY_COLUMNS} isLoading={histQ.isLoading} />
+      </div>
+    </div>
+  )
+}
+
+// ── Top-level page ─────────────────────────────────────────────────────────
+
+export default function TraderDashboardPage() {
+  const [active, setActive] = useState<ModelKey>('a')
+
+  // Cross-model leaderboard pulls all models in parallel
+  const leaderboardQueries = useQueries({
+    queries: MODELS.flatMap(m => [
+      {
+        queryKey: ['trader-live', m.endpoint],
+        queryFn: () => api.get<TraderLiveResponse>(m.endpoint),
+        refetchInterval: 8_000, staleTime: 6_000,
+      },
+      {
+        queryKey: ['trader-history', m.historyEndpoint],
+        queryFn: () => api.get<TraderHistoryResponse>(m.historyEndpoint),
+        refetchInterval: 60_000, staleTime: 45_000,
+      },
+    ]),
+  })
+
+  const stats: ModelStats[] = MODELS.map((m, i) => {
+    const live = leaderboardQueries[i * 2]?.data as TraderLiveResponse | undefined
+    const hist = leaderboardQueries[i * 2 + 1]?.data as TraderHistoryResponse | undefined
+    const sum = summariseTrades(hist?.trades ?? [])
+    return {
+      key: m.key,
+      label: m.label,
+      family: m.family,
+      realizedPnl: live?.realized_pnl_usd ?? 0,
+      unrealizedPnl: live?.unrealized_pnl_usd ?? 0,
+      open: live?.open_count ?? 0,
+      settled: live?.settled_count ?? sum.totalSettled,
+      wr: sum.wr,
+      loaded: !!live,
+    }
+  })
+
+  const activeModel = MODELS.find(m => m.key === active)!
+
+  return (
+    <div className="tab-section">
+      {/* Cross-model leaderboard */}
+      <div className="card">
+        <div className="card__title card__title--with-actions">
+          <span>Model leaderboard · classifica live</span>
+          <span className="muted" style={{ fontSize: 11, fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>
+            click su un modello per vedere dettagli
+          </span>
+        </div>
+        <ModelLeaderboard stats={stats} active={active} onPick={setActive} />
+      </div>
+
+      {/* Active model deep-dive */}
+      <ModelPanel model={activeModel} />
     </div>
   )
 }
