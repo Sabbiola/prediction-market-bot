@@ -411,43 +411,135 @@ function ModelPanel({ model }: { model: ModelDef }) {
         </div>
       )}
 
-      {/* KPI ROW */}
+      {/* KPI ROW
+          For HL bots (D, E) the headline numbers are the *real* on-chain
+          values from HL fills history (closed_pnl - fees) and current open
+          positions, not the Polymarket-paper accounting. Paper numbers are
+          surfaced as a smaller "paper" hint below.  */}
       <div className="metrics-row">
-        <KpiTile
-          label="Open positions"
-          value={live?.open_count ?? '—'}
-          variant="accent"
-          hint={live?.total_exposure_usd != null ? '$' + live.total_exposure_usd.toFixed(2) + ' exposure' : undefined}
-        />
-        <KpiTile
-          label="Realized PnL"
-          value={live ? fmtUsd(live.realized_pnl_usd) : '—'}
-          variant={live ? pnlVariant(live.realized_pnl_usd) : 'default'}
-          deltaDirection={live ? pnlDirection(live.realized_pnl_usd) : undefined}
-          delta={live && summary.totalSettled > 0 ? `${summary.totalSettled} settled · ${(summary.wr * 100).toFixed(1)}% WR` : undefined}
-          sparkline={sparkline.length > 1 ? sparkline : undefined}
-        />
-        <KpiTile
-          label="Unrealized PnL"
-          value={live ? fmtUsd(live.unrealized_pnl_usd) : '—'}
-          variant={live ? pnlVariant(live.unrealized_pnl_usd) : 'default'}
-        />
-        <KpiTile
-          label="ROI"
-          value={summary.totalStaked > 0 ? (summary.roi * 100).toFixed(2) + '%' : '—'}
-          variant={pnlVariant(summary.roi)}
-          deltaDirection={pnlDirection(summary.roi)}
-          delta={summary.totalStaked > 0 ? '$' + summary.totalStaked.toFixed(0) + ' staked' : undefined}
-        />
-        <KpiTile
-          label="Avg win / loss"
-          value={summary.totalSettled > 0
-            ? '+$' + summary.avgWin.toFixed(2) + ' / -$' + Math.abs(summary.avgLoss).toFixed(2)
-            : '—'
-          }
-          hint={summary.avgLoss !== 0 ? 'ratio ' + Math.abs(summary.avgWin / summary.avgLoss).toFixed(2) + 'x' : undefined}
-        />
+        {hlAvailable ? (
+          <>
+            <KpiTile
+              label="HL realized PnL"
+              value={fmtUsd(hl!.net_pnl_usd ?? 0)}
+              variant={pnlVariant(hl!.net_pnl_usd ?? 0)}
+              deltaDirection={pnlDirection(hl!.net_pnl_usd ?? 0)}
+              delta={hl!.fills_count != null ? `${hl!.fills_count} fills · ${fmtUsd(hl!.realized_pnl_usd ?? 0)} − ${fmtUsd(hl!.fees_usd ?? 0)} fees` : undefined}
+              hint="closedPnl − fees"
+            />
+            <KpiTile
+              label="HL unrealized PnL"
+              value={fmtUsd(hl!.positions.reduce((a, p) => a + p.unrealized_pnl, 0))}
+              variant={pnlVariant(hl!.positions.reduce((a, p) => a + p.unrealized_pnl, 0))}
+              hint={hl!.positions.length + ' open perp'}
+            />
+            <KpiTile
+              label="Open notional"
+              value={'$' + hl!.total_ntl_pos.toFixed(2)}
+              variant={hl!.total_ntl_pos > 0 ? 'accent' : 'default'}
+              hint={'margin $' + hl!.positions.reduce((a, p) => a + p.margin_used_usd, 0).toFixed(2)}
+            />
+            <KpiTile
+              label="Paper PnL"
+              value={live ? fmtUsd(live.realized_pnl_usd) : '—'}
+              variant={live ? pnlVariant(live.realized_pnl_usd) : 'default'}
+              hint={live && summary.totalSettled > 0 ? `${summary.totalSettled} 15m slots · ${(summary.wr * 100).toFixed(0)}% WR` : 'pre-HL accounting'}
+              sparkline={sparkline.length > 1 ? sparkline : undefined}
+            />
+            <KpiTile
+              label="Paper / HL gap"
+              value={fmtUsd((live?.realized_pnl_usd ?? 0) - (hl!.net_pnl_usd ?? 0))}
+              hint="why they differ ↗"
+            />
+          </>
+        ) : (
+          <>
+            <KpiTile
+              label="Open positions"
+              value={live?.open_count ?? '—'}
+              variant="accent"
+              hint={live?.total_exposure_usd != null ? '$' + live.total_exposure_usd.toFixed(2) + ' exposure' : undefined}
+            />
+            <KpiTile
+              label="Realized PnL"
+              value={live ? fmtUsd(live.realized_pnl_usd) : '—'}
+              variant={live ? pnlVariant(live.realized_pnl_usd) : 'default'}
+              deltaDirection={live ? pnlDirection(live.realized_pnl_usd) : undefined}
+              delta={live && summary.totalSettled > 0 ? `${summary.totalSettled} settled · ${(summary.wr * 100).toFixed(1)}% WR` : undefined}
+              sparkline={sparkline.length > 1 ? sparkline : undefined}
+            />
+            <KpiTile
+              label="Unrealized PnL"
+              value={live ? fmtUsd(live.unrealized_pnl_usd) : '—'}
+              variant={live ? pnlVariant(live.unrealized_pnl_usd) : 'default'}
+            />
+            <KpiTile
+              label="ROI"
+              value={summary.totalStaked > 0 ? (summary.roi * 100).toFixed(2) + '%' : '—'}
+              variant={pnlVariant(summary.roi)}
+              deltaDirection={pnlDirection(summary.roi)}
+              delta={summary.totalStaked > 0 ? '$' + summary.totalStaked.toFixed(0) + ' staked' : undefined}
+            />
+            <KpiTile
+              label="Avg win / loss"
+              value={summary.totalSettled > 0
+                ? '+$' + summary.avgWin.toFixed(2) + ' / -$' + Math.abs(summary.avgLoss).toFixed(2)
+                : '—'
+              }
+              hint={summary.avgLoss !== 0 ? 'ratio ' + Math.abs(summary.avgWin / summary.avgLoss).toFixed(2) + 'x' : undefined}
+            />
+          </>
+        )}
       </div>
+
+      {/* HL fills table — only when HL is active for this model */}
+      {hlAvailable && hl!.recent_fills && hl!.recent_fills.length > 0 && (
+        <div className="card" style={{ padding: 0 }}>
+          <div className="card__title card__title--with-actions" style={{ padding: '14px 18px 0 18px', marginBottom: 8 }}>
+            <span>Hyperliquid fills · on-chain history</span>
+            <span className="muted" style={{ fontSize: 11, fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>
+              {hl!.fills_count} totali · last {hl!.recent_fills.length}
+            </span>
+          </div>
+          <div className="data-table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Direction</th>
+                  <th>Size</th>
+                  <th>Price</th>
+                  <th>Closed PnL</th>
+                  <th>Fee</th>
+                  <th>Net</th>
+                </tr>
+              </thead>
+              <tbody>
+                {hl!.recent_fills.slice(0, 30).map((f) => {
+                  const net = f.closed_pnl - f.fee
+                  return (
+                    <tr key={f.oid}>
+                      <td>{new Date(f.ts_ms).toLocaleString('en-GB', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
+                      <td>
+                        <Badge variant={f.dir.includes('Open') ? 'accent' : 'muted'}>{f.dir}</Badge>
+                      </td>
+                      <td>{f.size.toFixed(5)} {f.coin}</td>
+                      <td>${f.price.toLocaleString('en-US', { maximumFractionDigits: 0 })}</td>
+                      <td className={f.closed_pnl > 0 ? 'text-ok' : f.closed_pnl < 0 ? 'text-error' : ''}>
+                        {f.closed_pnl !== 0 ? fmtUsd(f.closed_pnl) : '—'}
+                      </td>
+                      <td className="muted">${f.fee.toFixed(4)}</td>
+                      <td className={net > 0 ? 'text-ok' : net < 0 ? 'text-error' : ''} style={{ fontWeight: 600 }}>
+                        {f.closed_pnl !== 0 || f.fee !== 0 ? fmtUsd(net) : '—'}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* CHARTS ROW */}
       <div className="grid-charts">
@@ -540,14 +632,23 @@ export default function TraderDashboardPage() {
     const live = leaderboardQueries[i * 2]?.data as TraderLiveResponse | undefined
     const hist = leaderboardQueries[i * 2 + 1]?.data as TraderHistoryResponse | undefined
     const sum = summariseTrades(hist?.trades ?? [])
+    // For HL bots, the leaderboard rank uses real on-chain PnL
+    // (closedPnl − fees from HL fill history) instead of paper.
+    const hl = live?.hl_account
+    const useHl = m.venue === 'hyperliquid' && hl?.available
+    const realizedPnl = useHl ? (hl!.net_pnl_usd ?? 0) : (live?.realized_pnl_usd ?? 0)
+    const unrealizedPnl = useHl
+      ? (hl!.positions.reduce((a, p) => a + p.unrealized_pnl, 0))
+      : (live?.unrealized_pnl_usd ?? 0)
+    const settled = useHl ? (hl!.fills_count ?? sum.totalSettled) : (live?.settled_count ?? sum.totalSettled)
     return {
       key: m.key,
       label: m.label,
       family: m.family,
-      realizedPnl: live?.realized_pnl_usd ?? 0,
-      unrealizedPnl: live?.unrealized_pnl_usd ?? 0,
-      open: live?.open_count ?? 0,
-      settled: live?.settled_count ?? sum.totalSettled,
+      realizedPnl,
+      unrealizedPnl,
+      open: useHl ? hl!.positions.length : (live?.open_count ?? 0),
+      settled,
       wr: sum.wr,
       loaded: !!live,
     }

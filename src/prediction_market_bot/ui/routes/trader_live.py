@@ -564,6 +564,37 @@ def _fetch_hl_account_snapshot() -> dict[str, Any]:
             except (TypeError, ValueError):
                 continue
 
+        # Real on-chain PnL: HL records closedPnl + fee on every fill row.
+        # We sum across the full fill history so the UI can show the true
+        # realized PnL of the testnet wallet (separate from the
+        # Polymarket-paper accounting that the rest of the trader page uses).
+        fills_raw = info.user_fills(addr) or []
+        closed_pnl = 0.0
+        fees = 0.0
+        recent_fills: list[dict[str, Any]] = []
+        for f in fills_raw:
+            try:
+                closed_pnl += float(f.get("closedPnl") or 0)
+                fees       += float(f.get("fee") or 0)
+            except (TypeError, ValueError):
+                continue
+        # Last 50 fills, normalised + newest-first
+        for f in fills_raw[-50:][::-1]:
+            try:
+                recent_fills.append({
+                    "ts_ms":   int(f.get("time") or 0),
+                    "coin":    f.get("coin", ""),
+                    "side":    "BUY" if f.get("side") == "B" else "SELL",
+                    "size":    float(f.get("sz") or 0),
+                    "price":   float(f.get("px") or 0),
+                    "dir":     f.get("dir", ""),  # "Open Long" / "Close Long" / etc.
+                    "closed_pnl": float(f.get("closedPnl") or 0),
+                    "fee":     float(f.get("fee") or 0),
+                    "oid":     str(f.get("oid", "")),
+                })
+            except (TypeError, ValueError):
+                continue
+
         snapshot = {
             "available": True,
             "address": addr,
@@ -572,6 +603,11 @@ def _fetch_hl_account_snapshot() -> dict[str, Any]:
             "spot_usdc": float(usdc_bal.get("total") or 0),
             "total_ntl_pos": float(margin.get("totalNtlPos") or 0),
             "positions": positions,
+            "realized_pnl_usd": round(closed_pnl, 4),
+            "fees_usd":         round(fees, 4),
+            "net_pnl_usd":      round(closed_pnl - fees, 4),
+            "fills_count":      len(fills_raw),
+            "recent_fills":     recent_fills,
         }
     except Exception as exc:
         logger.debug("hl_account_snapshot_failed err=%s", exc)

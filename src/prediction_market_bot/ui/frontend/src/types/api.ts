@@ -908,6 +908,18 @@ export interface HlPosition {
   margin_used_usd: number
 }
 
+export interface HlFill {
+  ts_ms: number
+  coin: string
+  side: 'BUY' | 'SELL'
+  size: number
+  price: number
+  dir: string
+  closed_pnl: number
+  fee: number
+  oid: string
+}
+
 export interface HlAccount {
   available: boolean
   address: string
@@ -916,6 +928,12 @@ export interface HlAccount {
   spot_usdc: number
   total_ntl_pos: number
   positions: HlPosition[]
+  /** Real on-chain numbers (separate from paper Polymarket accounting). */
+  realized_pnl_usd?: number
+  fees_usd?: number
+  net_pnl_usd?: number
+  fills_count?: number
+  recent_fills?: HlFill[]
 }
 
 export interface TraderLiveResponse {
