@@ -37,7 +37,7 @@ runtime:
 execution:
 
 
-  mode: HYPERLIQUID_DRY_RUN
+  mode: HYPERLIQUID_TESTNET
 
 
   enable_rehearsal_lane: false
