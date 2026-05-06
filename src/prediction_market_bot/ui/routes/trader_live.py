@@ -485,8 +485,16 @@ def trader_live_c() -> dict[str, Any]:
 
 @router.get("/api/trader/live/d")
 def trader_live_d() -> dict[str, Any]:
-    """Model D (LLM-only Groq Llama 3.3 70B) — reads from data/runtime_llm.db."""
-    return _build_trader_response(_MODEL_D_DB)
+    """Model D (LLM Llama 3.3 70B) — runtime_llm.db + live HL account state.
+
+    D and E share the same HL wallet (single HL_PRIVATE_KEY); the snapshot
+    surfaces the unified account so each model panel shows the real
+    on-chain balance and any open perp positions, regardless of which bot
+    opened them.
+    """
+    base = _build_trader_response(_MODEL_D_DB)
+    base["hl_account"] = _fetch_hl_account_snapshot()
+    return base
 
 
 # ── Hyperliquid live account (Model E) ─────────────────────────────────
