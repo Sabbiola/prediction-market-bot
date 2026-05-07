@@ -572,29 +572,28 @@ class PredictionAgent:
         )
 
         feats = dict(runtime_features.values)
-        # The btc enricher caches recent close prices; use 1h closes if
-        # available, else fall back to whatever close-history feature
-        # vector the enricher exposes.  Conservative: use feats sweep.
-        closes = []
-        for k in sorted(feats.keys()):
-            if k.startswith("f_btc_close_h_"):
-                try:
-                    closes.append(float(feats[k]))
-                except Exception:
-                    continue
-        if not closes:
-            # No 1h close history: fall back to neutral (skip)
-            base = run_heuristic(self.settings, candidate, research)
-            return PredictionResult(
-                **{
-                    **base.__dict__,
-                    "fair_yes_prob": 0.5,
-                    "rationale": tuple((
-                        *base.rationale,
-                        "prediction_engine=rsi_ml",
-                        "rsi_ml_neutral_no_close_history",
-                    )),
-                }
+        # The btc enricher already publishes RSI(14) on the 1h timeframe,
+        # normalised to [-1, 1] (raw_rsi = (norm + 1) * 50).  Use it directly
+        # so the engine sees the same number the trained ML model trained on.
+        rsi_norm = feats.get("f_btc_rsi_1h")
+        rsi_raw: float | None = None
+        if rsi_norm is not None:
+            try:
+                rsi_raw = (float(rsi_norm) + 1.0) * 50.0
+            except Exception:
+                rsi_raw = None
+        if rsi_raw is None:
+            # No RSI feature: anchor to market so edge=0 and the risk gate refuses.
+            market_yes = float(candidate.market.yes_price)
+            return prediction_from_fair_probability(
+                candidate=candidate,
+                fair_yes_prob=clamp_probability(market_yes),
+                confidence=0.0,
+                rationale=(
+                    "prediction_engine=rsi_ml",
+                    "rsi_ml_neutral_no_rsi_feature",
+                    "fair_yes_prob=anchored_to_market",
+                ),
             )
 
         # ML filter probabilities: when the ML artefact is loaded we use
@@ -619,10 +618,39 @@ class PredictionAgent:
         )
         prob, side, dbg = predict_rsi_ml(
             config=cfg,
-            hourly_closes=closes,
+            rsi_raw=rsi_raw,
             p_long_ml=p_long_ml,
             p_short_ml=p_short_ml,
         )
+        # When the engine returns NEUTRAL the bot must NOT trade.  The simple
+        # 0.5 fair-prob isn't enough on its own — downstream the risk agent
+        # picks whichever side has a positive edge vs the *market* yes_price
+        # and proceeds, so we'd open a trade on every cycle.  To zero the
+        # edge we anchor the fair-prob exactly to the current market yes
+        # price, and we drop confidence below the gate so risk skips us
+        # explicitly.
+        market_yes = float(candidate.market.yes_price)
+        if side == "NEUTRAL":
+            fair_yes_prob = clamp_probability(market_yes)
+            confidence = 0.0
+            edge = 0.0
+            rationale = (
+                "prediction_engine=rsi_ml",
+                f"rsi={dbg.get('rsi','-'):.2f}" if isinstance(dbg.get("rsi"), float) else "rsi=-",
+                "side=NEUTRAL",
+                f"p_long_ml={p_long_ml}",
+                f"p_short_ml={p_short_ml}",
+                f"reason={dbg.get('reason','')}",
+                "fair_yes_prob=anchored_to_market",
+                "confidence=0.0",
+            )
+            return prediction_from_fair_probability(
+                candidate=candidate,
+                fair_yes_prob=fair_yes_prob,
+                confidence=confidence,
+                rationale=rationale,
+            )
+
         fair_yes_prob = clamp_probability(prob)
         edge = edge_for_side(candidate=candidate, fair_yes_prob=fair_yes_prob)
         confidence = self._model_confidence(

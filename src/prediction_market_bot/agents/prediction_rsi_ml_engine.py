@@ -56,7 +56,8 @@ def _rsi_wilders(closes: list[float] | np.ndarray, period: int = 14) -> float:
 def predict_rsi_ml(
     *,
     config: RsiMLConfig,
-    hourly_closes: list[float] | np.ndarray,
+    hourly_closes: list[float] | np.ndarray | None = None,
+    rsi_raw: float | None = None,
     p_long_ml:  float | None = None,
     p_short_ml: float | None = None,
 ) -> tuple[float, str, dict]:
@@ -65,11 +66,20 @@ def predict_rsi_ml(
     side = "YES" / "NO" / "NEUTRAL".
     yes_prob > 0.5 means LONG, < 0.5 means SHORT.  When neutral we return
     exactly 0.5 so the risk gate skips the trade.
-    """
-    if len(hourly_closes) < config.rsi_period + 1:
-        return 0.5, "NEUTRAL", {"reason": "insufficient_history"}
 
-    rsi_v = _rsi_wilders(hourly_closes, config.rsi_period)
+    Two ways to feed RSI:
+      - rsi_raw: pre-computed RSI in [0, 100] from the upstream feature
+        enricher.  Preferred — guarantees parity with training.
+      - hourly_closes: list of 1h close prices, RSI is computed here.
+        Fallback used by tests / backtests.
+    """
+    if rsi_raw is not None:
+        rsi_v = float(rsi_raw)
+    else:
+        if hourly_closes is None or len(hourly_closes) < config.rsi_period + 1:
+            return 0.5, "NEUTRAL", {"reason": "insufficient_history"}
+        rsi_v = _rsi_wilders(hourly_closes, config.rsi_period)
+
     if not np.isfinite(rsi_v):
         return 0.5, "NEUTRAL", {"reason": "rsi_nan"}
 
