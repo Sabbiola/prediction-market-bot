@@ -236,17 +236,16 @@ hyperliquid:
   enabled: true
   coin: BTC
   private_key_env: HL_PRIVATE_KEY
+  # Setup B: hold 4h with wide TP/SL so each trade clears the 0.09% round-trip
+  # fee floor with margin.  At TP=2%/SL=1.2% break-even WR is ~38%, well
+  # below the model's historical 45-50%.  The agreement-skip logic in the
+  # executor prevents pyramiding redundant orders inside the 4h window.
   leverage: 3
-  # TP/SL aligned with 15m BTC volatility (~0.25-0.40%).
-  # Break-even WR = SL/(TP+SL) = 0.20/(0.30+0.20) = 40%; model historical ~45%.
-  take_profit_pct: 0.0030
-  stop_loss_pct: 0.0020
-  # Force-close any position still open after 15 minutes so the trade
-  # window aligns with the model's 15m prediction horizon.
-  time_exit_seconds: 900
-  # HL enforces $10 minimum NOTIONAL (stake × leverage). At 3x, stake must be ≥ $3.34.
+  take_profit_pct: 0.020
+  stop_loss_pct: 0.012
+  time_exit_seconds: 14400
   min_order_usd: 10.0
-  max_size_usd: 50.0
+  max_size_usd: 150.0
   default_slippage: 0.005
 
 ui_auth:

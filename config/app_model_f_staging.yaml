@@ -1,156 +1,234 @@
 app:
 
-  name: prediction-market-bot-llm
+
+  name: prediction-market-bot-hl
+
 
   env: staging-data-collection
 
+
   timezone: UTC
+
 
   mode: sandbox-live
 
 
 
+
+
 runtime:
+
 
   mode: PAPER
 
+
   market_data_provider: LIVE
 
+
   research_provider: LIVE
+
 
   provider_failure_policy: FAIL_FAST
 
 
 
+
+
 execution:
+
 
   mode: HYPERLIQUID_TESTNET
 
+
   enable_rehearsal_lane: false
+
 
   blocking_trade_review: true
 
+
   review_auto_approve: true
 
+
   review_candidate_expiry_seconds: 0
+
 
   settlement_same_run: false
 
 
 
+
+
 live_market_data:
+
 
   enabled: true
 
+
   endpoint_url: https://gamma-api.polymarket.com/markets
+
 
   limit: 50
 
+
   max_staleness_sec: 900
+
 
   timeout_sec: 8.0
 
+
   max_retries: 2
+
 
   retry_backoff_sec: 0.5
 
+
   retry_jitter_sec: 0.25
+
 
   cache_ttl_sec: 0
 
+
   headers: {}
+
 
   api_key_env: ""
 
+
   api_key_header: Authorization
 
+
   api_key_prefix: "Bearer "
+
 
   require_api_key: false
 
 
 
+
+
 live_research:
+
 
   enabled: true
 
+
   limit_per_source: 5
+
 
   wikipedia:
 
+
     endpoint_url: https://en.wikipedia.org/w/api.php
+
 
     timeout_sec: 8.0
 
+
     max_retries: 2
+
 
     retry_backoff_sec: 0.5
 
+
     retry_jitter_sec: 0.25
+
 
     cache_ttl_sec: 600
 
+
     headers: {}
+
 
     api_key_env: ""
 
+
     api_key_header: Authorization
+
 
     api_key_prefix: "Bearer "
 
+
     require_api_key: false
+
 
   openalex:
 
+
     endpoint_url: https://api.openalex.org/works
+
 
     timeout_sec: 8.0
 
+
     max_retries: 2
+
 
     retry_backoff_sec: 0.5
 
+
     retry_jitter_sec: 0.25
+
 
     cache_ttl_sec: 600
 
+
     headers: {}
+
 
     api_key_env: OPENALEX_API_KEY
 
+
     api_key_header: Authorization
+
 
     api_key_prefix: "Bearer "
 
+
     require_api_key: false
+
+
 
 
 
 sandbox_chain:
 
+
   enabled: false
+
 
   submit_tx: false
 
+
   rpc_url: http://127.0.0.1:18545
+
 
   chain_id: 80002
 
+
   contract_address: "0x0000000000000000000000000000000000000000"
+
 
   from_address: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
 
+
   private_key_env: SANDBOX_CHAIN_PRIVATE_KEY
+
 
   allow_unlocked_send: true
 
+
   gas_limit: 250000
+
 
   confirmations_required: 1
 
+
   dropped_after_sec: 180
 
+
   request_timeout_sec: 8.0
+
+
 
 
 
@@ -158,9 +236,8 @@ hyperliquid:
   enabled: true
   coin: BTC
   private_key_env: HL_PRIVATE_KEY
-  # Setup B: identical knobs to Bot E so D and E can co-exist on the same
-  # wallet without one churning what the other just opened.  Hold window 4h,
-  # TP/SL wide enough that fees aren't a third of the profit per trade.
+  # Setup B: hold 4h, wide TP/SL so fees aren't a third of the per-trade
+  # profit.  break-even WR ~38%, well below model+LLM blend historical 50%.
   leverage: 3
   take_profit_pct: 0.020
   stop_loss_pct: 0.012
@@ -171,683 +248,1022 @@ hyperliquid:
 
 ui_auth:
 
+
   enabled: true
+
 
   session_secret_env: PM_BOT_UI_SESSION_SECRET
 
+
   session_timeout_sec: 1800
+
 
   cookie_name: pm_bot_ui_session
 
+
   cookie_secure: false
+
 
   cookie_samesite: lax
 
+
   require_password_hashes: true
+
 
   max_failed_attempts: 5
 
+
   lockout_seconds: 300
+
 
   users:
 
+
     - username: viewer
+
 
       role: viewer
 
+
       password_hash_env: PM_BOT_UI_VIEWER_PASSWORD_HASH
+
 
     - username: operator
 
+
       role: operator
+
 
       password_hash_env: PM_BOT_UI_OPERATOR_PASSWORD_HASH
 
+
     - username: admin
 
+
       role: admin
+
 
       password_hash_env: PM_BOT_UI_ADMIN_PASSWORD_HASH
 
 
 
+
+
 storage:
+
 
   operational_db:
 
+
     driver: sqlite
 
-    path: data/runtime_llm.db
+
+    path: data/runtime_f.db
+
 
     dsn: ""
 
+
     dsn_env: OPERATIONAL_DB_DSN
 
-    backup_dir: data/backups/operational-db-llm
+
+    backup_dir: data/backups/operational-db-f
+
 
     auto_migrate_on_boot: true
 
+
     require_up_to_date: true
+
 
   audit_log:
 
+
     driver: file_jsonl
 
-    path: data/audit/events_llm.jsonl
+
+    path: data/audit/events_f.jsonl
+
 
   research_store:
 
+
     driver: file_jsonl
 
-    path: data/research/findings_llm.jsonl
 
-  artifacts_dir: data/artifacts_llm
+    path: data/research/findings_f.jsonl
+
+
+  artifacts_dir: data/artifacts_f
+
+
 
 
 
 alerting:
 
+
   enabled: false
+
 
   dedupe_window_sec: 300
 
+
   repeated_live_source_failures_threshold: 3
+
 
   webhook:
 
+
     enabled: false
 
+
     webhook_url: ""
+
 
     webhook_url_env: PM_BOT_ALERT_WEBHOOK_URL
 
+
     timeout_sec: 5.0
+
 
     max_retries: 1
 
+
     retry_backoff_sec: 0.5
+
 
   slack:
 
+
     enabled: false
+
 
     webhook_url: ""
 
+
     webhook_url_env: PM_BOT_SLACK_WEBHOOK_URL
+
 
     timeout_sec: 5.0
 
+
     max_retries: 1
 
+
     retry_backoff_sec: 0.5
+
 
   telegram:
 
+
     enabled: false
+
 
     bot_token: ""
 
+
     bot_token_env: PM_BOT_TELEGRAM_BOT_TOKEN
+
 
     chat_id: ""
 
+
     chat_id_env: PM_BOT_TELEGRAM_CHAT_ID
+
 
     timeout_sec: 5.0
 
+
     max_retries: 1
 
+
     retry_backoff_sec: 0.5
+
+
 
 
 
 alt_data:
 
+
   enabled: false
+
 
   sources:
 
+
     news_rss_web:
 
+
       enabled: false
+
 
       source_class: news_rss_web
 
+
       adapter: rss_news_adapter
+
 
       endpoint_url: https://news.google.com/rss
 
+
       credential_env: ""
 
+
       capabilities:
+
 
         requires_oauth: false
 
+
         requires_user_context: false
+
 
         supports_backfill: true
 
+
         supports_live_polling: true
 
+
         supports_search: true
+
 
         supports_thread_context_expansion: false
 
+
     reddit:
 
+
       enabled: false
+
 
       source_class: reddit
 
+
       adapter: reddit_oauth_adapter
+
 
       endpoint_url: https://oauth.reddit.com
 
+
       credential_env: REDDIT_ACCESS_TOKEN
+
 
       capabilities:
 
+
         requires_oauth: true
+
 
         requires_user_context: false
 
+
         supports_backfill: true
+
 
         supports_live_polling: true
 
+
         supports_search: true
 
+
         supports_thread_context_expansion: true
+
 
     x:
 
+
       enabled: false
+
 
       source_class: x
 
+
       adapter: x_api_adapter
+
 
       endpoint_url: https://api.x.com
 
+
       credential_env: X_BEARER_TOKEN
+
 
       capabilities:
 
+
         requires_oauth: true
+
 
         requires_user_context: false
 
+
         supports_backfill: true
+
 
         supports_live_polling: true
 
+
         supports_search: true
 
+
         supports_thread_context_expansion: true
+
+
 
 
 
 strategy_research:
 
+
   historical_data_ingest:
+
 
     base_dir: data/strategy-research
 
+
     default_dataset_id: historical-markets
+
 
     markets_endpoint_url: https://gamma-api.polymarket.com/markets
 
+
     events_endpoint_url: https://gamma-api.polymarket.com/events/{event_id}
+
 
     snapshots_endpoint_url: ""
 
+
     orderbook_endpoint_url: ""
+
 
     trades_endpoint_url: ""
 
+
     resolutions_endpoint_url: ""
+
 
     page_size: 200
 
+
     max_pages_per_run: 0
+
 
     throttle_sec: 0.2
 
+
     include_orderbook: true
+
 
     include_trades: true
 
+
   research_corpus:
+
 
     base_dir: data/strategy-research/research-corpus
 
+
     default_corpus_id: historical-research-evidence
 
+
     source_dataset_id: historical-markets
+
 
     enabled_sources:
 
+
       - wikipedia
+
 
       - openalex
 
+
     limit_per_source: 5
 
+
     throttle_sec: 0.1
+
 
     require_published_at: true
 
+
     drop_unaligned: true
+
 
   news_corpus:
 
+
     base_dir: data/strategy-research/news-corpus
+
 
     default_corpus_id: historical-news-corpus
 
+
     source_id: news_rss_web
+
 
     limit_per_query: 50
 
+
     throttle_sec: 0.1
+
 
     language: en-US
 
+
     region: US
+
 
   reddit_corpus:
 
+
     base_dir: data/strategy-research/reddit-corpus
+
 
     default_corpus_id: historical-reddit-corpus
 
+
     source_id: reddit
+
 
     limit_per_query: 50
 
+
     max_pages_per_query: 5
+
 
     include_comments: false
 
+
     comment_limit_per_post: 25
 
+
     throttle_sec: 0.1
+
 
   x_corpus:
 
+
     base_dir: data/strategy-research/x-corpus
+
 
     default_corpus_id: historical-x-corpus
 
+
     source_id: x
+
 
     limit_per_query: 50
 
+
     max_pages_per_query: 5
+
 
     auth_mode: bearer
 
+
     search_endpoint_path: /2/tweets/search/recent
+
 
     user_lookup_endpoint_path_template: /2/users/by/username/{username}
 
+
     user_posts_endpoint_path_template: /2/users/{user_id}/tweets
+
 
     throttle_sec: 0.1
 
+
   linkage:
+
 
     base_dir: data/strategy-research/linkage
 
+
     default_linkage_id: historical-evidence-linkage
+
 
     source_dataset_id: historical-markets
 
+
     news_corpus_id: historical-news-corpus
+
 
     reddit_corpus_id: historical-reddit-corpus
 
+
     x_corpus_id: historical-x-corpus
+
 
     enabled_source_classes:
 
+
       - news_rss_web
+
 
       - reddit
 
+
       - x
+
 
     max_staleness_days: 45
 
+
     similarity_threshold: 0.20
+
 
     ambiguity_margin: 0.03
 
+
     max_candidates_per_evidence: 5
+
 
     alias_map:
 
+
       united states:
+
 
         - usa
 
+
         - us
+
 
       united kingdom:
 
+
         - uk
+
 
       european union:
 
+
         - eu
+
 
   llm_enrichment:
 
+
     base_dir: data/strategy-research/llm-enrichment
+
 
     default_enrichment_id: historical-llm-enrichment
 
+
     linkage_id: historical-evidence-linkage
+
 
     news_corpus_id: historical-news-corpus
 
+
     reddit_corpus_id: historical-reddit-corpus
+
 
     x_corpus_id: historical-x-corpus
 
+
     enabled: false
+
 
     provider: deterministic
 
+
     model_id: deterministic-enrichment-v1
+
 
     prompt_version: v1
 
+
     enable_fallback: true
+
 
     allow_external_provider: false
 
+
     include_states:
+
 
       - linked
 
+
       - ambiguous
+
 
     throttle_sec: 0.0
 
 
 
+
+
 polymarket_clob:
+
 
   enabled: false
 
+
   clob_endpoint_url: https://clob.polymarket.com
+
 
   chain_id: 137
 
+
   exchange_contract_address: "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"
+
 
   private_key_env: POLYMARKET_PRIVATE_KEY
 
+
   wallet_address: ""
+
 
   slippage_bps: 50
 
+
   max_taker_fee_bps: 100
+
 
   timeout_sec: 10.0
 
+
   max_retries: 2
+
 
   retry_backoff_sec: 1.0
 
+
   dry_run: true
+
+
 
 
 
 scheduler:
 
+
   enabled: false
+
 
   strategy: internal-loop
 
+
   heartbeat_sec: 15
+
 
   fail_fast_on_boot_errors: true
 
 
 
+
+
 http:
+
 
   user_agent: prediction-market-bot/0.1
 
+
   contact: ""
+
 
   timeout_sec: 8.0
 
+
   max_retries: 2
+
 
   retry_backoff_sec: 0.5
 
+
   retry_jitter_sec: 0.25
+
 
   cache_ttl_sec: 600
 
+
   openalex_api_key_env: OPENALEX_API_KEY
+
 
   enforce_allowed_hosts: true
 
+
   allowed_hosts:
+
 
     - gamma-api.polymarket.com
 
+
     - en.wikipedia.org
+
 
     - api.openalex.org
 
+
     - news.google.com
+
 
     - api.x.com
 
+
     - oauth.reddit.com
+
 
     - www.reddit.com
 
+
     - api.binance.com
+
 
     - fapi.binance.com
 
+
     - api.alternative.me
+
 
     - api.coinbase.com
 
+
     - api.kraken.com
+
     - api.hyperliquid.xyz
+
     - api.hyperliquid-testnet.xyz
 
-    - api.groq.com
 
     - localhost
 
+
     - 127.0.0.1
+
 
   max_response_bytes: 1048576
 
 
 
+
+
 observability:
+
 
   log_level: INFO
 
+
   json_logs: true
+
 
   metrics:
 
+
     enabled: true
+
 
     exporter: prometheus_textfile
 
-    path: data/metrics/metrics_llm.prom
+
+    path: data/metrics/metrics_f.prom
+
 
   healthcheck:
 
+
     enabled: true
+
 
     path: /health
 
 
 
+
+
 notifications:
+
 
   telegram:
 
+
     enabled: false
+
 
     chat_id: ""
 
+
   email:
 
+
     enabled: false
+
 
     recipients: []
 
 
 
+
+
 research_sources:
+
 
   twitter:
 
+
     enabled: true
 
+
     timeout_sec: 10
+
 
     credibility_default: 0.60
 
+
   reddit:
 
+
     enabled: true
+
 
     timeout_sec: 10
 
+
     credibility_default: 0.50
+
 
   rss:
 
+
     enabled: true
 
+
     timeout_sec: 8
+
 
     credibility_default: 0.70
 
+
   official:
+
 
     enabled: true
 
+
     timeout_sec: 8
+
 
     credibility_default: 0.90
 
 
 
+
+
 venue:
+
 
   provider: polymarket
 
+
   dry_run: true
+
 
   submit_timeout_sec: 10
 
+
   max_retries: 2
+
 
   slippage_bps_limit: 100
 
 
 
+
+
 feature_flags:
+
 
   enable_postmortem: true
 
+
   enable_settlement: true
+
 
   enable_manual_review_queue: true
 
+
   blocking_trade_review: true
+
 
   use_live_market_data: true
 
+
   use_live_research: true
+
 
   allow_live_execution: false
 
 
 
+
+
 model_promotion:
+
 
   enabled: false
 
+
   require_explicit_approval_in_live_modes: false
+
 
   required_runtime_modes:
 
+
     - PAPER
+
 
   promoted_runtime_modes:
 
+
     - PAPER
+
 
   benchmark_min_delta_brier: 0.0
 
+
   benchmark_min_delta_log_loss: 0.0
+
 
   max_calibration_error: 0.50
 
+
   max_calibration_brier_increase: 0.50
+
 
   approval_rate_min: 0.0
 
+
   approval_rate_max: 1.0
+
 
   min_edge_capture_ratio: 0.0
 
+
   min_realized_vs_expected_edge_ratio: 0.0
+
 
   max_shadow_parity_warning_rate: 1.0
 
+
   drift_reference_runs: 10
+
 
   feature_shift_warn_threshold: 1.0
 
+
   market_regime_warn_threshold: 1.0
 
+
   research_coverage_warn_threshold: 1.0
+
 
   confidence_collapse_warn_threshold: 1.0
 
 
 
+
+
 security:
+
 
   secrets_from_env: true
 
+
   redact_secrets_in_logs: true
+
 
   require_explicit_live_flag: true
 
+
   secrets:
+
 
     backend: env
 
+
     command_template: ""
+
 
     command_timeout_sec: 5.0
 
+
     env_fallback: true
+
 
   cli_auth:
 
+
     enabled: false
+
 
     actor_user_env: PM_BOT_ACTOR_USER
 
+
     actor_role_env: PM_BOT_ACTOR_ROLE
+
 

@@ -26,6 +26,11 @@ from prediction_market_bot.agents.prediction_runtime_features import (
 from prediction_market_bot.agents.btc_feature_enricher import BtcFeatureEnricher, is_btc_updown_market
 from prediction_market_bot.agents.prediction_shadow_engine import run_shadow_mode
 from prediction_market_bot.agents.prediction_alt_promoted_engine import run_alt_promoted_mode
+from prediction_market_bot.agents.regime_gate import RegimeGateConfig, evaluate_regime_gate
+from prediction_market_bot.agents.prediction_llm_engine import (
+    LLMEngineConfig,
+    predict_yes_probability_via_llm,
+)
 from prediction_market_bot.domain.models import MarketCandidate, PredictionResult, ResearchPacket
 
 
@@ -133,6 +138,10 @@ class PredictionAgent:
             self.last_shadow_comparison = result.shadow_comparison or None
             self.last_parity_warnings = result.parity_warnings
             return result.prediction
+        if self._use_llm_only():
+            return self._run_llm_only(candidate, research, runtime_features=runtime_features)
+        if self._use_ensemble():
+            return self._run_ensemble(candidate, research, runtime_features=runtime_features)
         if self._use_model_v2():
             return self._run_model_v2_or_fallback(candidate, research, runtime_features=runtime_features)
         return run_heuristic(self.settings, candidate, research)
@@ -271,6 +280,19 @@ class PredictionAgent:
 
         raw_yes_prob, calibrated_yes_prob = contract.predict_yes_probability(features.values)
         fair_yes_prob = clamp_probability(calibrated_yes_prob)
+
+        # ── Regime gate: empirically-derived veto for known-loss patterns.
+        # When a bad regime is detected we collapse fair_yes_prob to the
+        # current market price so the downstream edge becomes 0 and the
+        # risk agent declines the trade.  Decision is recorded in rationale.
+        regime_decision = self._evaluate_regime_gate(
+            candidate=candidate,
+            fair_yes_prob=fair_yes_prob,
+            features=features.values,
+        )
+        if not regime_decision.allowed:
+            fair_yes_prob = float(candidate.market.yes_price)
+
         confidence = self._model_confidence(
             fair_yes_prob=fair_yes_prob,
             edge=edge_for_side(candidate=candidate, fair_yes_prob=fair_yes_prob),
@@ -290,6 +312,7 @@ class PredictionAgent:
             f"raw_yes_prob={raw_yes_prob:.4f}",
             f"calibrated_yes_prob={fair_yes_prob:.4f}",
             f"confidence={confidence:.4f}",
+            f"regime_gate={regime_decision.reason}",
         )
         prediction = prediction_from_fair_probability(
             candidate=candidate,
@@ -299,9 +322,229 @@ class PredictionAgent:
         )
         return prediction, parity_tuple, raw_yes_prob
 
+    def _evaluate_regime_gate(
+        self,
+        *,
+        candidate: MarketCandidate,
+        fair_yes_prob: float,
+        features: dict[str, float],
+    ):
+        """Apply the empirical regime gate to a model prediction.
+
+        Returns a RegimeGateDecision (always — even when disabled, so callers
+        can record the reason in the audit trail).
+        """
+        config = RegimeGateConfig(
+            enabled=self.settings.regime_gate_enabled,
+            trend_follow_block_threshold=self.settings.regime_gate_trend_follow_threshold,
+            fill_price_skip_min=self.settings.regime_gate_fill_price_skip_min,
+            fill_price_skip_max=self.settings.regime_gate_fill_price_skip_max,
+            skip_extreme_rsi=self.settings.regime_gate_skip_extreme_rsi,
+            skip_bad_hours_utc=self.settings.regime_gate_skip_bad_hours_utc,
+        )
+        # Inferred side: we'd take the side the model favours.
+        side = "YES" if fair_yes_prob >= float(candidate.market.yes_price) else "NO"
+        # Hour from the runtime decision time, captured in the runtime features.
+        hour_utc: int | None = None
+        if self.last_runtime_features:
+            try:
+                from datetime import datetime as _dt
+                ts = str(self.last_runtime_features.get("decision_timestamp_utc") or "")
+                if ts:
+                    hour_utc = _dt.fromisoformat(ts.replace("Z", "+00:00")).hour
+            except Exception:
+                hour_utc = None
+        return evaluate_regime_gate(
+            config=config,
+            fair_yes_prob=fair_yes_prob,
+            candidate_side=side,
+            yes_price=float(candidate.market.yes_price),
+            features=features,
+            decision_hour_utc=hour_utc,
+        )
+
     def _use_model_v2(self) -> bool:
         mode = self.settings.engine.strip().lower()
         return mode in {"model_v2", "artifact_model", "model", "model_v2_alt_promoted", "model_v2_alt"}
+
+    def _use_llm_only(self) -> bool:
+        mode = self.settings.engine.strip().lower()
+        return mode in {"llm_only", "llm", "llm_engine"}
+
+    def _use_ensemble(self) -> bool:
+        mode = self.settings.engine.strip().lower()
+        return mode in {"ensemble", "ml_llm_ensemble", "blend"}
+
+    def _run_llm_only(
+        self,
+        candidate: MarketCandidate,
+        research: ResearchPacket,
+        *,
+        runtime_features: RuntimePredictionFeatures,
+    ) -> PredictionResult:
+        """LLM-only prediction. Sends BTC features + research to a chat model
+        and parses a calibrated probability. Independent of CatBoost/regime gate.
+        """
+        cfg = LLMEngineConfig(
+            api_key_env=self.settings.llm_api_key_env,
+            endpoint_url=self.settings.llm_endpoint_url,
+            model=self.settings.llm_model,
+            temperature=self.settings.llm_temperature,
+            timeout_sec=self.settings.llm_timeout_sec,
+            max_retries=self.settings.llm_max_retries,
+        )
+        title = str(getattr(candidate.market.market, "title", "") or "")
+        yes_price = float(candidate.market.yes_price)
+        feats = dict(runtime_features.values)
+        # Compose a brief research summary so the LLM has narrative context too.
+        research_lines: list[str] = []
+        try:
+            for finding in (research.findings or ())[:5]:
+                src = getattr(finding, "source", "") or ""
+                summary = getattr(finding, "summary", "") or ""
+                cred = getattr(finding, "credibility", 0.0)
+                if summary:
+                    research_lines.append(f"  [{src}, cred={cred:.2f}] {summary[:160]}")
+        except Exception:
+            pass
+        research_summary = "\n".join(research_lines)
+        slot_anchor = feats.get("f_slot_anchor_btc_usd")
+        btc_spot = feats.get("f_btc_spot_usd")
+        secs_to_close = feats.get("f_seconds_to_slot_close")
+
+        result = predict_yes_probability_via_llm(
+            config=cfg,
+            market_title=title,
+            yes_price=yes_price,
+            btc_features=feats,
+            research_summary=research_summary,
+            btc_spot=float(btc_spot) if btc_spot is not None else None,
+            slot_anchor_btc=float(slot_anchor) if slot_anchor is not None else None,
+            seconds_to_close=int(secs_to_close) if secs_to_close is not None else None,
+        )
+        fair_yes_prob = clamp_probability(result.yes_probability)
+        confidence = self._model_confidence(
+            fair_yes_prob=fair_yes_prob,
+            edge=edge_for_side(candidate=candidate, fair_yes_prob=fair_yes_prob),
+            candidate=candidate,
+            features=feats,
+        )
+        rationale = (
+            "prediction_engine=llm_only",
+            f"llm_provider={self.settings.llm_provider}",
+            f"llm_model={self.settings.llm_model}",
+            f"llm_yes_prob={fair_yes_prob:.4f}",
+            f"confidence={confidence:.4f}",
+            f"llm_error={result.error or 'ok'}",
+            f"llm_rationale={(result.rationale or '')[:200]}",
+        )
+        return prediction_from_fair_probability(
+            candidate=candidate,
+            fair_yes_prob=fair_yes_prob,
+            confidence=confidence,
+            rationale=rationale,
+        )
+
+    def _run_ensemble(
+        self,
+        candidate: MarketCandidate,
+        research: ResearchPacket,
+        *,
+        runtime_features: RuntimePredictionFeatures,
+    ) -> PredictionResult:
+        """ML + LLM blended prediction.
+
+        Falls back to heuristic if the ML artifact failed to load.  The LLM
+        is best-effort: a transient API failure degrades to ML-only without
+        skipping the trade.
+        """
+        from prediction_market_bot.agents.prediction_ensemble_engine import (
+            EnsembleConfig,
+            predict_ensemble,
+        )
+
+        if self._runtime_model is None:
+            base = run_heuristic(self.settings, candidate, research)
+            reason = self._model_load_error or "ensemble_no_runtime_model"
+            return PredictionResult(
+                **{
+                    **base.__dict__,
+                    "rationale": tuple((*base.rationale, f"prediction_engine_fallback=heuristic reason={reason}")),
+                }
+            )
+
+        cfg_llm = LLMEngineConfig(
+            api_key_env=self.settings.llm_api_key_env,
+            endpoint_url=self.settings.llm_endpoint_url,
+            model=self.settings.llm_model,
+            temperature=self.settings.llm_temperature,
+            timeout_sec=self.settings.llm_timeout_sec,
+            max_retries=self.settings.llm_max_retries,
+        )
+        cfg_ens = EnsembleConfig(
+            weight_ml=self.settings.ensemble_weight_ml,
+            weight_llm=self.settings.ensemble_weight_llm,
+            agreement_boost=self.settings.ensemble_agreement_boost,
+            disagreement_damp=self.settings.ensemble_disagreement_damp,
+        )
+
+        title = str(getattr(candidate.market.market, "title", "") or "")
+        yes_price = float(candidate.market.yes_price)
+        feats = dict(runtime_features.values)
+        research_lines: list[str] = []
+        try:
+            for finding in (research.findings or ())[:5]:
+                src = getattr(finding, "source", "") or ""
+                summary = getattr(finding, "summary", "") or ""
+                cred = getattr(finding, "credibility", 0.0)
+                if summary:
+                    research_lines.append(f"  [{src}, cred={cred:.2f}] {summary[:160]}")
+        except Exception:
+            pass
+        research_summary = "\n".join(research_lines)
+        slot_anchor = feats.get("f_slot_anchor_btc_usd")
+        btc_spot = feats.get("f_btc_spot_usd")
+        secs_to_close = feats.get("f_seconds_to_slot_close")
+
+        result = predict_ensemble(
+            contract=self._runtime_model,
+            llm_config=cfg_llm,
+            market_title=title,
+            yes_price=yes_price,
+            btc_features=feats,
+            research_summary=research_summary,
+            btc_spot=float(btc_spot) if btc_spot is not None else None,
+            slot_anchor_btc=float(slot_anchor) if slot_anchor is not None else None,
+            seconds_to_close=int(secs_to_close) if secs_to_close is not None else None,
+            ensemble_config=cfg_ens,
+        )
+
+        fair_yes_prob = clamp_probability(result.fair_yes_prob)
+        confidence = self._model_confidence(
+            fair_yes_prob=fair_yes_prob,
+            edge=edge_for_side(candidate=candidate, fair_yes_prob=fair_yes_prob),
+            candidate=candidate,
+            features=feats,
+        )
+        rationale = (
+            "prediction_engine=ensemble",
+            f"p_ml_raw={result.p_ml_raw:.4f}",
+            f"p_ml_calibrated={result.p_ml_calibrated:.4f}",
+            f"p_llm={result.p_llm:.4f}",
+            f"p_blend_linear={result.p_blend_linear:.4f}",
+            f"p_final={fair_yes_prob:.4f}",
+            f"agreement={result.agreement}",
+            f"weights_ml/llm={cfg_ens.weight_ml:.2f}/{cfg_ens.weight_llm:.2f}",
+            f"llm_status={result.error_llm}",
+            f"llm_rationale={(result.rationale_llm or '')[:160]}",
+            f"confidence={confidence:.4f}",
+        )
+        return prediction_from_fair_probability(
+            candidate=candidate,
+            fair_yes_prob=fair_yes_prob,
+            confidence=confidence,
+            rationale=rationale,
+        )
 
     def _use_shadow_mode(self) -> bool:
         mode = self.settings.engine.strip().lower()
@@ -312,7 +555,14 @@ class PredictionAgent:
         return mode in {"model_v2_alt_promoted", "model_v2_alt"}
 
     def _requires_runtime_model(self) -> bool:
-        return self._use_model_v2() or self._use_shadow_mode() or self._use_alt_promoted_mode()
+        # llm_only doesn't need a CatBoost artifact loaded.
+        # ensemble does — it blends ML probability with LLM probability.
+        return (
+            self._use_model_v2()
+            or self._use_shadow_mode()
+            or self._use_alt_promoted_mode()
+            or self._use_ensemble()
+        )
 
     def _model_confidence(
         self,

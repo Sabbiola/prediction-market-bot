@@ -11,7 +11,7 @@ import WinRateGauge from '@/components/ui/WinRateGauge'
 import PnlDistribution from '@/components/ui/PnlDistribution'
 import ProgressBar from '@/components/ui/ProgressBar'
 
-type ModelKey = 'a' | 'b' | 'c' | 'd' | 'e'
+type ModelKey = 'a' | 'b' | 'c' | 'd' | 'e' | 'f'
 
 const POLYMARKET_BANKROLL = 500
 
@@ -32,8 +32,9 @@ const MODELS: ModelDef[] = [
   { key: 'a', short: 'A', label: 'Model A', family: 'v4 · CatBoost (heuristic fallback)', endpoint: '/api/trader/live/a', historyEndpoint: '/api/trader/history/a', breakEven: 0.50, venue: 'polymarket' },
   { key: 'b', short: 'B', label: 'Model B', family: 'v5 · CatBoost + Coinbase lead-lag',  endpoint: '/api/trader/live/b', historyEndpoint: '/api/trader/history/b', breakEven: 0.50, venue: 'polymarket' },
   { key: 'c', short: 'C', label: 'Model C', family: 'v6 · v5 + regime gate',              endpoint: '/api/trader/live/c', historyEndpoint: '/api/trader/history/c', breakEven: 0.50, venue: 'polymarket' },
-  { key: 'd', short: 'D', label: 'Model D', family: 'LLM Llama-3.3 70B · HL testnet 2x perp', endpoint: '/api/trader/live/d', historyEndpoint: '/api/trader/history/d', breakEven: 0.40, venue: 'hyperliquid' },
-  { key: 'e', short: 'E', label: 'Model E', family: 'CatBoost v5 · HL testnet 3x perp',       endpoint: '/api/trader/live/e', historyEndpoint: '/api/trader/history/e', breakEven: 0.40, venue: 'hyperliquid' },
+  { key: 'd', short: 'D', label: 'Model D', family: 'LLM Llama-3.3 70B · HL testnet 3x perp · 4h hold', endpoint: '/api/trader/live/d', historyEndpoint: '/api/trader/history/d', breakEven: 0.38, venue: 'hyperliquid' },
+  { key: 'e', short: 'E', label: 'Model E', family: 'CatBoost v5 · HL testnet 3x perp · 4h hold',       endpoint: '/api/trader/live/e', historyEndpoint: '/api/trader/history/e', breakEven: 0.38, venue: 'hyperliquid' },
+  { key: 'f', short: 'F', label: 'Model F', family: 'ML + LLM ensemble (60/40) · HL 3x · 4h hold',      endpoint: '/api/trader/live/f', historyEndpoint: '/api/trader/history/f', breakEven: 0.38, venue: 'hyperliquid' },
 ]
 
 // ── Helpers ───────────────────────────────────────────────────────────────

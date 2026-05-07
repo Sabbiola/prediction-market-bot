@@ -141,6 +141,24 @@ class HyperliquidExecutor:
         # so we never accumulate state across restarts or skipped cycles.
         self._reconcile_with_hl(now=now)
 
+        # Setup B: when an existing position already agrees with this signal,
+        # skip — the original entry's TP/SL/time_exit are still doing their
+        # job and pyramiding $10 every 15 minutes inside a 4h hold burns the
+        # extra round-trip fee for marginal extra exposure.
+        is_long = order.side == OutcomeSide.YES
+        with self._lock:
+            agreeing = [
+                p for p in self._open_positions
+                if p.is_long == is_long and p.size_btc > 0
+            ]
+        if agreeing:
+            existing_size = sum(p.size_btc for p in agreeing)
+            return self._fail(
+                order, intent_id,
+                f"hl_skip_position_already_agrees side={'LONG' if is_long else 'SHORT'} "
+                f"existing_size_btc={existing_size:.5f} (Setup B: no pyramiding)",
+            )
+
         # Hyperliquid's true minimum is on NOTIONAL (stake * leverage), not stake.
         # E.g. $4 at 3x leverage = $12 notional which clears the $10 floor.
         notional = min(order.stake_usd * self.leverage, self.max_size_usd * self.leverage)

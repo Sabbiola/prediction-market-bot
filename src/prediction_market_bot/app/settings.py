@@ -241,6 +241,14 @@ class PredictionSettings:
     llm_temperature: float = 0.2
     llm_timeout_sec: float = 12.0
     llm_max_retries: int = 1
+    # Ensemble engine (Bot F): blend ML + LLM probabilities.  Weights are
+    # normalised to sum to 1 by the engine itself; the agreement multiplier
+    # sharpens the final probability when both engines pick the same side
+    # and softens it when they disagree.
+    ensemble_weight_ml: float = 0.60
+    ensemble_weight_llm: float = 0.40
+    ensemble_agreement_boost: float = 1.20
+    ensemble_disagreement_damp: float = 0.50
 
 
 @dataclass(slots=True, frozen=True)
@@ -904,6 +912,10 @@ class AppSettings:
             llm_temperature=float(model_inference.get("llm_temperature", 0.2)),
             llm_timeout_sec=float(model_inference.get("llm_timeout_sec", 12.0)),
             llm_max_retries=int(model_inference.get("llm_max_retries", 1)),
+            ensemble_weight_ml=float(model_inference.get("ensemble_weight_ml", 0.60)),
+            ensemble_weight_llm=float(model_inference.get("ensemble_weight_llm", 0.40)),
+            ensemble_agreement_boost=float(model_inference.get("ensemble_agreement_boost", 1.20)),
+            ensemble_disagreement_damp=float(model_inference.get("ensemble_disagreement_damp", 0.50)),
         )
         risk = RiskSettings(
             bankroll_usd=float(risk_section.get("bankroll_usd", 10_000.0)),

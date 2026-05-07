@@ -378,6 +378,7 @@ _MODEL_B_DB = Path("data/runtime_v5.db")
 _MODEL_C_DB = Path("data/runtime_v6.db")
 _MODEL_D_DB = Path("data/runtime_llm.db")
 _MODEL_E_DB = Path("data/runtime_e.db")
+_MODEL_F_DB = Path("data/runtime_f.db")
 
 
 def _read_trade_history(db_path: Path, limit: int = 300) -> list[dict[str, Any]]:
@@ -621,6 +622,24 @@ def trader_live_e() -> dict[str, Any]:
     base = _build_trader_response(_MODEL_E_DB)
     base["hl_account"] = _fetch_hl_account_snapshot()
     return base
+
+
+@router.get("/api/trader/live/f")
+def trader_live_f() -> dict[str, Any]:
+    """Model F (ML+LLM ensemble) — runtime_f.db + live HL account state.
+
+    F shares the HL wallet with D and E; the snapshot surfaces the
+    unified account so all three panels show the same balance.
+    """
+    base = _build_trader_response(_MODEL_F_DB)
+    base["hl_account"] = _fetch_hl_account_snapshot()
+    return base
+
+
+@router.get("/api/trader/history/f")
+def trader_history_f() -> dict[str, Any]:
+    trades = _read_trade_history(_MODEL_F_DB)
+    return {"trades": trades, "count": len(trades)}
 
 
 @router.get("/api/trader/hl/account")
