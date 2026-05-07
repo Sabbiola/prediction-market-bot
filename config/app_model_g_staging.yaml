@@ -236,15 +236,17 @@ hyperliquid:
   enabled: true
   coin: BTC
   private_key_env: HL_PRIVATE_KEY
-  # Setup G (RSI mean reversion + ML filter): TP=1.0%, SL=2.0%, hold=8h,
-  # leverage 5x.  Backtest WR 60-66%, Sharpe 5-12, MDD < 10% bankroll.
-  # Asymmetric SL (>TP) gives the mean-revert thesis time to play out.
-  leverage: 5
+  # Setup G (RSI mean reversion + ML filter): TP=1.0%, SL=2.0%, hold=8h.
+  # Leverage raised 5x → 10x for ~2x annualised return (~20%/year on $1k
+  # bankroll).  SL at -2% × 10x = -20% margin loss; HL liquidation distance
+  # ~10% so the SL has a 5x safety buffer before liquidation hazards.
+  # MDD scales linearly to ~$148 (15% of $1k) — sustainable.
+  leverage: 10
   take_profit_pct: 0.010
   stop_loss_pct: 0.020
   time_exit_seconds: 28800
   min_order_usd: 10.0
-  max_size_usd: 100.0
+  max_size_usd: 200.0
   default_slippage: 0.005
 
 ui_auth:
