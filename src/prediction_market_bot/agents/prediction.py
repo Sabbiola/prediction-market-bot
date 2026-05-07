@@ -142,6 +142,8 @@ class PredictionAgent:
             return self._run_llm_only(candidate, research, runtime_features=runtime_features)
         if self._use_ensemble():
             return self._run_ensemble(candidate, research, runtime_features=runtime_features)
+        if self._use_rsi_ml():
+            return self._run_rsi_ml(candidate, research, runtime_features=runtime_features)
         if self._use_model_v2():
             return self._run_model_v2_or_fallback(candidate, research, runtime_features=runtime_features)
         return run_heuristic(self.settings, candidate, research)
@@ -375,6 +377,10 @@ class PredictionAgent:
         mode = self.settings.engine.strip().lower()
         return mode in {"ensemble", "ml_llm_ensemble", "blend"}
 
+    def _use_rsi_ml(self) -> bool:
+        mode = self.settings.engine.strip().lower()
+        return mode in {"rsi_ml", "rsi_revert", "mean_reversion_rsi_ml"}
+
     def _run_llm_only(
         self,
         candidate: MarketCandidate,
@@ -546,6 +552,100 @@ class PredictionAgent:
             rationale=rationale,
         )
 
+    def _run_rsi_ml(
+        self,
+        candidate: MarketCandidate,
+        research: ResearchPacket,
+        *,
+        runtime_features: RuntimePredictionFeatures,
+    ) -> PredictionResult:
+        """Mean-reversion RSI + ML filter engine (Bot G).
+
+        The backtest-validated profitable strategy: RSI extremes generate
+        the entry signal, the v7 TP-classifier (loaded as the runtime
+        model) acts as a quality filter, and the executor manages exit
+        with TP/SL/time-exit on HL.
+        """
+        from prediction_market_bot.agents.prediction_rsi_ml_engine import (
+            RsiMLConfig,
+            predict_rsi_ml,
+        )
+
+        feats = dict(runtime_features.values)
+        # The btc enricher caches recent close prices; use 1h closes if
+        # available, else fall back to whatever close-history feature
+        # vector the enricher exposes.  Conservative: use feats sweep.
+        closes = []
+        for k in sorted(feats.keys()):
+            if k.startswith("f_btc_close_h_"):
+                try:
+                    closes.append(float(feats[k]))
+                except Exception:
+                    continue
+        if not closes:
+            # No 1h close history: fall back to neutral (skip)
+            base = run_heuristic(self.settings, candidate, research)
+            return PredictionResult(
+                **{
+                    **base.__dict__,
+                    "fair_yes_prob": 0.5,
+                    "rationale": tuple((
+                        *base.rationale,
+                        "prediction_engine=rsi_ml",
+                        "rsi_ml_neutral_no_close_history",
+                    )),
+                }
+            )
+
+        # ML filter probabilities: when the ML artefact is loaded we use
+        # its calibrated yes-prob as a proxy for P(TP_hit_long); the
+        # mirror (1 - p) is the SHORT side baseline.  v7 (two classifiers)
+        # support is added later; for now reuse v6/v5 contract if present.
+        p_long_ml = None
+        p_short_ml = None
+        if self._runtime_model is not None:
+            try:
+                _raw, p_cal = self._runtime_model.predict_yes_probability(feats)
+                p_long_ml  = float(p_cal)
+                p_short_ml = 1.0 - p_long_ml
+            except Exception as exc:
+                logger.debug("rsi_ml_model_predict_failed err=%s", exc)
+
+        cfg = RsiMLConfig(
+            rsi_low=self.settings.rsi_ml_rsi_low,
+            rsi_high=self.settings.rsi_ml_rsi_high,
+            ml_min_prob=self.settings.rsi_ml_min_prob,
+            edge_strength=self.settings.rsi_ml_edge_strength,
+        )
+        prob, side, dbg = predict_rsi_ml(
+            config=cfg,
+            hourly_closes=closes,
+            p_long_ml=p_long_ml,
+            p_short_ml=p_short_ml,
+        )
+        fair_yes_prob = clamp_probability(prob)
+        edge = edge_for_side(candidate=candidate, fair_yes_prob=fair_yes_prob)
+        confidence = self._model_confidence(
+            fair_yes_prob=fair_yes_prob, edge=edge,
+            candidate=candidate, features=feats,
+        )
+        rationale = (
+            "prediction_engine=rsi_ml",
+            f"rsi={dbg.get('rsi','-'):.2f}" if isinstance(dbg.get("rsi"), float) else "rsi=-",
+            f"side={side}",
+            f"p_long_ml={p_long_ml}",
+            f"p_short_ml={p_short_ml}",
+            f"reason={dbg.get('reason','')}",
+            f"fair_yes_prob={fair_yes_prob:.4f}",
+            f"confidence={confidence:.4f}",
+        )
+        return prediction_from_fair_probability(
+            candidate=candidate,
+            fair_yes_prob=fair_yes_prob,
+            confidence=confidence,
+            rationale=rationale,
+        )
+
     def _use_shadow_mode(self) -> bool:
         mode = self.settings.engine.strip().lower()
         return mode in {"shadow", "shadow_scoring", "model_v2_shadow"}
@@ -557,11 +657,14 @@ class PredictionAgent:
     def _requires_runtime_model(self) -> bool:
         # llm_only doesn't need a CatBoost artifact loaded.
         # ensemble does — it blends ML probability with LLM probability.
+        # rsi_ml uses the ML probability only as a filter, but loads it
+        # the same way for parity with the live engine config.
         return (
             self._use_model_v2()
             or self._use_shadow_mode()
             or self._use_alt_promoted_mode()
             or self._use_ensemble()
+            or self._use_rsi_ml()
         )
 
     def _model_confidence(

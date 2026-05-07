@@ -249,6 +249,12 @@ class PredictionSettings:
     ensemble_weight_llm: float = 0.40
     ensemble_agreement_boost: float = 1.20
     ensemble_disagreement_damp: float = 0.50
+    # RSI mean-reversion + ML filter engine (Bot G).  Backtest-validated
+    # profitable strategy on HL perp with TP=1%, SL=2%, 8h hold.
+    rsi_ml_rsi_low:        float = 25.0
+    rsi_ml_rsi_high:       float = 75.0
+    rsi_ml_min_prob:       float = 0.30
+    rsi_ml_edge_strength:  float = 0.10
 
 
 @dataclass(slots=True, frozen=True)
@@ -916,6 +922,10 @@ class AppSettings:
             ensemble_weight_llm=float(model_inference.get("ensemble_weight_llm", 0.40)),
             ensemble_agreement_boost=float(model_inference.get("ensemble_agreement_boost", 1.20)),
             ensemble_disagreement_damp=float(model_inference.get("ensemble_disagreement_damp", 0.50)),
+            rsi_ml_rsi_low=float(model_inference.get("rsi_ml_rsi_low", 25.0)),
+            rsi_ml_rsi_high=float(model_inference.get("rsi_ml_rsi_high", 75.0)),
+            rsi_ml_min_prob=float(model_inference.get("rsi_ml_min_prob", 0.30)),
+            rsi_ml_edge_strength=float(model_inference.get("rsi_ml_edge_strength", 0.10)),
         )
         risk = RiskSettings(
             bankroll_usd=float(risk_section.get("bankroll_usd", 10_000.0)),
