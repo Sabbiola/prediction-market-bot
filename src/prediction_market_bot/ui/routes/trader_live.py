@@ -380,6 +380,7 @@ _MODEL_D_DB = Path("data/runtime_llm.db")
 _MODEL_E_DB = Path("data/runtime_e.db")
 _MODEL_F_DB = Path("data/runtime_f.db")
 _MODEL_G_DB = Path("data/runtime_g.db")
+_MODEL_H_DB = Path("data/runtime_h.db")
 
 
 def _read_trade_history(db_path: Path, limit: int = 300) -> list[dict[str, Any]]:
@@ -658,6 +659,24 @@ def trader_live_g() -> dict[str, Any]:
 @router.get("/api/trader/history/g")
 def trader_history_g() -> dict[str, Any]:
     trades = _read_trade_history(_MODEL_G_DB)
+    return {"trades": trades, "count": len(trades)}
+
+
+@router.get("/api/trader/live/h")
+def trader_live_h() -> dict[str, Any]:
+    """Model H (RSI mean-reversion on SOL) — runtime_h.db + live HL state.
+
+    Same RSI strategy as Bot G but applied to SOL perp.  Backtest WR 70.9%,
+    +30% annualised on $1k bankroll.  Shares the HL wallet with D, E, F, G.
+    """
+    base = _build_trader_response(_MODEL_H_DB)
+    base["hl_account"] = _fetch_hl_account_snapshot()
+    return base
+
+
+@router.get("/api/trader/history/h")
+def trader_history_h() -> dict[str, Any]:
+    trades = _read_trade_history(_MODEL_H_DB)
     return {"trades": trades, "count": len(trades)}
 
 

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json as _json
+import time as _time
+import urllib.request as _urlreq
 from pathlib import Path
 from typing import Any
 
@@ -572,16 +575,20 @@ class PredictionAgent:
         )
 
         feats = dict(runtime_features.values)
-        # The btc enricher already publishes RSI(14) on the 1h timeframe,
-        # normalised to [-1, 1] (raw_rsi = (norm + 1) * 50).  Use it directly
-        # so the engine sees the same number the trained ML model trained on.
-        rsi_norm = feats.get("f_btc_rsi_1h")
+        # Determine which asset we're trading (BTC by default; can be SOL/ETH
+        # for multi-asset bots — they read RSI from Binance public klines
+        # since the BTC-specific enricher only exposes BTC features).
+        target_asset = (self.settings.rsi_ml_target_asset or "BTC").upper()
         rsi_raw: float | None = None
-        if rsi_norm is not None:
-            try:
-                rsi_raw = (float(rsi_norm) + 1.0) * 50.0
-            except Exception:
-                rsi_raw = None
+        if target_asset == "BTC":
+            rsi_norm = feats.get("f_btc_rsi_1h")
+            if rsi_norm is not None:
+                try:
+                    rsi_raw = (float(rsi_norm) + 1.0) * 50.0
+                except Exception:
+                    rsi_raw = None
+        else:
+            rsi_raw = self._fetch_external_rsi_1h(target_asset)
         if rsi_raw is None:
             # No RSI feature: anchor to market so edge=0 and the risk gate refuses.
             market_yes = float(candidate.market.yes_price)
@@ -591,6 +598,7 @@ class PredictionAgent:
                 confidence=0.0,
                 rationale=(
                     "prediction_engine=rsi_ml",
+                    f"target_asset={target_asset}",
                     "rsi_ml_neutral_no_rsi_feature",
                     "fair_yes_prob=anchored_to_market",
                 ),
@@ -673,6 +681,50 @@ class PredictionAgent:
             confidence=confidence,
             rationale=rationale,
         )
+
+    # ── RSI fetcher for non-BTC assets (Bot H = SOL, future Bot I = ETH) ──
+    _ext_rsi_cache: dict[str, tuple[float, float]] = {}   # symbol → (ts, rsi)
+    _EXT_RSI_TTL_SEC = 60.0
+
+    def _fetch_external_rsi_1h(self, asset: str) -> float | None:
+        """Fetch the latest 1h RSI(14) for a non-BTC asset directly from
+        Binance Spot klines.  Used by Bot H (SOL) and any future per-asset
+        clone of the rsi_ml engine.  Cached for 60s to avoid hammering
+        the public endpoint on every scheduler tick.
+        """
+        sym_map = {"SOL": "SOLUSDT", "ETH": "ETHUSDT", "BTC": "BTCUSDT"}
+        symbol = sym_map.get(asset.upper())
+        if not symbol:
+            return None
+        now = _time.time()
+        cached = self._ext_rsi_cache.get(symbol)
+        if cached and now - cached[0] < self._EXT_RSI_TTL_SEC:
+            return cached[1]
+        try:
+            url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1h&limit=50"
+            req = _urlreq.Request(url, headers={"User-Agent": "pmbot/1.0"})
+            with _urlreq.urlopen(req, timeout=5) as resp:
+                payload = _json.loads(resp.read())
+            closes = [float(k[4]) for k in payload]
+            if len(closes) < 16:
+                return None
+            # Wilder's RSI on the 1h closes
+            diffs = [closes[i+1] - closes[i] for i in range(len(closes)-1)]
+            gains  = [d if d > 0 else 0.0 for d in diffs]
+            losses = [-d if d < 0 else 0.0 for d in diffs]
+            period = 14
+            avg_g = sum(gains[:period]) / period
+            avg_l = sum(losses[:period]) / period
+            for i in range(period, len(diffs)):
+                avg_g = (avg_g * (period - 1) + gains[i]) / period
+                avg_l = (avg_l * (period - 1) + losses[i]) / period
+            rs = avg_g / (avg_l + 1e-12)
+            rsi_raw = 100.0 - 100.0 / (1.0 + rs)
+            self._ext_rsi_cache[symbol] = (now, rsi_raw)
+            return float(rsi_raw)
+        except Exception as exc:
+            logger.warning("external_rsi_fetch_failed asset=%s err=%s", asset, exc)
+            return None
 
     def _use_shadow_mode(self) -> bool:
         mode = self.settings.engine.strip().lower()

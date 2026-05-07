@@ -255,6 +255,9 @@ class PredictionSettings:
     rsi_ml_rsi_high:       float = 75.0
     rsi_ml_min_prob:       float = 0.30
     rsi_ml_edge_strength:  float = 0.10
+    # Multi-asset target: BTC reads f_btc_rsi_1h from the enricher.  SOL/ETH
+    # fetch directly from Binance public klines (no per-asset enricher needed).
+    rsi_ml_target_asset:   str   = "BTC"
 
 
 @dataclass(slots=True, frozen=True)
@@ -926,6 +929,7 @@ class AppSettings:
             rsi_ml_rsi_high=float(model_inference.get("rsi_ml_rsi_high", 75.0)),
             rsi_ml_min_prob=float(model_inference.get("rsi_ml_min_prob", 0.30)),
             rsi_ml_edge_strength=float(model_inference.get("rsi_ml_edge_strength", 0.10)),
+            rsi_ml_target_asset=_as_str(model_inference.get("rsi_ml_target_asset"), "BTC"),
         )
         risk = RiskSettings(
             bankroll_usd=float(risk_section.get("bankroll_usd", 10_000.0)),

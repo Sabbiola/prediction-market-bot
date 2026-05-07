@@ -11,7 +11,7 @@ import WinRateGauge from '@/components/ui/WinRateGauge'
 import PnlDistribution from '@/components/ui/PnlDistribution'
 import ProgressBar from '@/components/ui/ProgressBar'
 
-type ModelKey = 'a' | 'b' | 'c' | 'd' | 'e' | 'f' | 'g'
+type ModelKey = 'a' | 'b' | 'c' | 'd' | 'e' | 'f' | 'g' | 'h'
 
 const POLYMARKET_BANKROLL = 500
 
@@ -35,7 +35,8 @@ const MODELS: ModelDef[] = [
   { key: 'd', short: 'D', label: 'Model D', family: 'LLM Llama-3.3 70B · HL testnet 3x perp · 4h hold', endpoint: '/api/trader/live/d', historyEndpoint: '/api/trader/history/d', breakEven: 0.38, venue: 'hyperliquid' },
   { key: 'e', short: 'E', label: 'Model E', family: 'CatBoost v5 · HL testnet 3x perp · 4h hold',       endpoint: '/api/trader/live/e', historyEndpoint: '/api/trader/history/e', breakEven: 0.38, venue: 'hyperliquid' },
   { key: 'f', short: 'F', label: 'Model F', family: 'ML + LLM ensemble (60/40) · HL 3x · 4h hold',      endpoint: '/api/trader/live/f', historyEndpoint: '/api/trader/history/f', breakEven: 0.38, venue: 'hyperliquid' },
-  { key: 'g', short: 'G', label: 'Model G', family: 'RSI mean-reversion + ML filter · HL 5x · 8h hold (backtest profittevole)', endpoint: '/api/trader/live/g', historyEndpoint: '/api/trader/history/g', breakEven: 0.46, venue: 'hyperliquid' },
+  { key: 'g', short: 'G', label: 'Model G', family: 'RSI mean-reversion + ML filter · BTC HL 15x · 8h hold (profit ~30%/y)', endpoint: '/api/trader/live/g', historyEndpoint: '/api/trader/history/g', breakEven: 0.46, venue: 'hyperliquid' },
+  { key: 'h', short: 'H', label: 'Model H', family: 'RSI mean-reversion · SOL HL 15x · 16h hold (backtest WR 70%)',           endpoint: '/api/trader/live/h', historyEndpoint: '/api/trader/history/h', breakEven: 0.40, venue: 'hyperliquid' },
 ]
 
 // ── Helpers ───────────────────────────────────────────────────────────────
