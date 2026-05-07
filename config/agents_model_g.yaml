@@ -70,13 +70,13 @@ thresholds:
 
 risk:
 
-  bankroll_usd: 500
+  bankroll_usd: 1000
 
   taker_fee_bps: 0
 
-  fractional_kelly: 0.25
+  fractional_kelly: 0.50
 
-  max_position_pct: 0.02
+  max_position_pct: 0.20
 
   max_event_bucket_pct: 0.40
 
@@ -84,7 +84,7 @@ risk:
 
   max_portfolio_exposure_pct: 0.40
 
-  max_per_market_exposure_pct: 0.02
+  max_per_market_exposure_pct: 0.20
 
   max_daily_loss_pct: 0.0
 
@@ -96,7 +96,7 @@ risk:
 
   manual_pause: false
 
-  min_bet_usd: 4
+  min_bet_usd: 20
 
   hard_blocks:
 

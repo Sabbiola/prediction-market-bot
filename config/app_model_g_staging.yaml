@@ -241,12 +241,12 @@ hyperliquid:
   # bankroll).  SL at -2% × 10x = -20% margin loss; HL liquidation distance
   # ~10% so the SL has a 5x safety buffer before liquidation hazards.
   # MDD scales linearly to ~$148 (15% of $1k) — sustainable.
-  leverage: 10
+  leverage: 15
   take_profit_pct: 0.010
   stop_loss_pct: 0.020
   time_exit_seconds: 28800
   min_order_usd: 10.0
-  max_size_usd: 200.0
+  max_size_usd: 400.0
   default_slippage: 0.005
 
 ui_auth:
