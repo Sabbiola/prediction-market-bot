@@ -273,7 +273,7 @@ agents:
       strict_feature_parity: true
       rsi_ml_rsi_low: 25.0
       rsi_ml_rsi_high: 75.0
-      rsi_ml_min_prob: 0.30
+      rsi_ml_min_prob: 0.25
       rsi_ml_edge_strength: 0.10
 
       fallback_to_heuristic: true
